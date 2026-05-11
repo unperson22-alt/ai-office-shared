@@ -18,7 +18,7 @@ from aiogram.types import Message
 from aiogram.filters import CommandStart
 from anthropic import AsyncAnthropic
 
-from shared.github_tools import push_file, read_file, list_files
+from shared.github_tools import push_file, read_file, list_files, create_repo
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -487,6 +487,141 @@ async def monitor_loop():
 
 
 
+
+# ── Bot creation pipeline ─────────────────────────────────────────────────────
+PROJECT_ID = "271b40b7-199a-429a-88ef-ca417f26a638"
+RAILWAY_TOKEN_VAL = os.getenv("RAILWAY_TOKEN", "")
+
+BOT_TEMPLATE = """import os, logging, asyncio, httpx
+from aiohttp import web
+from telegram import Update
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
+import anthropic
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
+ANTHROPIC_KEY    = os.environ["ANTHROPIC_API_KEY"]
+YOUR_TELEGRAM_ID = int(os.environ["YOUR_TELEGRAM_ID"])
+OFFICE_CHAT_ID   = os.environ.get("OFFICE_CHAT_ID", "")
+LOG_BOT_URL      = os.environ.get("LOG_BOT_URL", "")
+HTTP_PORT        = 8080
+
+client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+conversation_history = {{}}
+
+SYSTEM = \"\"\"{system_prompt}\"\"\"
+
+async def log(event: str, msg: str):
+    if not LOG_BOT_URL:
+        return
+    try:
+        async with httpx.AsyncClient() as c:
+            await c.post(f"{{LOG_BOT_URL}}/log", json={{"agent": "{bot_name}", "type": event, "message": msg}}, timeout=5)
+    except Exception:
+        pass
+
+async def send_to_group(text: str):
+    if not OFFICE_CHAT_ID:
+        return
+    try:
+        async with httpx.AsyncClient() as c:
+            await c.post(f"https://api.telegram.org/bot{{TELEGRAM_TOKEN}}/sendMessage",
+                json={{"chat_id": OFFICE_CHAT_ID, "text": text}}, timeout=10)
+    except Exception as e:
+        logger.error(f"send_to_group failed: {{e}}")
+
+async def process(message: str, user_id: int) -> str:
+    if user_id not in conversation_history:
+        conversation_history[user_id] = []
+    conversation_history[user_id].append({{"role": "user", "content": message}})
+    if len(conversation_history[user_id]) > 20:
+        conversation_history[user_id] = conversation_history[user_id][-10:]
+    r = client.messages.create(model="claude-sonnet-4-6", max_tokens=1024,
+        system=SYSTEM, messages=conversation_history[user_id])
+    text = r.content[0].text
+    conversation_history[user_id].append({{"role": "assistant", "content": text}})
+    return text
+
+async def handle_task(request):
+    data = await request.json()
+    message = data.get("message", "")
+    user_id = data.get("user_id", YOUR_TELEGRAM_ID)
+    await log("MSG_IN", f"[HTTP] {{message[:80]}}")
+    response = await process(message, user_id)
+    await send_to_group(f"{bot_name}:\\n{{response}}")
+    await log("MSG_OUT", f"{bot_name}: {{response[:80]}}")
+    return web.json_response({{"status": "ok", "response": response}})
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != YOUR_TELEGRAM_ID:
+        return
+    if update.effective_chat.type in ["group", "supergroup"]:
+        return
+    msg = update.message.text
+    await log("MSG_IN", msg[:80])
+    response = await process(msg, update.effective_user.id)
+    await log("MSG_OUT", f"{bot_name}: {{response[:80]}}")
+    await update.message.reply_text(response)
+
+async def main():
+    app_http = web.Application()
+    app_http.router.add_post("/task", handle_task)
+    runner = web.AppRunner(app_http)
+    await runner.setup()
+    await web.TCPSite(runner, "0.0.0.0", HTTP_PORT).start()
+    logger.info(f"HTTP on :{{HTTP_PORT}}")
+    ptb = Application.builder().token(TELEGRAM_TOKEN).build()
+    ptb.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    async with ptb:
+        await ptb.start()
+        await ptb.updater.start_polling(drop_pending_updates=True)
+        logger.info("{bot_name} запущен")
+        await asyncio.Event().wait()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+"""
+
+REQUIREMENTS_TEMPLATE = """python-telegram-bot==21.3
+anthropic
+aiohttp
+httpx
+"""
+
+DOCKERFILE_TEMPLATE = """FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+CMD ["python", "bot.py"]
+"""
+
+async def railway_create_service(repo_name: str, bot_display_name: str) -> dict:
+    """Создать сервис на Railway и подключить GitHub репо."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
+        # 1. Создать сервис
+        create_resp = await client.post(
+            "https://backboard.railway.com/graphql/v2",
+            headers={"Authorization": f"Bearer {RAILWAY_TOKEN_VAL}", "Content-Type": "application/json"},
+            json={"query": """
+                mutation($input: ServiceCreateInput!) {
+                  serviceCreate(input: $input) { id name }
+                }
+            """, "variables": {"input": {
+                "projectId": PROJECT_ID,
+                "name": repo_name,
+                "source": {"repo": f"unperson22-alt/{repo_name}"}
+            }}}
+        )
+        data = create_resp.json()
+        if "errors" in data:
+            raise Exception(f"serviceCreate failed: {data['errors'][0]['message']}")
+        service_id = data["data"]["serviceCreate"]["id"]
+        return {"service_id": service_id}
+
+
 async def handle_natural_language(message_text: str, chat_id: int, reply_func):
     """Process any natural language request — detect intent and execute."""
     await reply_func("🧠 Разбираю запрос...")
@@ -536,10 +671,71 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func):
             await reply_func(f"❌ Ошибка: {e}")
 
     elif intent == "create_bot":
+        # Extract bot name and persona from task
+        await reply_func(f"🤖 Создаю бота: *{task}*...", )
+
+        # Ask Claude to extract name + system prompt
+        setup_raw = await ask_claude(
+            f"Из описания извлеки: имя бота (одно слово, латиница, строчные, через дефис если нужно), "
+            f"отображаемое имя (по-русски, одно слово) и системный промпт (1-2 предложения, роль и стиль). "
+            f"Описание: {task}\n\n"
+            f"Верни ТОЛЬКО JSON без markdown: {{\"repo\": \"имя-бота\", \"display\": \"Имя\", \"prompt\": \"...\"}}" ,
+            model="claude-haiku-4-5-20251001"
+        )
+        try:
+            setup_raw = setup_raw.strip()
+            s, e = setup_raw.find("{"), setup_raw.rfind("}") + 1
+            setup = json.loads(setup_raw[s:e])
+            bot_repo   = setup["repo"].lower().replace(" ", "-") + "-bot"
+            bot_display = setup["display"]
+            bot_prompt  = setup["prompt"]
+        except Exception as ex:
+            await reply_func(f"❌ Не смог разобрать параметры бота: {ex}")
+            return
+
+        await reply_func(f"📦 Репо: `{bot_repo}`\n👤 Имя: {bot_display}\n📝 Промпт: {bot_prompt}")
+
+        # 1. Создать GitHub репо
+        await reply_func("1️⃣ Создаю GitHub репо...")
+        try:
+            repo_info = await create_repo(bot_repo, description=f"AI office bot: {bot_display}")
+        except ValueError as ex:
+            await reply_func(f"⚠️ {ex} — продолжаю с существующим")
+        except Exception as ex:
+            await reply_func(f"❌ GitHub: {ex}")
+            return
+
+        # 2. Пушу шаблон
+        await reply_func("2️⃣ Генерирую и заливаю код...")
+        bot_code = BOT_TEMPLATE.format(bot_name=bot_display, system_prompt=bot_prompt)
+        try:
+            await push_file(bot_repo, "bot.py", bot_code, f"init: {bot_display} bot")
+            await push_file(bot_repo, "requirements.txt", REQUIREMENTS_TEMPLATE, "init: requirements")
+            await push_file(bot_repo, "Dockerfile", DOCKERFILE_TEMPLATE, "init: Dockerfile")
+        except Exception as ex:
+            await reply_func(f"❌ Пуш файлов: {ex}")
+            return
+
+        # 3. Создать сервис на Railway
+        await reply_func("3️⃣ Создаю сервис на Railway...")
+        try:
+            railway_info = await railway_create_service(bot_repo, bot_display)
+            service_id = railway_info["service_id"]
+        except Exception as ex:
+            await reply_func(f"❌ Railway: {ex}")
+            return
+
+        # 4. Готово — просим добавить токен вручную
         await reply_func(
-            f"🤖 Создание нового бота: *{task}*\n\n"
-            f"⚙️ Этап 2 (BotFather + Railway pipeline) ещё в разработке.\n"
-            f"Пока используй: /push <repo> <path> <задача>"
+            f"✅ Бот *{bot_display}* создан!\n\n"
+            f"🔑 Последний шаг (вручную):\n"
+            f"1. BotFather → /newbot → получи токен\n"
+            f"2. Railway → {bot_repo} → Variables → добавь:\n"
+            f"   `TELEGRAM_TOKEN` = <токен из BotFather>\n"
+            f"   `ANTHROPIC_API_KEY` = (скопируй из другого бота)\n"
+            f"   `YOUR_TELEGRAM_ID`, `OFFICE_CHAT_ID`, `LOG_BOT_URL` = (аналогично)\n\n"
+            f"3. Railway задеплоит автоматически\n"
+            f"4. Добавь {bot_display} в Филли (BOT_URLS + ROUTER_SYSTEM)"
         )
 
     elif intent == "deploy":
