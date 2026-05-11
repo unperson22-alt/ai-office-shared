@@ -132,5 +132,29 @@
       "state_management",
       "bot_data"
     ]
+  },
+  {
+    "id": 7,
+    "ts": "2025-04-17",
+    "type": "initialization",
+    "svc": "telegram-bot",
+    "sym": [
+      "empty_traceback",
+      "incomplete_logs",
+      "unexpected_shutdown",
+      "silent_failure"
+    ],
+    "root": "unhandled_exception_in_main_thread",
+    "pat": "app.run_polling_without_try_except_logging",
+    "fix": "wrap_app.run_polling_in_try_except:logging.exception_or_traceback.print_exc",
+    "file": "office-dashboard/main.py:app.run_polling",
+    "tags": [
+      "initialization",
+      "error_handling",
+      "logging",
+      "daemon_thread",
+      "traceback",
+      "environment_variables"
+    ]
   }
 ]
