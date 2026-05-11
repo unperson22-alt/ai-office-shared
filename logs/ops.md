@@ -49,3 +49,6 @@
 
 ---
 <!-- Силли дописывает ниже -->
+
+**[2026-05-11 14:10 UTC] Силли — office-dashboard:** автофикс: Добавить try-except вокруг get_required_env() вызовы в main(
+> confidence=high | файл=main.py | статус=редеплой запущен ✅
