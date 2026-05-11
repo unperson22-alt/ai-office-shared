@@ -47,6 +47,32 @@ bot    = Bot(token=BOT_TOKEN)
 dp     = Dispatcher()
 claude = AsyncAnthropic(api_key=ANTHROPIC_KEY)
 
+# Буфер последних сообщений группы — чтобы найти оригинальный вопрос
+from collections import deque
+recent_group_msgs: deque = deque(maxlen=30)  # (sender, text, is_bot)
+
+# Системные промпты каждого бота — для мгновенного ответа с web search
+BOT_SYSTEMS_WEB = {
+    "тилли": (
+        "Ты — Тилли. Аналитик по трейдингу и крипторынкам. "
+        "Используй web_search для получения актуальных цен, данных и новостей. "
+        "Холодная голова, цифры важнее эмоций. Говоришь чётко — уровни, объёмы, тренды. "
+        "Не даёшь советов купи/продай — даёшь анализ и сценарии. Неформально, на русском."
+    ),
+    "макс": (
+        "Ты — Макс. Бизнес-ассистент. Используй web_search для актуальных данных о рынке, "
+        "конкурентах, ценах. Мыслишь цифрами и результатами. Неформально, на русском."
+    ),
+    "доктор": (
+        "Ты — Доктор. Советник по здоровью. Используй web_search для актуальных исследований. "
+        "Говоришь прямо и конкретно, основываешься на науке. Неформально, на русском."
+    ),
+    "билли": (
+        "Ты — Билли. Целеустремлённый практик. Используй web_search когда нужны актуальные данные. "
+        "Говоришь прямо без воды. Неформально, на русском."
+    ),
+}
+
 # Хранит pending-фиксы ожидающие /approve: {fix_id: fix_data}
 pending_fixes: dict = {}
 
@@ -373,67 +399,103 @@ async def monitor_loop():
 # ── Telegram handlers ──────────────────────────────────────────────────────────
 @dp.message(F.chat.type.in_({"group", "supergroup"}))
 async def monitor_group_capabilities(message: Message):
-    """Следит за группой — если бот говорит что нет доступа к данным, фиксит сам."""
+    """Следит за группой — пишет в буфер, и если бот говорит что нет данных — сразу отвечает с web search."""
     text = message.text or ""
+    sender = (message.from_user.first_name or "").lower()
+    is_bot = message.from_user.is_bot
+
+    # Пишем все сообщения в буфер
+    recent_group_msgs.append({"sender": sender, "text": text, "is_bot": is_bot})
+
+    # Реагируем только на сообщения от ботов с capability gap
+    if not is_bot:
+        return
     if not any(phrase in text.lower() for phrase in CAPABILITY_GAPS):
         return
 
-    sender = (message.from_user.first_name or "").lower()
-    repo_info = None
+    # Определяем какой бот пожаловался
     bot_display = None
-    for name, info in BOT_REPOS.items():
+    bot_system = None
+    for name, system in BOT_SYSTEMS_WEB.items():
         if name in sender:
-            repo_info = info
             bot_display = name.capitalize()
+            bot_system = system
             break
-
-    if not repo_info:
+    if not bot_display:
         return
 
-    repo, filepath = repo_info
+    # Ищем последний вопрос пользователя (не от бота) перед этим сообщением
+    user_question = None
+    for msg in reversed(list(recent_group_msgs)[:-1]):  # исключаем текущее
+        if not msg["is_bot"] and msg["text"].strip():
+            user_question = msg["text"]
+            break
+    if not user_question:
+        return
 
+    # Объявляем что фиксим
     await bot.send_message(
         chat_id=message.chat.id,
-        text=f"🔧 Слышу, {bot_display} — сейчас добавлю доступ к актуальным данным, подожди..."
+        text=f"🔧 {bot_display} — вижу проблему, сейчас сам отвечу с актуальными данными..."
     )
 
     try:
-        source = await read_file(repo, filepath)
-
-        # Проверяем — может web search уже есть
-        if "web_search_20250305" in source:
-            await bot.send_message(
-                chat_id=message.chat.id,
-                text=f"ℹ️ {bot_display} — web search уже подключён. Возможно нужен другой инструмент?"
-            )
-            return
-
-        fix_prompt = WEB_SEARCH_FIX_PROMPT.format(source=source)
-        fixed_code = await generate_fix(source, fix_prompt)
-
-        await push_file(repo, filepath, fixed_code,
-                        f"feat({repo}): add web search tool for live data access")
+        # Отвечаем от имени бота с web search — немедленно, без редеплоя
+        response = await claude.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            system=bot_system,
+            messages=[{"role": "user", "content": user_question}],
+            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}]
+        )
+        answer = "\n".join(
+            block.text for block in response.content if hasattr(block, "text")
+        ).strip()
 
         await bot.send_message(
             chat_id=message.chat.id,
-            text=f"✅ Готово! {bot_display} теперь умеет искать актуальные данные. "
-                 f"Railway передеплоит автоматически — через минуту заработает."
+            text=f"{bot_display}:\n{answer}"
         )
 
-        await post_lesson(
-            title=f"Web search добавлен для {bot_display}",
-            symptom=f"{bot_display} сообщил(а) об отсутствии доступа к live данным",
-            cause="tools=[web_search] не был подключён в client.messages.create()",
-            context=f"{repo}/{filepath}",
-            fix='Добавлен tools=[{{"type": "web_search_20250305", "max_uses": 3}}]',
-            how_to_avoid="При создании ботов требующих актуальных данных сразу подключать web search"
-        )
+        # Фиксим код в фоне — чтобы в следующий раз бот сам справился
+        asyncio.create_task(_fix_bot_code_background(bot_display, sender))
 
     except Exception as e:
+        logger.error(f"capability gap fix failed: {e}")
         await bot.send_message(
             chat_id=message.chat.id,
-            text=f"❌ Не смог исправить {bot_display}: {e}"
+            text=f"❌ Не смог получить данные для {bot_display}: {e}"
         )
+
+
+async def _fix_bot_code_background(bot_display: str, sender: str):
+    """Добавляет web search в код бота в фоне — чтобы в следующий раз бот сам справился."""
+    repo_info = BOT_REPOS.get(sender)
+    if not repo_info:
+        return
+    repo, filepath = repo_info
+    try:
+        source = await read_file(repo, filepath)
+        if "web_search_20250305" in source:
+            return  # уже есть
+        fix_prompt = WEB_SEARCH_FIX_PROMPT.format(source=source)
+        fixed_code = await generate_fix(source, fix_prompt)
+        await push_file(repo, filepath, fixed_code,
+                        f"feat({repo}): add web search tool for live data access")
+        await bot.send_message(
+            chat_id=OFFICE_CHAT_ID,
+            text=f"✅ Код {bot_display} обновлён — теперь web search встроен, следующий раз сам справится."
+        )
+        await post_lesson(
+            title=f"Web search добавлен для {bot_display}",
+            symptom=f"{bot_display} не мог ответить на вопрос из-за отсутствия live данных",
+            cause="tools=[web_search] не был подключён в client.messages.create()",
+            context=f"{repo}/{filepath}",
+            fix="Cilly ответил немедленно с web search, затем добавил tool в код бота",
+            how_to_avoid="При создании ботов с аналитикой сразу подключать web search tool"
+        )
+    except Exception as e:
+        logger.error(f"background fix failed for {bot_display}: {e}")
 
 
 @dp.message(CommandStart())
