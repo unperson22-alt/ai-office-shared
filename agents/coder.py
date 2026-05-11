@@ -598,28 +598,61 @@ COPY . .
 CMD ["python", "bot.py"]
 """
 
-async def railway_create_service(repo_name: str, bot_display_name: str) -> dict:
-    """Создать сервис на Railway и подключить GitHub репо."""
+ENVIRONMENT_ID = "2efaaf60-ba39-492c-bf86-007fd505493f"
+
+async def railway_graphql(query: str, variables: dict = None) -> dict:
+    """Выполнить GraphQL запрос к Railway API."""
     async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
-        # 1. Создать сервис
-        create_resp = await client.post(
+        payload = {"query": query}
+        if variables:
+            payload["variables"] = variables
+        r = await client.post(
             "https://backboard.railway.com/graphql/v2",
             headers={"Authorization": f"Bearer {RAILWAY_TOKEN_VAL}", "Content-Type": "application/json"},
-            json={"query": """
-                mutation($input: ServiceCreateInput!) {
-                  serviceCreate(input: $input) { id name }
-                }
-            """, "variables": {"input": {
-                "projectId": PROJECT_ID,
-                "name": repo_name,
-                "source": {"repo": f"unperson22-alt/{repo_name}"}
-            }}}
+            json=payload
         )
-        data = create_resp.json()
-        if "errors" in data:
-            raise Exception(f"serviceCreate failed: {data['errors'][0]['message']}")
-        service_id = data["data"]["serviceCreate"]["id"]
-        return {"service_id": service_id}
+        r.raise_for_status()
+        return r.json()
+
+async def railway_set_variables(service_id: str, variables: dict) -> bool:
+    """Записать переменные окружения в Railway сервис."""
+    data = await railway_graphql(
+        """mutation($input: VariableCollectionUpsertInput!) {
+             variableCollectionUpsert(input: $input)
+           }""",
+        {"input": {
+            "projectId": PROJECT_ID,
+            "environmentId": ENVIRONMENT_ID,
+            "serviceId": service_id,
+            "variables": variables
+        }}
+    )
+    return data.get("data", {}).get("variableCollectionUpsert") is True
+
+async def railway_create_service(repo_name: str, bot_display_name: str, variables: dict = None) -> dict:
+    """Создать сервис на Railway, подключить GitHub репо и записать переменные."""
+    # 1. Создать сервис
+    data = await railway_graphql(
+        """mutation($input: ServiceCreateInput!) {
+             serviceCreate(input: $input) { id name }
+           }""",
+        {"input": {
+            "projectId": PROJECT_ID,
+            "name": repo_name,
+            "source": {"repo": f"unperson22-alt/{repo_name}"}
+        }}
+    )
+    if "errors" in data:
+        raise Exception(f"serviceCreate failed: {data['errors'][0]['message']}")
+    service_id = data["data"]["serviceCreate"]["id"]
+
+    # 2. Записать переменные если переданы
+    if variables:
+        ok = await railway_set_variables(service_id, variables)
+        if not ok:
+            logger.warning(f"railway_set_variables returned False for {repo_name}")
+
+    return {"service_id": service_id}
 
 
 async def handle_natural_language(message_text: str, chat_id: int, reply_func):
@@ -717,25 +750,30 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func):
             return
 
         # 3. Создать сервис на Railway
-        await reply_func("3️⃣ Создаю сервис на Railway...")
+        await reply_func("3️⃣ Создаю сервис на Railway и прописываю переменные...")
+        # Shared vars — всё кроме TELEGRAM_TOKEN (его получим от BotFather)
+        shared_vars = {
+            "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY", ""),
+            "YOUR_TELEGRAM_ID": os.getenv("YOUR_TELEGRAM_ID", ""),
+            "OFFICE_CHAT_ID":   os.getenv("OFFICE_CHAT_ID", ""),
+            "LOG_BOT_URL":      os.getenv("LOG_BOT_URL", ""),
+        }
         try:
-            railway_info = await railway_create_service(bot_repo, bot_display)
+            railway_info = await railway_create_service(bot_repo, bot_display, variables=shared_vars)
             service_id = railway_info["service_id"]
         except Exception as ex:
             await reply_func(f"❌ Railway: {ex}")
             return
 
-        # 4. Готово — просим добавить токен вручную
+        # 4. Готово — нужен только TELEGRAM_TOKEN
         await reply_func(
             f"✅ Бот *{bot_display}* создан!\n\n"
-            f"🔑 Последний шаг (вручную):\n"
+            f"🔑 Остался один шаг:\n"
             f"1. BotFather → /newbot → получи токен\n"
-            f"2. Railway → {bot_repo} → Variables → добавь:\n"
-            f"   `TELEGRAM_TOKEN` = <токен из BotFather>\n"
-            f"   `ANTHROPIC_API_KEY` = (скопируй из другого бота)\n"
-            f"   `YOUR_TELEGRAM_ID`, `OFFICE_CHAT_ID`, `LOG_BOT_URL` = (аналогично)\n\n"
-            f"3. Railway задеплоит автоматически\n"
-            f"4. Добавь {bot_display} в Филли (BOT_URLS + ROUTER_SYSTEM)"
+            f"2. Напиши мне: `силли, добавь токен <токен> боту {bot_repo}`\n"
+            f"   — я сам запишу в Railway\n\n"
+            f"Все остальные переменные уже прописаны ✅\n"
+            f"После добавления токена — Railway задеплоит автоматически"
         )
 
     elif intent == "deploy":
