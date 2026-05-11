@@ -18,11 +18,30 @@ from shared.github_tools import push_file, read_file, list_files
 # --- Config ---
 BOT_TOKEN = os.getenv("CODER_BOT_TOKEN")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+LESSONS_CHAT_ID = os.getenv("LESSONS_CHAT_ID")
 DEFAULT_REPO = "ai-office-shared"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 claude = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+
+
+async def post_lesson(title: str, symptom: str, cause: str, context: str, fix: str, how_to_avoid: str):
+    """Отправить урок по багу в Bug Lessons группу."""
+    if not LESSONS_CHAT_ID:
+        return
+    text = (
+        f"📚 Урок — {title}\n\n"
+        f"🔴 Симптом\n{symptom}\n\n"
+        f"🔍 Причина\n{cause}\n\n"
+        f"📍 Контекст\n{context}\n\n"
+        f"🔧 Фикс\n{fix}\n\n"
+        f"🛡️ Как избежать\n{how_to_avoid}"
+    )
+    try:
+        await bot.send_message(chat_id=LESSONS_CHAT_ID, text=text)
+    except Exception as e:
+        print(f"[post_lesson] failed: {e}")
 
 SYSTEM_PROMPT = """Ты — Кодер, агент AI-офиса. Твоя задача — писать чистый, рабочий Python код.
 
@@ -115,6 +134,25 @@ async def cmd_push(message: Message):
         await message.answer(f"❌ Нет доступа к GitHub: {e}")
     except Exception as e:
         await message.answer(f"❌ Не удалось загрузить на GitHub: {type(e).__name__}: {e}")
+
+
+@dp.message(F.text.startswith("/lesson"))
+async def cmd_lesson(message: Message):
+    """
+    Опубликовать урок по багу в Bug Lessons группу.
+    Формат: /lesson <заголовок> | <симптом> | <причина> | <контекст> | <фикс> | <как избежать>
+    """
+    args = message.text[7:].strip()
+    parts = [p.strip() for p in args.split("|")]
+    if len(parts) < 6:
+        await message.answer(
+            "Формат:\n/lesson Заголовок | Симптом | Причина | Контекст | Фикс | Как избежать"
+        )
+        return
+
+    title, symptom, cause, context, fix, how_to_avoid = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
+    await post_lesson(title, symptom, cause, context, fix, how_to_avoid)
+    await message.answer("📚 Урок отправлен в Bug Lessons")
 
 
 @dp.message(F.text.startswith("/read"))
