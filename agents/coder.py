@@ -53,6 +53,11 @@ pending_fixes: dict = {}
 # Последние seen timestamps логов по сервису чтобы не дублировать
 last_seen: dict = {}
 
+# Дедупликация: hash ошибки → timestamp последнего анализа
+# Одна и та же ошибка не анализируется повторно в течение ERROR_COOLDOWN секунд
+ERROR_COOLDOWN = 3600  # 1 час
+seen_errors: dict = {}  # {error_hash: timestamp}
+
 # ── Prompts ───────────────────────────────────────────────────────────────────
 CODER_PROMPT = """Ты — Кодер, агент AI-офиса. Пишешь чистый, рабочий Python код.
 - Возвращай ТОЛЬКО код, без объяснений и markdown-блоков
@@ -156,9 +161,9 @@ async def redeploy_service(service_id: str) -> bool:
 
 
 # ── Claude helpers ─────────────────────────────────────────────────────────────
-async def ask_claude(prompt: str, system: str = CODER_PROMPT) -> str:
+async def ask_claude(prompt: str, system: str = CODER_PROMPT, model: str = "claude-opus-4-5") -> str:
     response = await claude.messages.create(
-        model="claude-opus-4-5",
+        model=model,
         max_tokens=4096,
         system=system,
         messages=[{"role": "user", "content": prompt}]
@@ -173,7 +178,8 @@ async def analyze_logs(service_name: str, logs: list[str], source_code: str) -> 
         f"Логи:\n{log_text}\n\n"
         f"Исходный код:\n{source_code}"
     )
-    raw = await ask_claude(prompt, system=ANALYZER_PROMPT)
+    # Haiku для анализа — в 20 раз дешевле Opus
+    raw = await ask_claude(prompt, system=ANALYZER_PROMPT, model="claude-haiku-4-5-20251001")
     raw = raw.strip()
     if "```" in raw:
         parts = raw.split("```")
@@ -190,7 +196,8 @@ async def analyze_logs(service_name: str, logs: list[str], source_code: str) -> 
 
 async def generate_fix(source_code: str, fix_description: str) -> str:
     prompt = f"Описание бага: {fix_description}\n\nИсходный код:\n{source_code}"
-    return await ask_claude(prompt, system=FIXER_PROMPT)
+    # Opus только для генерации фикса — критично чтобы код был правильным
+    return await ask_claude(prompt, system=FIXER_PROMPT, model="claude-opus-4-5")
 
 
 # ── Lesson & notifications ─────────────────────────────────────────────────────
@@ -297,7 +304,23 @@ async def monitor_loop():
                 if not error_logs:
                     continue
 
-                logger.info(f"[monitor] found {len(error_logs)} error lines in {repo}")
+                # Дедупликация: хэш первых 3 строк ошибки
+                import hashlib
+                error_signature = hashlib.md5("\n".join(error_logs[:3]).encode()).hexdigest()
+                now = time.time()
+                last_analysis = seen_errors.get(f"{service_id}:{error_signature}", 0)
+                if now - last_analysis < ERROR_COOLDOWN:
+                    logger.info(f"[monitor] skipping duplicate error in {repo} (cooldown)")
+                    continue
+                seen_errors[f"{service_id}:{error_signature}"] = now
+
+                # Чистим старые записи чтобы dict не рос бесконечно
+                cutoff = now - ERROR_COOLDOWN
+                expired = [k for k, v in seen_errors.items() if v < cutoff]
+                for k in expired:
+                    del seen_errors[k]
+
+                logger.info(f"[monitor] found {len(error_logs)} error lines in {repo}, analyzing...")
 
                 # Читаем исходник
                 try:
