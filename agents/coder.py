@@ -22,8 +22,8 @@ from shared.github_tools import push_file, read_file, list_files, create_repo
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.messages import GetDialogFiltersRequest, UpdateDialogFilterRequest
-from telethon.tl.functions.channels import InviteToChannelRequest
-from telethon.tl.types import DialogFilter, InputPeerUser, InputPeerChannel
+from telethon.tl.functions.channels import InviteToChannelRequest, EditAdminRequest
+from telethon.tl.types import DialogFilter, InputPeerUser, InputPeerChannel, ChatAdminRights
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -750,6 +750,38 @@ async def tg_create_group(title: str, bot_usernames: list[str] = None) -> int | 
         await client.disconnect()
 
 
+async def tg_promote_bot_admin(bot_username: str, group_id: int) -> bool:
+    """Выдать боту права администратора в группе (только отправка сообщений)."""
+    client = await get_telethon_client()
+    try:
+        group_entity = await client.get_entity(group_id)
+        bot_entity   = await client.get_entity(bot_username)
+        rights = ChatAdminRights(
+            post_messages=True,
+            delete_messages=False,
+            ban_users=False,
+            invite_users=False,
+            pin_messages=False,
+            add_admins=False,
+            manage_call=False,
+            change_info=False,
+            edit_messages=False,
+        )
+        await client(EditAdminRequest(
+            channel=group_entity,
+            user_id=bot_entity,
+            admin_rights=rights,
+            rank="Bot"
+        ))
+        logger.info(f"tg_promote_bot_admin: {bot_username} → admin in {group_id}")
+        return True
+    except Exception as e:
+        logger.error(f"tg_promote_bot_admin failed for {bot_username}: {e}")
+        return False
+    finally:
+        await client.disconnect()
+
+
 async def railway_graphql(query: str, variables: dict = None) -> dict:
     """Выполнить GraphQL запрос к Railway API."""
     async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
@@ -929,6 +961,8 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func):
         office_group_id = int(os.getenv("OFFICE_CHAT_ID", "0"))
         bot_username = f"@{bot_repo.replace('-', '_')}"
         added = await tg_add_bot_to_group(bot_username, office_group_id)
+        if added:
+            await tg_promote_bot_admin(bot_username, office_group_id)
 
         # 6. Переместить бота и сервис в папку Office
         await reply_func("6️⃣ Перемещаю в папку Office...")
