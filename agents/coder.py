@@ -30,6 +30,7 @@ OFFICE_CHAT_ID  = os.getenv("OFFICE_CHAT_ID")
 RAILWAY_TOKEN   = os.getenv("RAILWAY_TOKEN")
 RAILWAY_PROJECT = "271b40b7-199a-429a-88ef-ca417f26a638"
 GITHUB_USER     = "unperson22-alt"
+LESSONS_FILE    = "lessons/lessons.json"
 
 MONITOR_INTERVAL = 300  # секунд между проверками логов
 
@@ -119,6 +120,60 @@ FIXER_PROMPT = """Ты — Кодер. Тебе дают исходный код
 
 
 # ── Railway API ───────────────────────────────────────────────────────────────
+LESSON_SEARCH_PROMPT = """You are a bug pattern matcher. Given new error logs and a list of known bugs in compact format, find if there is a matching known bug.
+Return ONLY valid JSON:
+{"match": true/false, "lesson_id": <id or null>, "confidence": "high"/"low", "reason": "one line"}
+high confidence: same root cause, same file/function, same error pattern.
+low confidence: similar but not certain."""
+
+async def search_lessons(error_logs: list[str]) -> dict:
+    """Search lessons.json for a matching known bug before running full analysis."""
+    try:
+        raw = await read_file("ai-office-shared", LESSONS_FILE)
+        lessons = json.loads(raw)
+        if not lessons:
+            return {"match": False}
+        log_sample = "\n".join(error_logs[:20])
+        prompt = f"Known bugs:\n{json.dumps(lessons)}\n\nNew error logs:\n{log_sample}"
+        result = await ask_claude(prompt, system=LESSON_SEARCH_PROMPT, model="claude-haiku-4-5-20251001")
+        result = result.strip()
+        start, end = result.find("{"), result.rfind("}") + 1
+        if start != -1 and end > start:
+            result = result[start:end]
+        return json.loads(result)
+    except Exception as e:
+        logger.debug(f"search_lessons failed: {e}")
+        return {"match": False}
+
+
+async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, fix: str, avoid: str):
+    """Append new lesson in compact AI format to lessons.json."""
+    try:
+        raw = await read_file("ai-office-shared", LESSONS_FILE)
+        lessons = json.loads(raw)
+        new_id = max((l.get("id", 0) for l in lessons), default=0) + 1
+        # Ask Haiku to convert lesson to compact AI format
+        prompt = (
+            f"Convert this bug lesson to compact AI format JSON (like existing entries).\n"
+            f"title: {title}\nsymptom: {symptom}\ncause: {cause}\n"
+            f"context: {context}\nfix: {fix}\navoid: {avoid}\n\n"
+            f"Existing format example: {json.dumps(lessons[0]) if lessons else '{}'}\n\n"
+            f"Return ONLY the JSON object, no markdown. Add id:{new_id} and ts field with today's date."
+        )
+        compact = await ask_claude(prompt, system="Return only valid JSON, no markdown.", model="claude-haiku-4-5-20251001")
+        compact = compact.strip()
+        start, end = compact.find("{"), compact.rfind("}") + 1
+        if start != -1 and end > start:
+            compact = compact[start:end]
+        lesson_obj = json.loads(compact)
+        lessons.append(lesson_obj)
+        await push_file("ai-office-shared", LESSONS_FILE, json.dumps(lessons, ensure_ascii=False, indent=2),
+                        f"lesson({new_id}): {title[:50]}")
+        logger.info(f"[lessons] saved lesson #{new_id}: {title}")
+    except Exception as e:
+        logger.error(f"append_lesson_ai failed: {e}")
+
+
 async def railway_query(query: str, variables: dict = None) -> dict:
     payload = {"query": query}
     if variables:
@@ -249,6 +304,8 @@ async def post_lesson(title: str, symptom: str, cause: str, context: str, fix: s
         await bot.send_message(chat_id=LESSONS_CHAT_ID, text=text)
     except Exception as e:
         logger.error(f"post_lesson failed: {e}")
+    # Save compact AI format to lessons.json in parallel
+    asyncio.create_task(append_lesson_ai(title, symptom, cause, context, fix, how_to_avoid))
 
 
 async def notify_office(text: str):
@@ -419,6 +476,15 @@ async def monitor_loop():
                     source_code = await read_file(repo, main_file)
                 except Exception:
                     source_code = "# файл не удалось прочитать"
+
+                # Check known bugs first — saves Opus tokens on repeated issues
+                known = await search_lessons(error_logs)
+                if known.get("match") and known.get("confidence") == "high":
+                    logger.info(f"[monitor] known bug match in {repo}: lesson #{known.get('lesson_id')}")
+                    await notify_office(
+                        f"📚 Cilly узнал баг в *{repo}* — это уже было (урок #{known.get('lesson_id')})\n"
+                        f"_{known.get('reason', '')}_\n\nПрименяю известный фикс..."
+                    )
 
                 analysis = await analyze_logs(repo, error_logs, source_code)
 
@@ -679,3 +745,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
