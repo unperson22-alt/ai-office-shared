@@ -186,7 +186,7 @@ async def redeploy_service(service_id: str) -> bool:
             mutation($serviceId: String!, $environmentId: String!) {
               serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId)
             }
-        """, {"serviceId": service_id, "environmentId": "production"})
+        """, {"serviceId": service_id, "environmentId": "2efaaf60-ba39-492c-bf86-007fd505493f"})
         return "errors" not in data
     except Exception as e:
         logger.error(f"redeploy failed for {service_id}: {e}")
