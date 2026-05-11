@@ -321,21 +321,41 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
 ERROR_PATTERNS = ["Traceback", "Error:", "Exception:", "CRITICAL", "crashed", "exit code"]
 
 # Фразы которые означают что боту не хватает инструмента
-CAPABILITY_GAPS = [
-    "нет доступа к live", "нет live данных", "нет доступа к актуальн",
-    "не могу получить актуаль", "нет данных в реальном", "без live данных",
-    "нет доступа к реальн", "нет реальных данных", "live данных нет",
-    "нет актуальных данных", "не имею доступа к текущим", "не вижу текущ",
-    "не могу проверить текущ", "не получаю рыночных",
-    # варианты с дефисом
-    "live-данных нет", "нет live-данных", "live-данные недоступн",
-    "без live-данных", "live-данных у меня нет",
-]
+RESPONSE_ANALYZER_PROMPT = """Ты — анализатор качества ответов AI-агентов в Telegram чате.
 
-def has_capability_gap(text: str) -> bool:
-    """Проверяет наличие фразы о нехватке данных — нормализует дефисы и регистр."""
-    normalized = text.lower().replace("ё", "е")
-    return any(phrase in normalized for phrase in CAPABILITY_GAPS)
+Тебе дают: вопрос пользователя и ответ AI-агента.
+
+Определи: есть ли РЕАЛЬНАЯ ПРОБЛЕМА С ВОЗМОЖНОСТЯМИ агента?
+
+ПРОБЛЕМА — агент:
+- Не может получить актуальные данные (цены, курсы, новости) и говорит об этом
+- Отказывается отвечать из-за отсутствия инструмента
+- Просит пользователя самому найти данные которые агент мог бы найти через web search
+
+НЕ ПРОБЛЕМА — агент:
+- Просит уточнить вопрос или предоставить данные (скрин, цифры)
+- Отвечает по делу в рамках своих возможностей
+- Даёт общий анализ без конкретики потому что нет конкретных данных от пользователя
+
+Ответь ТОЛЬКО валидным JSON без markdown:
+{
+  "has_problem": true или false,
+  "problem_type": "no_web_search" или "none",
+  "fix_needed": "web_search" или "none",
+  "confidence": "high" или "low",
+  "reason": "одно предложение почему"
+}"""
+
+
+async def analyze_bot_response(user_question: str, bot_response: str) -> dict:
+    """Анализирует ответ бота — есть ли проблема с возможностями."""
+    prompt = f"Вопрос пользователя: {user_question}\n\nОтвет агента: {bot_response}"
+    raw = await ask_claude(prompt, system=RESPONSE_ANALYZER_PROMPT, model="claude-haiku-4-5-20251001")
+    raw = raw.strip()
+    start, end = raw.find("{"), raw.rfind("}") + 1
+    if start != -1 and end > start:
+        raw = raw[start:end]
+    return json.loads(raw)
 
 # Имя бота в группе → репо + файл
 BOT_REPOS = {
@@ -412,8 +432,8 @@ async def monitor_loop():
 
 # ── Telegram handlers ──────────────────────────────────────────────────────────
 @dp.message(F.chat.type.in_({"group", "supergroup"}))
-async def monitor_group_capabilities(message: Message):
-    """Следит за группой — пишет в буфер, и если бот говорит что нет данных — сразу отвечает с web search."""
+async def monitor_group_responses(message: Message):
+    """Следит за всеми ответами ботов в группе — анализирует через Haiku есть ли проблема."""
     text = message.text or ""
     sender = (message.from_user.first_name or "").lower()
     is_bot = message.from_user.is_bot
@@ -421,40 +441,57 @@ async def monitor_group_capabilities(message: Message):
     # Пишем все сообщения в буфер
     recent_group_msgs.append({"sender": sender, "text": text, "is_bot": is_bot})
 
-    # Реагируем только на сообщения от ботов с capability gap
+    # Анализируем только ответы ботов (не Cilly самого)
     if not is_bot:
         return
-    if not has_capability_gap(text):
+    if message.from_user.id == bot.id:
         return
 
-    # Определяем какой бот пожаловался
+    # Определяем какой бот ответил
     bot_display = None
     bot_system = None
+    repo_info = None
     for name, system in BOT_SYSTEMS_WEB.items():
         if name in sender:
             bot_display = name.capitalize()
             bot_system = system
+            repo_info = BOT_REPOS.get(name)
             break
     if not bot_display:
         return
 
-    # Ищем последний вопрос пользователя (не от бота) перед этим сообщением
+    # Ищем последний вопрос пользователя перед этим ответом
     user_question = None
-    for msg in reversed(list(recent_group_msgs)[:-1]):  # исключаем текущее
+    for msg in reversed(list(recent_group_msgs)[:-1]):
         if not msg["is_bot"] and msg["text"].strip():
             user_question = msg["text"]
             break
     if not user_question:
         return
 
+    # Анализируем через Haiku — есть ли проблема с возможностями
+    try:
+        analysis = await analyze_bot_response(user_question, text)
+    except Exception as e:
+        logger.error(f"analyze_bot_response failed: {e}")
+        return
+
+    if not analysis.get("has_problem") or analysis.get("confidence") == "low":
+        return
+    if analysis.get("fix_needed") != "web_search":
+        return
+
+    logger.info(f"Capability gap detected in {bot_display}: {analysis.get('reason')}")
+
     # Объявляем что фиксим
     await bot.send_message(
         chat_id=message.chat.id,
-        text=f"🔧 {bot_display} — вижу проблему, сейчас сам отвечу с актуальными данными..."
+        text=f"🔧 {bot_display} — вижу проблему ({analysis.get('reason', '')}), "
+             f"сейчас отвечу с актуальными данными..."
     )
 
     try:
-        # Отвечаем от имени бота с web search — немедленно, без редеплоя
+        # Немедленно отвечаем от имени бота с web search
         response = await claude.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1024,
@@ -471,22 +508,20 @@ async def monitor_group_capabilities(message: Message):
             text=f"{bot_display}:\n{answer}"
         )
 
-        # Фиксим код в фоне — чтобы в следующий раз бот сам справился
-        asyncio.create_task(_fix_bot_code_background(bot_display, sender))
+        # Фиксим код в фоне — следующий раз бот сам справится
+        if repo_info:
+            asyncio.create_task(_fix_bot_code_background(bot_display, repo_info))
 
     except Exception as e:
-        logger.error(f"capability gap fix failed: {e}")
+        logger.error(f"instant reply failed for {bot_display}: {e}")
         await bot.send_message(
             chat_id=message.chat.id,
             text=f"❌ Не смог получить данные для {bot_display}: {e}"
         )
 
 
-async def _fix_bot_code_background(bot_display: str, sender: str):
+async def _fix_bot_code_background(bot_display: str, repo_info: tuple):
     """Добавляет web search в код бота в фоне — чтобы в следующий раз бот сам справился."""
-    repo_info = BOT_REPOS.get(sender)
-    if not repo_info:
-        return
     repo, filepath = repo_info
     try:
         source = await read_file(repo, filepath)
@@ -496,17 +531,18 @@ async def _fix_bot_code_background(bot_display: str, sender: str):
         fixed_code = await generate_fix(source, fix_prompt)
         await push_file(repo, filepath, fixed_code,
                         f"feat({repo}): add web search tool for live data access")
-        await bot.send_message(
-            chat_id=OFFICE_CHAT_ID,
-            text=f"✅ Код {bot_display} обновлён — теперь web search встроен, следующий раз сам справится."
-        )
+        if OFFICE_CHAT_ID:
+            await bot.send_message(
+                chat_id=OFFICE_CHAT_ID,
+                text=f"✅ Код {bot_display} обновлён — web search встроен, следующий раз сам справится."
+            )
         await post_lesson(
             title=f"Web search добавлен для {bot_display}",
             symptom=f"{bot_display} не мог ответить на вопрос из-за отсутствия live данных",
             cause="tools=[web_search] не был подключён в client.messages.create()",
             context=f"{repo}/{filepath}",
             fix="Cilly ответил немедленно с web search, затем добавил tool в код бота",
-            how_to_avoid="При создании ботов с аналитикой сразу подключать web search tool"
+            how_to_avoid="При создании аналитических ботов сразу подключать web search tool"
         )
     except Exception as e:
         logger.error(f"background fix failed for {bot_display}: {e}")
