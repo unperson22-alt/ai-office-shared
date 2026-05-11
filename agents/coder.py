@@ -44,6 +44,7 @@ SERVICES = {
     "db277aff-6638-4b4a-970e-b016bd753608": ("milly-bot",        "bot.py"),
     "3dfc7336-2e91-4ade-950a-4f3d566baced": ("office-dashboard", "main.py"),
     "b441ce93-9736-49b3-9b5d-d0c82e715b28": ("billy-bot",        "bot.py"),
+    "9db4108e-19f1-4c1f-a21c-3909442e137c": ("prophet-bot",      "bot.py"),
 }
 
 bot    = Bot(token=BOT_TOKEN)
