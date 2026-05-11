@@ -55,3 +55,6 @@
 
 **[2026-05-11 18:35 UTC] Силли — office-dashboard:** автофикс: Передать WEBAPP_URL через context.bot_data или изменить архи
 > confidence=high | файл=main.py | статус=редеплой запущен ✅
+
+**[2026-05-11 21:42 UTC] Силли — office-dashboard:** автофикс: 1) Добавить try-except вокруг инициализации Application и ap
+> confidence=high | файл=main.py | статус=редеплой запущен ✅
