@@ -20,25 +20,40 @@ HEADERS = {
     "Accept": "application/vnd.github.v3+json"
 }
 
-TIMEOUT = httpx.Timeout(15.0)  # 15 сек на любой запрос к GitHub
+TIMEOUT = httpx.Timeout(15.0)
+
+
+async def create_repo(repo: str, description: str = "", private: bool = True) -> dict:
+    """
+    Создать новый репозиторий на GitHub.
+    Возвращает {"url": html_url, "clone_url": clone_url}
+    """
+    if not GITHUB_TOKEN:
+        raise EnvironmentError("GITHUB_TOKEN не задан")
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        r = await client.post(
+            f"{BASE_URL}/user/repos",
+            headers=HEADERS,
+            json={"name": repo, "description": description, "private": private, "auto_init": False}
+        )
+        if r.status_code == 422:
+            raise ValueError(f"Репо '{repo}' уже существует или имя недопустимо")
+        r.raise_for_status()
+        data = r.json()
+        logger.info(f"create_repo OK: {repo}")
+        return {"url": data["html_url"], "clone_url": data["clone_url"]}
 
 
 async def push_file(repo: str, path: str, content: str, commit_msg: str) -> dict:
     """
     Создать или обновить файл в репо.
-    repo: имя репо (например 'ai-office-shared')
-    path: путь внутри репо (например 'scripts/test.py')
-    content: содержимое файла (текст)
-    commit_msg: сообщение коммита
     """
     if not GITHUB_TOKEN:
         raise EnvironmentError("GITHUB_TOKEN не задан в переменных окружения Railway")
 
     url = f"{BASE_URL}/repos/{GITHUB_USER}/{repo}/contents/{path}"
     encoded = base64.b64encode(content.encode()).decode()
-
     sha = await _get_file_sha(repo, path)
-
     payload = {"message": commit_msg, "content": encoded}
     if sha:
         payload["sha"] = sha
@@ -59,12 +74,8 @@ async def push_file(repo: str, path: str, content: str, commit_msg: str) -> dict
 
 
 async def read_file(repo: str, path: str) -> str:
-    """
-    Прочитать содержимое файла из репо.
-    Возвращает текст файла.
-    """
+    """Прочитать содержимое файла из репо."""
     url = f"{BASE_URL}/repos/{GITHUB_USER}/{repo}/contents/{path}"
-
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         r = await client.get(url, headers=HEADERS)
         r.raise_for_status()
@@ -73,12 +84,8 @@ async def read_file(repo: str, path: str) -> str:
 
 
 async def list_files(repo: str, path: str = "") -> list:
-    """
-    Список файлов в папке репо.
-    path: папка внутри репо (пустая строка = корень)
-    """
+    """Список файлов в папке репо."""
     url = f"{BASE_URL}/repos/{GITHUB_USER}/{repo}/contents/{path}"
-
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         r = await client.get(url, headers=HEADERS)
         r.raise_for_status()
@@ -90,31 +97,20 @@ async def list_files(repo: str, path: str = "") -> list:
 
 
 async def delete_file(repo: str, path: str, commit_msg: str) -> bool:
-    """
-    Удалить файл из репо.
-    """
+    """Удалить файл из репо."""
     sha = await _get_file_sha(repo, path)
     if not sha:
         return False
-
     url = f"{BASE_URL}/repos/{GITHUB_USER}/{repo}/contents/{path}"
-
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        r = await client.delete(url, headers=HEADERS, json={
-            "message": commit_msg,
-            "sha": sha
-        })
+        r = await client.delete(url, headers=HEADERS, json={"message": commit_msg, "sha": sha})
         r.raise_for_status()
         return True
 
 
 async def _get_file_sha(repo: str, path: str) -> Optional[str]:
-    """
-    Внутренняя функция: получить sha файла (нужен для обновления/удаления).
-    Возвращает None если файл не существует.
-    """
+    """Получить sha файла (нужен для обновления/удаления)."""
     url = f"{BASE_URL}/repos/{GITHUB_USER}/{repo}/contents/{path}"
-
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         r = await client.get(url, headers=HEADERS)
         if r.status_code == 404:
