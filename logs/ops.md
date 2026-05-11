@@ -52,3 +52,6 @@
 
 **[2026-05-11 14:10 UTC] Силли — office-dashboard:** автофикс: Добавить try-except вокруг get_required_env() вызовы в main(
 > confidence=high | файл=main.py | статус=редеплой запущен ✅
+
+**[2026-05-11 18:35 UTC] Силли — office-dashboard:** автофикс: Передать WEBAPP_URL через context.bot_data или изменить архи
+> confidence=high | файл=main.py | статус=редеплой запущен ✅
