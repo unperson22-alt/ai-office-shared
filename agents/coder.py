@@ -1344,6 +1344,18 @@ async def handle_cilly_task(request):
 
 
 
+
+async def handle_promote_bots(request):
+    """Выдать права администратора списку ботов в группе."""
+    data = await request.json()
+    group_id = int(data.get("group_id", -5194783850))
+    bots = data.get("bots", [])
+    results = {}
+    for username in bots:
+        ok = await tg_promote_bot_admin(username, group_id)
+        results[username] = "✅" if ok else "❌"
+    return web.json_response({"results": results})
+
 # ── Secrets endpoint (for Claude to read GH token without exposing in chat) ──
 RAILWAY_SECRET = os.getenv("RAILWAY_TOKEN", "")  # reuse existing Railway token as auth
 
@@ -1364,6 +1376,7 @@ async def main():
     app = web.Application()
     app.router.add_post("/task", handle_cilly_task)
     app.router.add_get("/secrets", handle_secrets)
+    app.router.add_post("/promote_bots", handle_promote_bots)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080)))
