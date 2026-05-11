@@ -6,7 +6,10 @@ github_tools.py — общий модуль для работы с GitHub API
 import httpx
 import base64
 import os
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_USER = "unperson22-alt"
@@ -17,6 +20,8 @@ HEADERS = {
     "Accept": "application/vnd.github.v3+json"
 }
 
+TIMEOUT = httpx.Timeout(15.0)  # 15 сек на любой запрос к GitHub
+
 
 async def push_file(repo: str, path: str, content: str, commit_msg: str) -> dict:
     """
@@ -26,23 +31,27 @@ async def push_file(repo: str, path: str, content: str, commit_msg: str) -> dict
     content: содержимое файла (текст)
     commit_msg: сообщение коммита
     """
+    if not GITHUB_TOKEN:
+        raise EnvironmentError("GITHUB_TOKEN не задан в переменных окружения Railway")
+
     url = f"{BASE_URL}/repos/{GITHUB_USER}/{repo}/contents/{path}"
     encoded = base64.b64encode(content.encode()).decode()
 
-    # Проверяем существует ли файл (нужен sha для обновления)
     sha = await _get_file_sha(repo, path)
 
-    payload = {
-        "message": commit_msg,
-        "content": encoded
-    }
+    payload = {"message": commit_msg, "content": encoded}
     if sha:
         payload["sha"] = sha
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         r = await client.put(url, headers=HEADERS, json=payload)
+        if r.status_code in (401, 403):
+            raise PermissionError(
+                f"GitHub auth failed ({r.status_code}): проверь GITHUB_TOKEN в Railway Variables"
+            )
         r.raise_for_status()
         data = r.json()
+        logger.info(f"push_file OK: {repo}/{path}")
         return {
             "url": data.get("content", {}).get("html_url", ""),
             "action": "updated" if sha else "created"
@@ -56,12 +65,11 @@ async def read_file(repo: str, path: str) -> str:
     """
     url = f"{BASE_URL}/repos/{GITHUB_USER}/{repo}/contents/{path}"
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         r = await client.get(url, headers=HEADERS)
         r.raise_for_status()
         data = r.json()
-        content = base64.b64decode(data["content"]).decode()
-        return content
+        return base64.b64decode(data["content"]).decode()
 
 
 async def list_files(repo: str, path: str = "") -> list:
@@ -71,7 +79,7 @@ async def list_files(repo: str, path: str = "") -> list:
     """
     url = f"{BASE_URL}/repos/{GITHUB_USER}/{repo}/contents/{path}"
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         r = await client.get(url, headers=HEADERS)
         r.raise_for_status()
         items = r.json()
@@ -91,7 +99,7 @@ async def delete_file(repo: str, path: str, commit_msg: str) -> bool:
 
     url = f"{BASE_URL}/repos/{GITHUB_USER}/{repo}/contents/{path}"
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         r = await client.delete(url, headers=HEADERS, json={
             "message": commit_msg,
             "sha": sha
@@ -107,7 +115,7 @@ async def _get_file_sha(repo: str, path: str) -> Optional[str]:
     """
     url = f"{BASE_URL}/repos/{GITHUB_USER}/{repo}/contents/{path}"
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         r = await client.get(url, headers=HEADERS)
         if r.status_code == 404:
             return None

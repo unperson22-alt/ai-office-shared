@@ -104,11 +104,17 @@ async def cmd_push(message: Message):
     code = await ask_claude(task)
 
     await message.answer("📤 Загружаю на GitHub...")
-    result = await push_file(repo, path, code, f"Coder: {task[:60]}")
-
-    await message.answer(
-        f"✅ {'Обновлён' if result['action'] == 'updated' else 'Создан'}: {result['url']}"
-    )
+    try:
+        result = await push_file(repo, path, code, f"Coder: {task[:60]}")
+        await message.answer(
+            f"✅ {'Обновлён' if result['action'] == 'updated' else 'Создан'}: {result['url']}"
+        )
+    except EnvironmentError as e:
+        await message.answer(f"❌ Ошибка конфигурации: {e}")
+    except PermissionError as e:
+        await message.answer(f"❌ Нет доступа к GitHub: {e}")
+    except Exception as e:
+        await message.answer(f"❌ Не удалось загрузить на GitHub: {type(e).__name__}: {e}")
 
 
 @dp.message(F.text.startswith("/read"))
