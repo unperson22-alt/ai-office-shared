@@ -160,6 +160,25 @@ push_code=залить код, fix_bot=исправить баг, create_bot=н�
 Репо: billy-bot,tilly-bot,filly-bot,doctor-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard.
 билли→billy, тилли→tilly, макс/милли→milly, доктор→doctor, филли→filly, силли→ai-office-shared."""
 
+
+OPS_LOG_FILE = "logs/ops.md"
+
+async def append_ops_log(action: str, service: str, details: str = ""):
+    """Append Cilly action to ops.md for Claude context on next session."""
+    try:
+        ts = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        entry = f"\n**[{ts}] Силли — {service}:** {action}"
+        if details:
+            entry += f"\n> {details}"
+        entry += "\n"
+
+        raw = await read_file("ai-office-shared", OPS_LOG_FILE)
+        updated = raw + entry
+        await push_file("ai-office-shared", OPS_LOG_FILE, updated,
+                        f"log(cilly): {action[:50]} @ {service}")
+    except Exception as e:
+        logger.debug(f"append_ops_log failed: {e}")
+
 async def railway_query(query: str, variables: dict = None) -> dict:
     payload = {"query": query}
     if variables:
@@ -330,6 +349,10 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
             redeployed = await redeploy_service(service_id)
             status = "редеплой запущен ✅" if redeployed else "редеплой не удался, пуш сделан ⚠️"
             await notify_office(f"✅ *{service_name}* — фикс запушен, {status}")
+            asyncio.create_task(append_ops_log(
+                f"автофикс: {fix_desc[:60]}", service_name,
+                f"confidence=high | файл={affected} | статус={status}"
+            ))
             await post_lesson(
                 title       = analysis.get("lesson_title", description),
                 symptom     = analysis.get("lesson_symptom", description),
@@ -755,6 +778,10 @@ async def cmd_approve(message: Message):
         redeployed = await redeploy_service(fix["service_id"])
         status = "редеплой запущен ✅" if redeployed else "редеплой не удался ⚠️"
         await message.answer(f"✅ Фикс применён, {status}")
+        asyncio.create_task(append_ops_log(
+            f"approved fix: {fix['analysis'].get('fix_description','')[:60]}",
+            fix['service_name'], f"approved by Влад | {status}"
+        ))
         analysis = fix["analysis"]
         await post_lesson(
             title       = analysis.get("lesson_title", ""),
