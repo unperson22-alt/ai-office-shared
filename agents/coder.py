@@ -23,6 +23,8 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.messages import GetDialogFiltersRequest, UpdateDialogFilterRequest
 from telethon.tl.functions.channels import InviteToChannelRequest, EditAdminRequest
+from telethon.tl.functions.messages import EditChatAdminRequest
+from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.types import DialogFilter, InputPeerUser, InputPeerChannel, ChatAdminRights
 
 logging.basicConfig(level=logging.INFO)
@@ -751,28 +753,28 @@ async def tg_create_group(title: str, bot_usernames: list[str] = None) -> int | 
 
 
 async def tg_promote_bot_admin(bot_username: str, group_id: int) -> bool:
-    """Выдать боту права администратора в группе (только отправка сообщений)."""
+    """Выдать боту права администратора — работает с обычными чатами и супергруппами."""
+    from telethon.tl.types import Chat, Channel
     client = await get_telethon_client()
     try:
         group_entity = await client.get_entity(group_id)
         bot_entity   = await client.get_entity(bot_username)
-        rights = ChatAdminRights(
-            post_messages=True,
-            delete_messages=False,
-            ban_users=False,
-            invite_users=False,
-            pin_messages=False,
-            add_admins=False,
-            manage_call=False,
-            change_info=False,
-            edit_messages=False,
-        )
-        await client(EditAdminRequest(
-            channel=group_entity,
-            user_id=bot_entity,
-            admin_rights=rights,
-            rank="Bot"
-        ))
+
+        if isinstance(group_entity, Channel):
+            # Супергруппа или канал
+            rights = ChatAdminRights(post_messages=True)
+            await client(EditAdminRequest(
+                channel=group_entity, user_id=bot_entity,
+                admin_rights=rights, rank="Bot"
+            ))
+        else:
+            # Обычный чат (Chat)
+            await client(EditChatAdminRequest(
+                chat_id=group_entity.id,
+                user_id=bot_entity,
+                is_admin=True
+            ))
+
         logger.info(f"tg_promote_bot_admin: {bot_username} → admin in {group_id}")
         return True
     except Exception as e:
