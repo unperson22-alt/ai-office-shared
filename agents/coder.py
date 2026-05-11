@@ -88,36 +88,13 @@ ERROR_COOLDOWN = 3600  # 1 час
 seen_errors: dict = {}  # {error_hash: timestamp}
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
-CODER_PROMPT = """Ты — Кодер, агент AI-офиса. Пишешь чистый, рабочий Python код.
-- Возвращай ТОЛЬКО код, без объяснений и markdown-блоков
-- Код должен быть готов к запуску
-- Добавляй комментарии внутри кода где нужно
-Когда тебя просят объяснить — отвечай кратко и по делу."""
+CODER_PROMPT = """Python-кодер. ТОЛЬКО код без markdown. Готов к запуску. Комментарии внутри. Объяснения — кратко."""
 
-ANALYZER_PROMPT = """Ты — анализатор багов Python-ботов на Telegram/Railway.
-Тебе дают фрагмент логов сервиса и исходный код файла.
+ANALYZER_PROMPT = """Анализатор багов Python/Telegram/Railway. JSON без markdown:
+{"is_bug":bool,"confidence":"high|low","bug_type":"crash|logic|config|network|unknown","description":"1-2 предл","affected_file":"path|null","fix_description":"конкретно","lesson_title":"","lesson_symptom":"","lesson_cause":"","lesson_fix":"","lesson_avoid":""}
+high=явный crash/NameError/ImportError/SyntaxError/KeyError→автофикс. low=логика/сеть→спросить."""
 
-Ответь ТОЛЬКО JSON без markdown:
-{
-  "is_bug": true/false,
-  "confidence": "high"/"low",
-  "bug_type": "crash|logic|config|network|unknown",
-  "description": "что именно сломалось (1-2 предложения)",
-  "affected_file": "путь к файлу который надо исправить или null",
-  "fix_description": "что нужно изменить в коде (конкретно)",
-  "lesson_title": "короткое название урока",
-  "lesson_symptom": "симптом",
-  "lesson_cause": "причина",
-  "lesson_fix": "что сделали",
-  "lesson_avoid": "как избежать"
-}
-
-confidence=high: явный crash, NameError, ImportError, SyntaxError, KeyError на старте — фиксить автоматически.
-confidence=low: логические баги, неожиданное поведение, сетевые ошибки — спросить у владельца."""
-
-FIXER_PROMPT = """Ты — Кодер. Тебе дают исходный код файла и описание бага.
-Верни ТОЛЬКО исправленный код целиком, без объяснений и markdown-блоков.
-Минимальные изменения — только то что нужно для фикса."""
+FIXER_PROMPT = """Фиксер. Верни ТОЛЬКО полный исправленный код. Минимум изменений. Без markdown."""
 
 
 # ── Railway API ───────────────────────────────────────────────────────────────
@@ -176,27 +153,11 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
 
 
 
-INTENT_PROMPT = """Ты — диспетчер AI-офиса. Пользователь написал запрос на естественном языке.
-Определи намерение и верни ТОЛЬКО JSON без markdown:
-{
-  "intent": "push_code|fix_bot|create_bot|deploy|read_file|list_files|answer",
-  "repo": "<repo name or null>",
-  "path": "<file path or null>",
-  "task": "<чёткое описание задачи для кодера или ответа>",
-  "confidence": "high|low"
-}
-
-Намерения:
-- push_code: написать/изменить код и залить в репо
-- fix_bot: исправить баг или поведение бота
-- create_bot: создать нового бота с нуля
-- deploy: передеплоить сервис
-- read_file: прочитать файл из репо
-- list_files: список файлов репо
-- answer: просто ответить на вопрос, ничего не деплоить
-
-Известные репо: billy-bot, tilly-bot, filly-bot, doctor-bot, milly-bot, ai-office-shared, logger-bot, office-dashboard.
-Если репо не указан явно — определи по контексту (билли=billy-bot, тилли=tilly-bot, макс/милли=milly-bot, доктор=doctor-bot, филли=filly-bot, силли=ai-office-shared)."""
+INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
+{"intent":"push_code|fix_bot|create_bot|deploy|read_file|list_files|answer","repo":"name|null","path":"path|null","task":"описание","confidence":"high|low"}
+push_code=залить код, fix_bot=исправить баг, create_bot=новый бот, deploy=редеплой, read_file=прочитать, list_files=список, answer=ответить.
+Репо: billy-bot,tilly-bot,filly-bot,doctor-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard.
+билли→billy, тилли→tilly, макс/милли→milly, доктор→doctor, филли→filly, силли→ai-office-shared."""
 
 async def railway_query(query: str, variables: dict = None) -> dict:
     payload = {"query": query}
@@ -403,30 +364,10 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
 ERROR_PATTERNS = ["Traceback", "Error:", "Exception:", "CRITICAL", "crashed", "exit code"]
 
 # Фразы которые означают что боту не хватает инструмента
-RESPONSE_ANALYZER_PROMPT = """Ты — анализатор качества ответов AI-агентов в Telegram чате.
-
-Тебе дают: вопрос пользователя и ответ AI-агента.
-
-Определи: есть ли РЕАЛЬНАЯ ПРОБЛЕМА С ВОЗМОЖНОСТЯМИ агента?
-
-ПРОБЛЕМА — агент:
-- Не может получить актуальные данные (цены, курсы, новости) и говорит об этом
-- Отказывается отвечать из-за отсутствия инструмента
-- Просит пользователя самому найти данные которые агент мог бы найти через web search
-
-НЕ ПРОБЛЕМА — агент:
-- Просит уточнить вопрос или предоставить данные (скрин, цифры)
-- Отвечает по делу в рамках своих возможностей
-- Даёт общий анализ без конкретики потому что нет конкретных данных от пользователя
-
-Ответь ТОЛЬКО валидным JSON без markdown:
-{
-  "has_problem": true или false,
-  "problem_type": "no_web_search" или "none",
-  "fix_needed": "web_search" или "none",
-  "confidence": "high" или "low",
-  "reason": "одно предложение почему"
-}"""
+RESPONSE_ANALYZER_PROMPT = """Анализатор ответов AI-агентов. Есть ли проблема с возможностями?
+ПРОБЛЕМА: агент не может получить актуальные данные и говорит об этом / отказывается / просит юзера найти самому.
+НЕ ПРОБЛЕМА: просит уточнить / отвечает по делу / нет данных от юзера.
+JSON без markdown: {"has_problem":bool,"problem_type":"no_web_search|none","fix_needed":"web_search|none","confidence":"high|low","reason":"1 предложение"}"""
 
 
 async def analyze_bot_response(user_question: str, bot_response: str) -> dict:
