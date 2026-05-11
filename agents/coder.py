@@ -288,6 +288,37 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
 # ── Monitor loop ───────────────────────────────────────────────────────────────
 ERROR_PATTERNS = ["Traceback", "Error:", "Exception:", "CRITICAL", "crashed", "exit code"]
 
+# Фразы которые означают что боту не хватает инструмента
+CAPABILITY_GAPS = [
+    "нет доступа к live", "нет live данных", "нет доступа к актуальн",
+    "не могу получить актуаль", "нет данных в реальном", "без live данных",
+    "нет доступа к реальн", "нет реальных данных", "live данных нет",
+    "нет актуальных данных", "не имею доступа к текущим", "не вижу текущ",
+    "не могу проверить текущ", "не получаю рыночных"
+]
+
+# Имя бота в группе → репо + файл
+BOT_REPOS = {
+    "тилли":  ("tilly-bot",  "bot.py"),
+    "билли":  ("billy-bot",  "bot.py"),
+    "макс":   ("milly-bot",  "bot.py"),
+    "доктор": ("doctor-bot", "bot.py"),
+}
+
+WEB_SEARCH_FIX_PROMPT = """Добавь web search tool в этот Python код Telegram бота.
+
+Нужно сделать три изменения:
+1. В системный промпт добавить в самое начало (первая строка):
+   "Используй web_search для получения актуальных данных: цены, курсы, новости, события."
+2. В вызов client.messages.create() добавить параметр tools:
+   tools=[{{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}}]
+3. Парсинг ответа уже перебирает блоки через hasattr(block, "text") — не трогай его.
+
+Верни ТОЛЬКО исправленный код целиком, без объяснений и markdown.
+
+Исходный код:
+{source}"""
+
 async def monitor_loop():
     """Фоновая задача: каждые 5 минут проверяет логи всех сервисов."""
     await asyncio.sleep(30)  # подождать пока бот стартует
@@ -340,6 +371,71 @@ async def monitor_loop():
 
 
 # ── Telegram handlers ──────────────────────────────────────────────────────────
+@dp.message(F.chat.type.in_({"group", "supergroup"}))
+async def monitor_group_capabilities(message: Message):
+    """Следит за группой — если бот говорит что нет доступа к данным, фиксит сам."""
+    text = message.text or ""
+    if not any(phrase in text.lower() for phrase in CAPABILITY_GAPS):
+        return
+
+    sender = (message.from_user.first_name or "").lower()
+    repo_info = None
+    bot_display = None
+    for name, info in BOT_REPOS.items():
+        if name in sender:
+            repo_info = info
+            bot_display = name.capitalize()
+            break
+
+    if not repo_info:
+        return
+
+    repo, filepath = repo_info
+
+    await bot.send_message(
+        chat_id=message.chat.id,
+        text=f"🔧 Слышу, {bot_display} — сейчас добавлю доступ к актуальным данным, подожди..."
+    )
+
+    try:
+        source = await read_file(repo, filepath)
+
+        # Проверяем — может web search уже есть
+        if "web_search_20250305" in source:
+            await bot.send_message(
+                chat_id=message.chat.id,
+                text=f"ℹ️ {bot_display} — web search уже подключён. Возможно нужен другой инструмент?"
+            )
+            return
+
+        fix_prompt = WEB_SEARCH_FIX_PROMPT.format(source=source)
+        fixed_code = await generate_fix(source, fix_prompt)
+
+        await push_file(repo, filepath, fixed_code,
+                        f"feat({repo}): add web search tool for live data access")
+
+        await bot.send_message(
+            chat_id=message.chat.id,
+            text=f"✅ Готово! {bot_display} теперь умеет искать актуальные данные. "
+                 f"Railway передеплоит автоматически — через минуту заработает."
+        )
+
+        await post_lesson(
+            title=f"Web search добавлен для {bot_display}",
+            symptom=f"{bot_display} сообщил(а) об отсутствии доступа к live данным",
+            cause="tools=[web_search] не был подключён в client.messages.create()",
+            context=f"{repo}/{filepath}",
+            fix='Добавлен tools=[{{"type": "web_search_20250305", "max_uses": 3}}]',
+            how_to_avoid="При создании ботов требующих актуальных данных сразу подключать web search"
+        )
+
+    except Exception as e:
+        await bot.send_message(
+            chat_id=message.chat.id,
+            text=f"❌ Не смог исправить {bot_display}: {e}"
+        )
+
+
 @dp.message(CommandStart())
 async def start(message: Message):
     await message.answer(
