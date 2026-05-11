@@ -4,47 +4,109 @@
     "ts": "2026-05-11",
     "type": "config",
     "svc": "railway",
-    "sym": ["monitoring_blind", "logs_always_empty", "no_errors_detected"],
+    "sym": [
+      "monitoring_blind",
+      "logs_always_empty",
+      "no_errors_detected"
+    ],
     "root": "wrong_uuid_in_SERVICES_dict",
     "pat": "hardcoded_id_not_verified_against_api",
     "fix": "fetch_real_uuid:railway_api>project>services>edges>node>id",
     "file": "coder.py:SERVICES",
-    "tags": ["railway", "uuid", "monitoring", "silent_fail", "SERVICES"]
+    "tags": [
+      "railway",
+      "uuid",
+      "monitoring",
+      "silent_fail",
+      "SERVICES"
+    ]
   },
   {
     "id": 2,
     "ts": "2026-05-11",
     "type": "config",
     "svc": "railway",
-    "sym": ["redeploy_fails", "push_ok", "warning_on_redeploy"],
+    "sym": [
+      "redeploy_fails",
+      "push_ok",
+      "warning_on_redeploy"
+    ],
     "root": "env_id_string_literal_not_uuid",
     "pat": "railway_api_requires_uuid_not_name",
     "fix": "replace_production_string_with_uuid:2efaaf60-ba39-492c-bf86-007fd505493f",
     "file": "coder.py:redeploy_service()",
-    "tags": ["railway", "uuid", "environment", "redeploy", "graphql"]
+    "tags": [
+      "railway",
+      "uuid",
+      "environment",
+      "redeploy",
+      "graphql"
+    ]
   },
   {
     "id": 3,
     "ts": "2026-05-11",
     "type": "config",
     "svc": "cilly_monitor",
-    "sym": ["bot_not_monitored", "bugs_not_detected", "autofix_not_triggered"],
+    "sym": [
+      "bot_not_monitored",
+      "bugs_not_detected",
+      "autofix_not_triggered"
+    ],
     "root": "service_missing_from_SERVICES_dict",
     "pat": "new_bot_created_without_registering_in_monitor",
     "fix": "add_entry_to_SERVICES:{real_uuid:(repo_name,main_file)}",
     "file": "coder.py:SERVICES",
-    "tags": ["monitoring", "SERVICES", "new_bot", "registration"]
+    "tags": [
+      "monitoring",
+      "SERVICES",
+      "new_bot",
+      "registration"
+    ]
   },
   {
     "id": 4,
     "ts": "2026-05-11",
     "type": "telegram_api",
     "svc": "bot_messaging",
-    "sym": ["message_not_sent", "bad_request_400", "cant_parse_entities"],
+    "sym": [
+      "message_not_sent",
+      "bad_request_400",
+      "cant_parse_entities"
+    ],
     "root": "unescaped_markdown_special_chars_in_text",
     "pat": "user_generated_text_with_parse_mode_markdown",
     "fix": "remove_parse_mode_or_switch_to_HTML_tags",
     "file": "coder.py:post_lesson()>bot.send_message()",
-    "tags": ["telegram", "markdown", "parse_mode", "special_chars", "400_error"]
+    "tags": [
+      "telegram",
+      "markdown",
+      "parse_mode",
+      "special_chars",
+      "400_error"
+    ]
+  },
+  {
+    "id": 5,
+    "ts": "2025-01-09",
+    "type": "config",
+    "svc": "app",
+    "sym": [
+      "app_crash_on_startup",
+      "valueerror_missing_env",
+      "unhandled_exception_at_import"
+    ],
+    "root": "critical_ops_at_module_level",
+    "pat": "get_required_env_and_get_port_called_during_import",
+    "fix": "move_config_init_to_main:wrap_with_try_except_finally_for_graceful_shutdown",
+    "file": "office-dashboard/main.py",
+    "tags": [
+      "config",
+      "environment",
+      "module_level",
+      "exception_handling",
+      "startup",
+      "graceful_shutdown"
+    ]
   }
 ]
