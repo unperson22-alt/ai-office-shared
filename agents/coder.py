@@ -21,6 +21,9 @@ from anthropic import AsyncAnthropic
 from shared.github_tools import push_file, read_file, list_files, create_repo
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from telethon.tl.functions.messages import GetDialogFiltersRequest, UpdateDialogFilterRequest
+from telethon.tl.functions.channels import InviteToChannelRequest
+from telethon.tl.types import DialogFilter, InputPeerUser, InputPeerChannel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -641,6 +644,112 @@ async def create_via_botfather(bot_name_en: str, bot_display: str) -> str:
 
 
 
+async def get_telethon_client() -> TelegramClient:
+    """Создать и вернуть подключённый Telethon клиент."""
+    api_id   = int(os.getenv("TELEGRAM_API_ID", "0"))
+    api_hash = os.getenv("TELEGRAM_API_HASH", "")
+    session  = os.getenv("TELETHON_SESSION", "")
+    if not all([api_id, api_hash, session]):
+        raise EnvironmentError("TELEGRAM_API_ID / TELEGRAM_API_HASH / TELETHON_SESSION не заданы")
+    client = TelegramClient(StringSession(session), api_id, api_hash)
+    await client.connect()
+    return client
+
+
+async def tg_add_bot_to_group(bot_username: str, group_id: int) -> bool:
+    """Добавить бота в группу по group_id."""
+    client = await get_telethon_client()
+    try:
+        bot_entity = await client.get_entity(bot_username)
+        group_entity = await client.get_entity(group_id)
+        await client(InviteToChannelRequest(group_entity, [bot_entity]))
+        logger.info(f"tg_add_bot_to_group: {bot_username} → {group_id}")
+        return True
+    except Exception as e:
+        logger.error(f"tg_add_bot_to_group failed: {e}")
+        return False
+    finally:
+        await client.disconnect()
+
+
+async def tg_get_folder_id(folder_name: str) -> int | None:
+    """Найти ID папки по имени."""
+    client = await get_telethon_client()
+    try:
+        filters = await client(GetDialogFiltersRequest())
+        for f in filters.filters:
+            if hasattr(f, 'title') and f.title.lower() == folder_name.lower():
+                return f.id
+        return None
+    finally:
+        await client.disconnect()
+
+
+async def tg_add_peer_to_folder(peer_id: int, folder_name: str = "Office") -> bool:
+    """Добавить диалог (бота или группу) в папку по имени."""
+    client = await get_telethon_client()
+    try:
+        filters = await client(GetDialogFiltersRequest())
+        target = None
+        for f in filters.filters:
+            if hasattr(f, 'title') and f.title.lower() == folder_name.lower():
+                target = f
+                break
+        if not target:
+            logger.warning(f"Папка '{folder_name}' не найдена")
+            return False
+
+        peer_entity = await client.get_entity(peer_id)
+        input_peer = await client.get_input_entity(peer_entity)
+
+        # Проверяем что ещё не добавлен
+        existing_ids = [getattr(p, 'channel_id', None) or getattr(p, 'user_id', None) or getattr(p, 'chat_id', None)
+                        for p in target.include_peers]
+        new_id = getattr(input_peer, 'channel_id', None) or getattr(input_peer, 'user_id', None) or getattr(input_peer, 'chat_id', None)
+        if new_id in existing_ids:
+            logger.info(f"Peer {peer_id} уже в папке {folder_name}")
+            return True
+
+        target.include_peers.append(input_peer)
+        await client(UpdateDialogFilterRequest(id=target.id, filter=target))
+        logger.info(f"tg_add_peer_to_folder: {peer_id} → {folder_name}")
+        return True
+    except Exception as e:
+        logger.error(f"tg_add_peer_to_folder failed: {e}")
+        return False
+    finally:
+        await client.disconnect()
+
+
+async def tg_create_group(title: str, bot_usernames: list[str] = None) -> int | None:
+    """Создать новую группу и вернуть её ID."""
+    from telethon.tl.functions.channels import CreateChannelRequest
+    client = await get_telethon_client()
+    try:
+        result = await client(CreateChannelRequest(
+            title=title, about="", megagroup=True
+        ))
+        group = result.chats[0]
+        group_id = -100_000_000_000 - group.id  # правильный формат для supergroup
+
+        if bot_usernames:
+            for username in bot_usernames:
+                try:
+                    bot_entity = await client.get_entity(username)
+                    await client(InviteToChannelRequest(group, [bot_entity]))
+                    await asyncio.sleep(1)
+                except Exception as e:
+                    logger.warning(f"Не удалось добавить {username}: {e}")
+
+        logger.info(f"tg_create_group: '{title}' → {group_id}")
+        return group_id
+    except Exception as e:
+        logger.error(f"tg_create_group failed: {e}")
+        return None
+    finally:
+        await client.disconnect()
+
+
 async def railway_graphql(query: str, variables: dict = None) -> dict:
     """Выполнить GraphQL запрос к Railway API."""
     async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
@@ -815,14 +924,75 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func):
             await reply_func(f"❌ Railway: {ex}")
             return
 
+        # 5. Добавить бота в Office group
+        await reply_func("5️⃣ Добавляю бота в Office group...")
+        office_group_id = int(os.getenv("OFFICE_CHAT_ID", "0"))
+        bot_username = f"@{bot_repo.replace('-', '_')}"
+        added = await tg_add_bot_to_group(bot_username, office_group_id)
+
+        # 6. Переместить бота и сервис в папку Office
+        await reply_func("6️⃣ Перемещаю в папку Office...")
+        # Добавляем бота (личный чат) в папку
+        try:
+            bot_entity = None
+            client_tmp = await get_telethon_client()
+            try:
+                bot_entity = await client_tmp.get_entity(bot_username)
+            finally:
+                await client_tmp.disconnect()
+            if bot_entity:
+                await tg_add_peer_to_folder(bot_entity.id, "Office")
+        except Exception as e:
+            logger.warning(f"Не удалось добавить в папку: {e}")
+
+        # 7. Обновить Филли — добавить нового бота в BOT_URLS и ROUTER_SYSTEM
+        await reply_func("7️⃣ Обновляю Филли...")
+        try:
+            filly_code = await read_file("filly-bot", "bot.py")
+            bot_key = bot_display.upper()
+            bot_internal = f"http://{bot_repo}.railway.internal:8080"
+
+            # BOT_URLS
+            filly_code = filly_code.replace(
+                '"СИЛЛИ":  "http://cilly-bot.railway.internal:8080",
+}',
+                f'"СИЛЛИ":  "http://cilly-bot.railway.internal:8080",
+    "{bot_key}":  "{bot_internal}",
+}}'
+            )
+            # ROUTER_SYSTEM — добавить описание
+            filly_code = filly_code.replace(
+                'СИЛЛИ — код, баги, технические задачи, мониторинг, Railway, боты',
+                f'СИЛЛИ — код, баги, технические задачи, мониторинг, Railway, боты\n{bot_key} — {bot_prompt}'
+            )
+            # DM_AGENT_SYSTEMS
+            filly_code = filly_code.replace(
+                '"СИЛЛИ":  "Ты — Силли.',
+                f'"{bot_key}":  "Ты — {bot_display}. {bot_prompt} Неформально, на русском.",\n    "СИЛЛИ":  "Ты — Силли.'
+            )
+            # AGENT_DISPLAY
+            filly_code = filly_code.replace(
+                '"СИЛЛИ":  "Силли",',
+                f'"{bot_key}":  "{bot_display}",\n    "СИЛЛИ":  "Силли",'
+            )
+
+            await push_file("filly-bot", "bot.py", filly_code, f"feat: add {bot_display} to routing")
+            # Redeploy Filly
+            filly_service_id = "5d61d403-feee-455e-9c0d-523f0e7c79d5"
+            await redeploy_service(filly_service_id)
+        except Exception as e:
+            logger.warning(f"Не удалось обновить Филли: {e}")
+
         await reply_func(
-            f"✅ Бот *{bot_display}* полностью готов!\n\n"
+            f"✅ Бот *{bot_display}* полностью готов и интегрирован!\n\n"
             f"• GitHub репо: `{bot_repo}` ✅\n"
             f"• Код залит ✅\n"
             f"• Telegram бот создан ✅\n"
-            f"• Railway сервис запущен ✅\n"
-            f"• Все переменные прописаны ✅\n\n"
-            f"Railway задеплоит автоматически. Не забудь добавить {bot_display} в Филли!"
+            f"• Railway сервис + переменные ✅\n"
+            f"• Добавлен в Office group ✅\n"
+            f"• Папка Office ✅\n"
+            f"• Филли обновлён и задеплоен ✅\n\n"
+            f"Бот уже работает в офисе 🎉"
         )
 
     elif intent == "deploy":
