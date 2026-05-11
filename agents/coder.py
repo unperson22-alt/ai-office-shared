@@ -952,28 +952,26 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func):
             bot_key = bot_display.upper()
             bot_internal = f"http://{bot_repo}.railway.internal:8080"
 
-            # BOT_URLS
+            # Обновляем Филли — добавляем нового бота в 4 места
+            cilly_anchor = '"СИЛЛИ":  "http://cilly-bot.railway.internal:8080",'
             filly_code = filly_code.replace(
-                '"СИЛЛИ":  "http://cilly-bot.railway.internal:8080",
-}',
-                f'"СИЛЛИ":  "http://cilly-bot.railway.internal:8080",
-    "{bot_key}":  "{bot_internal}",
-}}'
+                cilly_anchor + "\n}",
+                cilly_anchor + "\n    " + f'"{bot_key}":  "{bot_internal}",' + "\n}"
             )
-            # ROUTER_SYSTEM — добавить описание
+            router_anchor = "СИЛЛИ — код, баги, технические задачи, мониторинг, Railway, боты"
             filly_code = filly_code.replace(
-                'СИЛЛИ — код, баги, технические задачи, мониторинг, Railway, боты',
-                f'СИЛЛИ — код, баги, технические задачи, мониторинг, Railway, боты\n{bot_key} — {bot_prompt}'
+                router_anchor,
+                router_anchor + "\n" + f"{bot_key} — {bot_prompt}"
             )
-            # DM_AGENT_SYSTEMS
+            sillie_dm = '"СИЛЛИ":  "Ты — Силли.'
             filly_code = filly_code.replace(
-                '"СИЛЛИ":  "Ты — Силли.',
-                f'"{bot_key}":  "Ты — {bot_display}. {bot_prompt} Неформально, на русском.",\n    "СИЛЛИ":  "Ты — Силли.'
+                sillie_dm,
+                f'"{bot_key}":  "Ты — {bot_display}. {bot_prompt} Неформально, на русском.",\n    ' + sillie_dm
             )
-            # AGENT_DISPLAY
+            sillie_disp = '"СИЛЛИ":  "Силли",'
             filly_code = filly_code.replace(
-                '"СИЛЛИ":  "Силли",',
-                f'"{bot_key}":  "{bot_display}",\n    "СИЛЛИ":  "Силли",'
+                sillie_disp,
+                f'"{bot_key}":  "{bot_display}",\n    ' + sillie_disp
             )
 
             await push_file("filly-bot", "bot.py", filly_code, f"feat: add {bot_display} to routing")
