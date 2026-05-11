@@ -12,6 +12,7 @@ import httpx
 import logging
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 from aiogram.filters import CommandStart
@@ -173,6 +174,29 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
     except Exception as e:
         logger.error(f"append_lesson_ai failed: {e}")
 
+
+
+INTENT_PROMPT = """Ты — диспетчер AI-офиса. Пользователь написал запрос на естественном языке.
+Определи намерение и верни ТОЛЬКО JSON без markdown:
+{
+  "intent": "push_code|fix_bot|create_bot|deploy|read_file|list_files|answer",
+  "repo": "<repo name or null>",
+  "path": "<file path or null>",
+  "task": "<чёткое описание задачи для кодера или ответа>",
+  "confidence": "high|low"
+}
+
+Намерения:
+- push_code: написать/изменить код и залить в репо
+- fix_bot: исправить баг или поведение бота
+- create_bot: создать нового бота с нуля
+- deploy: передеплоить сервис
+- read_file: прочитать файл из репо
+- list_files: список файлов репо
+- answer: просто ответить на вопрос, ничего не деплоить
+
+Известные репо: billy-bot, tilly-bot, filly-bot, doctor-bot, milly-bot, ai-office-shared, logger-bot, office-dashboard.
+Если репо не указан явно — определи по контексту (билли=billy-bot, тилли=tilly-bot, макс/милли=milly-bot, доктор=doctor-bot, филли=filly-bot, силли=ai-office-shared)."""
 
 async def railway_query(query: str, variables: dict = None) -> dict:
     payload = {"query": query}
@@ -497,6 +521,91 @@ async def monitor_loop():
         await asyncio.sleep(MONITOR_INTERVAL)
 
 
+
+async def handle_natural_language(message_text: str, chat_id: int, reply_func):
+    """Process any natural language request — detect intent and execute."""
+    await reply_func("🧠 Разбираю запрос...")
+
+    # Detect intent via Haiku (cheap)
+    raw = await ask_claude(message_text, system=INTENT_PROMPT, model="claude-haiku-4-5-20251001")
+    raw = raw.strip()
+    start, end = raw.find("{"), raw.rfind("}") + 1
+    if start != -1 and end > start:
+        raw = raw[start:end]
+
+    try:
+        intent_data = json.loads(raw)
+    except Exception:
+        await reply_func("❌ Не смог разобрать запрос, попробуй переформулировать")
+        return
+
+    intent = intent_data.get("intent", "answer")
+    repo   = intent_data.get("repo")
+    path   = intent_data.get("path")
+    task   = intent_data.get("task", message_text)
+
+    logger.info(f"[nl] intent={intent} repo={repo} path={path}")
+
+    if intent == "answer":
+        answer = await ask_claude(message_text)
+        await reply_func(answer)
+
+    elif intent in ("push_code", "fix_bot"):
+        if not repo or not path:
+            await reply_func("❓ Уточни: в каком репо и какой файл изменить?")
+            return
+        await reply_func(f"⏳ Генерирую код для `{repo}/{path}`...")
+        code = await ask_claude(task)
+        await reply_func("📤 Заливаю на GitHub...")
+        try:
+            result = await push_file(repo, path, code, f"nl: {task[:60]}")
+            action = "Обновлён" if result["action"] == "updated" else "Создан"
+            await reply_func(f"✅ {action}: {result['url']}")
+            # Auto-redeploy
+            service_id = next((sid for sid, (r, _) in SERVICES.items() if r == repo), None)
+            if service_id:
+                await reply_func("🔄 Запускаю редеплой...")
+                ok = await redeploy_service(service_id)
+                await reply_func("✅ Задеплоено" if ok else "⚠️ Пуш сделан, редеплой не удался")
+        except Exception as e:
+            await reply_func(f"❌ Ошибка: {e}")
+
+    elif intent == "create_bot":
+        await reply_func(
+            f"🤖 Создание нового бота: *{task}*\n\n"
+            f"⚙️ Этап 2 (BotFather + Railway pipeline) ещё в разработке.\n"
+            f"Пока используй: /push <repo> <path> <задача>"
+        )
+
+    elif intent == "deploy":
+        if not repo:
+            await reply_func("❓ Укажи какой сервис задеплоить")
+            return
+        service_id = next((sid for sid, (r, _) in SERVICES.items() if r == repo), None)
+        if not service_id:
+            await reply_func(f"❌ Сервис {repo} не найден в SERVICES")
+            return
+        await reply_func(f"🔄 Деплою {repo}...")
+        ok = await redeploy_service(service_id)
+        await reply_func(f"✅ {repo} задеплоен" if ok else f"❌ Редеплой {repo} не удался")
+
+    elif intent == "read_file":
+        if not repo or not path:
+            await reply_func("❓ Укажи репо и путь к файлу")
+            return
+        content_file = await read_file(repo, path)
+        if len(content_file) > 3000:
+            content_file = content_file[:3000] + "\n... (обрезано)"
+        await reply_func(f"📄 `{repo}/{path}`:\n```\n{content_file}\n```")
+
+    elif intent == "list_files":
+        if not repo:
+            await reply_func("❓ Укажи репо")
+            return
+        files = await list_files(repo, path or "")
+        lines = [("📁 " if f["type"] == "dir" else "📄 ") + f["name"] for f in files]
+        await reply_func("\n".join(lines))
+
 # ── Telegram handlers ──────────────────────────────────────────────────────────
 @dp.message(F.chat.type.in_({"group", "supergroup"}))
 async def monitor_group_responses(message: Message):
@@ -737,12 +846,64 @@ async def cmd_lesson(message: Message):
     await message.answer("📚 Урок отправлен в Bug Lessons")
 
 
+
+@dp.message(F.text & ~F.text.startswith("/"))
+async def cmd_natural_language(message: Message):
+    """Handle any non-command message as a natural language request."""
+    # Only respond to direct messages or group messages that mention Cilly
+    is_dm = message.chat.type == "private"
+    is_mention = message.text and any(w in message.text.lower() for w in ["силли", "cilly", "@cilly"])
+
+    if not is_dm and not is_mention:
+        return  # ignore group chatter not directed at Cilly
+
+    # Strip mention if present
+    text = message.text
+    for mention in ["силли,", "силли", "cilly,", "cilly", "@cilly_bot"]:
+        text = text.replace(mention, "").strip()
+
+    async def reply(msg: str):
+        await message.answer(msg, parse_mode=None)
+
+    await handle_natural_language(text, message.chat.id, reply)
+
+
+# ── HTTP endpoint for Filly routing (family bots → Cilly) ────────────────────
+async def handle_cilly_task(request):
+    """Filly routes natural language requests here from any bot."""
+    data = await request.json()
+    text    = data.get("message", "")
+    chat_id = data.get("chat_id", OFFICE_CHAT_ID)
+    agent   = data.get("agent", "Unknown")
+
+    responses = []
+    async def collect(msg: str):
+        responses.append(msg)
+        if chat_id and str(chat_id) != str(OFFICE_CHAT_ID):
+            try:
+                await bot.send_message(chat_id=chat_id, text=msg, parse_mode=None)
+            except Exception:
+                pass
+
+    await handle_natural_language(f"[{agent}] {text}", int(chat_id) if chat_id else 0, collect)
+    return web.json_response({"status": "ok", "responses": responses})
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 async def main():
     asyncio.create_task(monitor_loop())
+    # HTTP server for Filly routing
+    app = web.Application()
+    app.router.add_post("/task", handle_cilly_task)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080)))
+    await site.start()
+    logger.info("[http] Cilly HTTP server started on :8080")
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
