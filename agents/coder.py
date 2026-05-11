@@ -63,8 +63,8 @@ BOT_SYSTEMS_WEB = {
         "Холодная голова, цифры важнее эмоций. Говоришь чётко — уровни, объёмы, тренды. "
         "Не даёшь советов купи/продай — даёшь анализ и сценарии. Неформально, на русском."
     ),
-    "макс": (
-        "Ты — Макс. Бизнес-ассистент. Используй web_search для актуальных данных о рынке, "
+    "милли": (
+        "Ты — Милли. Бизнес-ассистент. Используй web_search для актуальных данных о рынке, "
         "конкурентах, ценах. Мыслишь цифрами и результатами. Неформально, на русском."
     ),
     "доктор": (
@@ -408,7 +408,7 @@ async def analyze_bot_response(user_question: str, bot_response: str) -> dict:
 BOT_REPOS = {
     "тилли":  ("tilly-bot",  "bot.py"),
     "билли":  ("billy-bot",  "bot.py"),
-    "макс":   ("milly-bot",  "bot.py"),
+    "милли":  ("milly-bot",  "bot.py"),
     "доктор": ("doctor-bot", "bot.py"),
 }
 
@@ -858,12 +858,27 @@ async def handle_cilly_task(request):
     return web.json_response({"status": "ok", "responses": responses})
 
 
+
+# ── Secrets endpoint (for Claude to read GH token without exposing in chat) ──
+RAILWAY_SECRET = os.getenv("RAILWAY_TOKEN", "")  # reuse existing Railway token as auth
+
+async def handle_secrets(request):
+    """Returns GH token to authenticated callers (Claude uses Railway token as key)."""
+    auth = request.headers.get("X-Auth-Token", "")
+    if not auth or auth != RAILWAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    return web.json_response({
+        "GITHUB_TOKEN": os.getenv("GITHUB_TOKEN", ""),
+        "GH_PAT": os.getenv("GH_PAT", ""),
+    })
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 async def main():
     asyncio.create_task(monitor_loop())
     # HTTP server for Filly routing
     app = web.Application()
     app.router.add_post("/task", handle_cilly_task)
+    app.router.add_get("/secrets", handle_secrets)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080)))
