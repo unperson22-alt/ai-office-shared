@@ -134,24 +134,30 @@ async def railway_query(query: str, variables: dict = None) -> dict:
 
 async def get_service_logs(service_id: str) -> list[str]:
     """Получить последние логи сервиса."""
-    data = await railway_query("""
-        query($id: String!) {
-          deployments(input: { serviceId: $id }) {
-            edges { node { id status createdAt } }
-          }
-        }
-    """, {"id": service_id})
-    edges = data.get("data", {}).get("deployments", {}).get("edges", [])
-    if not edges:
-        return []
-    latest_id = edges[0]["node"]["id"]
+    try:
+        data = await railway_query("""
+            query($id: String!) {
+              deployments(input: { serviceId: $id }) {
+                edges { node { id status createdAt } }
+              }
+            }
+        """, {"id": service_id})
+        edges = (data.get("data") or {}).get("deployments", {}).get("edges", [])
+        if not edges:
+            return []
+        latest_id = edges[0]["node"]["id"]
 
-    log_data = await railway_query("""
-        query($id: String!) {
-          deploymentLogs(deploymentId: $id) { message timestamp }
-        }
-    """, {"id": latest_id})
-    logs = log_data.get("data", {}).get("deploymentLogs", [])
+        log_data = await railway_query("""
+            query($id: String!) {
+              deploymentLogs(deploymentId: $id) { message timestamp }
+            }
+        """, {"id": latest_id})
+        logs = (log_data.get("data") or {}).get("deploymentLogs", [])
+        if not logs:
+            return []
+    except Exception as e:
+        logger.debug(f"get_service_logs failed for {service_id}: {e}")
+        return []
 
     # Только новые логи с момента последней проверки
     cutoff = last_seen.get(service_id, 0)
@@ -320,8 +326,16 @@ CAPABILITY_GAPS = [
     "не могу получить актуаль", "нет данных в реальном", "без live данных",
     "нет доступа к реальн", "нет реальных данных", "live данных нет",
     "нет актуальных данных", "не имею доступа к текущим", "не вижу текущ",
-    "не могу проверить текущ", "не получаю рыночных"
+    "не могу проверить текущ", "не получаю рыночных",
+    # варианты с дефисом
+    "live-данных нет", "нет live-данных", "live-данные недоступн",
+    "без live-данных", "live-данных у меня нет",
 ]
+
+def has_capability_gap(text: str) -> bool:
+    """Проверяет наличие фразы о нехватке данных — нормализует дефисы и регистр."""
+    normalized = text.lower().replace("ё", "е")
+    return any(phrase in normalized for phrase in CAPABILITY_GAPS)
 
 # Имя бота в группе → репо + файл
 BOT_REPOS = {
@@ -410,7 +424,7 @@ async def monitor_group_capabilities(message: Message):
     # Реагируем только на сообщения от ботов с capability gap
     if not is_bot:
         return
-    if not any(phrase in text.lower() for phrase in CAPABILITY_GAPS):
+    if not has_capability_gap(text):
         return
 
     # Определяем какой бот пожаловался
