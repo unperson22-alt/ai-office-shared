@@ -108,5 +108,29 @@
       "startup",
       "graceful_shutdown"
     ]
+  },
+  {
+    "id": 6,
+    "ts": "2025-04-16",
+    "type": "scope",
+    "svc": "telegram",
+    "sym": [
+      "NameError_in_handler",
+      "global_init_fails",
+      "variable_not_found"
+    ],
+    "root": "global_keyword_in_function_creates_local_reference",
+    "pat": "global_var_initialized_in_main_not_accessible_in_async_handlers",
+    "fix": "use_context.bot_data_or_constructor_parameters_instead_of_global",
+    "file": "main.py:global_WEBAPP_URL",
+    "tags": [
+      "python",
+      "async",
+      "scope",
+      "telegram",
+      "global",
+      "state_management",
+      "bot_data"
+    ]
   }
 ]
