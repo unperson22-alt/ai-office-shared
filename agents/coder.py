@@ -19,6 +19,8 @@ from aiogram.filters import CommandStart
 from anthropic import AsyncAnthropic
 
 from shared.github_tools import push_file, read_file, list_files, create_repo
+from telethon import TelegramClient
+from telethon.sessions import StringSession
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -600,6 +602,45 @@ CMD ["python", "bot.py"]
 
 ENVIRONMENT_ID = "2efaaf60-ba39-492c-bf86-007fd505493f"
 
+async def create_via_botfather(bot_name_en: str, bot_display: str) -> str:
+    """Создать бота через BotFather и вернуть токен. bot_name_en — username без _bot."""
+    api_id   = int(os.getenv("TELEGRAM_API_ID", "0"))
+    api_hash = os.getenv("TELEGRAM_API_HASH", "")
+    session  = os.getenv("TELETHON_SESSION", "")
+
+    if not all([api_id, api_hash, session]):
+        raise EnvironmentError("TELEGRAM_API_ID / TELEGRAM_API_HASH / TELETHON_SESSION не заданы")
+
+    bot_username = f"{bot_name_en}_bot"
+
+    async with TelegramClient(StringSession(session), api_id, api_hash) as client:
+        botfather = await client.get_entity("@BotFather")
+
+        async def send(text: str):
+            await client.send_message(botfather, text)
+            await asyncio.sleep(2)
+
+        async def last_reply() -> str:
+            msgs = await client.get_messages(botfather, limit=1)
+            return msgs[0].text if msgs else ""
+
+        # /newbot
+        await send("/newbot")
+        await send(bot_display)        # имя бота
+        await send(bot_username)       # username
+
+        reply = await last_reply()
+
+        # Извлекаем токен из ответа BotFather
+        import re
+        match = re.search(r"(\d+:[A-Za-z0-9_-]{35,})", reply)
+        if not match:
+            raise ValueError(f"Не нашёл токен в ответе BotFather: {reply[:200]}")
+
+        return match.group(1)
+
+
+
 async def railway_graphql(query: str, variables: dict = None) -> dict:
     """Выполнить GraphQL запрос к Railway API."""
     async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
@@ -750,30 +791,38 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func):
             return
 
         # 3. Создать сервис на Railway
-        await reply_func("3️⃣ Создаю сервис на Railway и прописываю переменные...")
-        # Shared vars — всё кроме TELEGRAM_TOKEN (его получим от BotFather)
-        shared_vars = {
+        # 3. BotFather — получаем токен автоматически
+        await reply_func("3️⃣ Иду в BotFather за токеном...")
+        try:
+            tg_token = await create_via_botfather(bot_repo.replace("-bot", ""), bot_display)
+        except Exception as ex:
+            await reply_func(f"❌ BotFather: {ex}")
+            return
+
+        # 4. Создаём сервис на Railway со всеми переменными сразу
+        await reply_func("4️⃣ Создаю сервис на Railway и прописываю все переменные...")
+        all_vars = {
+            "TELEGRAM_TOKEN":  tg_token,
             "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY", ""),
             "YOUR_TELEGRAM_ID": os.getenv("YOUR_TELEGRAM_ID", ""),
             "OFFICE_CHAT_ID":   os.getenv("OFFICE_CHAT_ID", ""),
             "LOG_BOT_URL":      os.getenv("LOG_BOT_URL", ""),
         }
         try:
-            railway_info = await railway_create_service(bot_repo, bot_display, variables=shared_vars)
+            railway_info = await railway_create_service(bot_repo, bot_display, variables=all_vars)
             service_id = railway_info["service_id"]
         except Exception as ex:
             await reply_func(f"❌ Railway: {ex}")
             return
 
-        # 4. Готово — нужен только TELEGRAM_TOKEN
         await reply_func(
-            f"✅ Бот *{bot_display}* создан!\n\n"
-            f"🔑 Остался один шаг:\n"
-            f"1. BotFather → /newbot → получи токен\n"
-            f"2. Напиши мне: `силли, добавь токен <токен> боту {bot_repo}`\n"
-            f"   — я сам запишу в Railway\n\n"
-            f"Все остальные переменные уже прописаны ✅\n"
-            f"После добавления токена — Railway задеплоит автоматически"
+            f"✅ Бот *{bot_display}* полностью готов!\n\n"
+            f"• GitHub репо: `{bot_repo}` ✅\n"
+            f"• Код залит ✅\n"
+            f"• Telegram бот создан ✅\n"
+            f"• Railway сервис запущен ✅\n"
+            f"• Все переменные прописаны ✅\n\n"
+            f"Railway задеплоит автоматически. Не забудь добавить {bot_display} в Филли!"
         )
 
     elif intent == "deploy":
