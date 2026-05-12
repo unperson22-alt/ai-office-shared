@@ -1139,6 +1139,10 @@ async def monitor_group_responses(message: Message):
     if message.from_user.id == bot.id:
         return
 
+    # Гослинг — casual бот, не анализируем его ответы
+    if "гослинг" in sender or "gosling" in sender:
+        return
+
     # Определяем какой бот ответил
     bot_display = None
     bot_system = None
@@ -1159,6 +1163,11 @@ async def monitor_group_responses(message: Message):
             user_question = msg["text"]
             break
     if not user_question:
+        return
+
+    # Если вопрос адресован конкретному боту через @тег — не лезем
+    import re as _re
+    if _re.search(r"@\w+_bot", user_question):
         return
 
     # Анализируем через Haiku — есть ли проблема с возможностями
