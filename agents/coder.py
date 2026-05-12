@@ -342,7 +342,7 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
     confidence  = analysis.get("confidence", "low")
     description = analysis.get("description", "")
     fix_desc    = analysis.get("fix_description", "")
-    affected    = analysis.get("affected_file") or main_file
+    affected    = main_file  # Всегда используем файл из SERVICES, не доверяем LLM
 
     try:
         source_code = await read_file(repo, affected)
@@ -352,33 +352,10 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
 
     fixed_code = await generate_fix(source_code, fix_desc)
 
-    if confidence == "high":
-        # Автофикс
-        await notify_office(
-            f"🔧 Cilly нашёл баг в *{service_name}* и фиксит автоматически...\n\n"
-            f"_{description}_"
-        )
-        try:
-            await push_file(repo, affected, fixed_code, f"autofix({service_name}): {fix_desc[:60]}")
-            redeployed = await redeploy_service(service_id)
-            status = "редеплой запущен ✅" if redeployed else "редеплой не удался, пуш сделан ⚠️"
-            await notify_office(f"✅ *{service_name}* — фикс запушен, {status}")
-            asyncio.create_task(append_ops_log(
-                f"автофикс: {fix_desc[:60]}", service_name,
-                f"confidence=high | файл={affected} | статус={status}"
-            ))
-            await post_lesson(
-                title       = analysis.get("lesson_title", description),
-                symptom     = analysis.get("lesson_symptom", description),
-                cause       = analysis.get("lesson_cause", ""),
-                context     = f"{repo}/{affected}",
-                fix         = analysis.get("lesson_fix", fix_desc),
-                how_to_avoid= analysis.get("lesson_avoid", "")
-            )
-        except Exception as e:
-            await notify_office(f"❌ Cilly не смог запушить фикс для *{service_name}*: {e}")
+    if False:  # Автофикс ОТКЛЮЧЁН — всегда требуем /approve
+        pass
     else:
-        # Неоднозначный — спрашиваем
+        # Всегда спрашиваем /approve — автофикс отключён во избежание цепных реакций
         fix_id = f"{service_name}_{int(time.time())}"
         pending_fixes[fix_id] = {
             "service_id": service_id,
