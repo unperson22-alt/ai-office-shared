@@ -156,5 +156,31 @@
       "traceback",
       "environment_variables"
     ]
+  },
+  {
+    "id": 8,
+    "ts": "2025-01-10",
+    "type": "network",
+    "svc": "telegram-bot",
+    "sym": [
+      "httpx_read_error",
+      "timeout_crash",
+      "connection_loss",
+      "process_crash"
+    ],
+    "root": "aggressive_default_timeouts_and_missing_error_handling",
+    "pat": "python_telegram_bot_5sec_timeout_no_retry_logic",
+    "fix": "increase_timeouts:read_timeout(30)>write_timeout(30)>connect_timeout(30)+exponential_backoff_retry+error_logging_without_crash",
+    "file": "office-dashboard/main.py:Application.builder",
+    "tags": [
+      "telegram-bot",
+      "network",
+      "timeout",
+      "httpx",
+      "resilience",
+      "polling",
+      "railway",
+      "unstable_connection"
+    ]
   }
 ]
