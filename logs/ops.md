@@ -58,3 +58,6 @@
 
 **[2026-05-11 21:42 UTC] Силли — office-dashboard:** автофикс: 1) Добавить try-except вокруг инициализации Application и ap
 > confidence=high | файл=main.py | статус=редеплой запущен ✅
+
+**[2026-05-12 17:06 UTC] Силли — office-dashboard:** автофикс: Добавить параметры read_timeout и write_timeout в Applicatio
+> confidence=high | файл=main.py | статус=редеплой запущен ✅
