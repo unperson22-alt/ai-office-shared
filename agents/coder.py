@@ -52,6 +52,7 @@ SERVICES = {
     "3dfc7336-2e91-4ade-950a-4f3d566baced": ("office-dashboard", "main.py"),
     "b441ce93-9736-49b3-9b5d-d0c82e715b28": ("billy-bot",        "bot.py"),
     "9db4108e-19f1-4c1f-a21c-3909442e137c": ("prophet-bot",      "bot.py"),
+    "9f868f0c-9c94-4776-a2dc-86a30d812b92": ("tilly-trader",     "bot.py"),
 }
 
 bot    = Bot(token=BOT_TOKEN)
@@ -844,7 +845,9 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func):
     await reply_func("🧠 Разбираю запрос...")
 
     # Detect intent via Haiku (cheap)
-    raw = await ask_claude(message_text, system=INTENT_PROMPT, model="claude-haiku-4-5-20251001")
+    # Truncate to 500 chars for intent detection — Haiku struggles with long messages
+    intent_input = message_text[:500] if len(message_text) > 500 else message_text
+    raw = await ask_claude(intent_input, system=INTENT_PROMPT, model="claude-haiku-4-5-20251001")
     raw = raw.strip()
     start, end = raw.find("{"), raw.rfind("}") + 1
     if start != -1 and end > start:
@@ -853,8 +856,17 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func):
     try:
         intent_data = json.loads(raw)
     except Exception:
-        await reply_func("❌ Не смог разобрать запрос, попробуй переформулировать")
-        return
+        # Keyword fallback — better than failing silently
+        msg_lower = message_text.lower()
+        if any(w in msg_lower for w in ["создай бота", "create bot", "новый бот"]):
+            intent_data = {"intent": "create_bot", "repo": None, "path": None, "task": message_text, "confidence": "low"}
+        elif any(w in msg_lower for w in ["задеплой", "redeploy", "передеплой"]):
+            intent_data = {"intent": "deploy", "repo": None, "path": None, "task": message_text, "confidence": "low"}
+        elif any(w in msg_lower for w in ["залей", "push", "запиши код"]):
+            intent_data = {"intent": "push_code", "repo": None, "path": None, "task": message_text, "confidence": "low"}
+        else:
+            await reply_func("❌ Не смог разобрать запрос, попробуй переформулировать")
+            return
 
     intent = intent_data.get("intent", "answer")
     repo   = intent_data.get("repo")
