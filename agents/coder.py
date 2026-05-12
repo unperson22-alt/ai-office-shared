@@ -575,6 +575,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await log("MSG_OUT", f"{bot_name}: {{response[:80]}}")
     await update.message.reply_text(response)
 
+
+async def handle_get_bot_token(request):
+    """Get token for existing bot via BotFather."""
+    data = await request.json()
+    bot_username = data.get("bot_username", "").lstrip("@")
+    try:
+        client = await get_telethon_client()
+        botfather = await client.get_entity("@BotFather")
+        await client.send_message(botfather, "/mybots")
+        await asyncio.sleep(2)
+        msgs = await client.get_messages(botfather, limit=5)
+        # Find the message with bot buttons
+        import re
+        for msg in msgs:
+            if msg.reply_markup:
+                for row in msg.reply_markup.rows:
+                    for btn in row:
+                        if bot_username.lower() in btn.text.lower():
+                            await client.send_message(botfather, f"@{bot_username}")
+                            await asyncio.sleep(2)
+                            # Click API Token
+                            msgs2 = await client.get_messages(botfather, limit=3)
+                            for m2 in msgs2:
+                                if m2.reply_markup:
+                                    for row2 in m2.reply_markup.rows:
+                                        for btn2 in row2:
+                                            if "api token" in btn2.text.lower() or "token" in btn2.text.lower():
+                                                await client.send_message(botfather, "API Token")
+                                                await asyncio.sleep(2)
+                                                final = await client.get_messages(botfather, limit=1)
+                                                if final:
+                                                    token_match = re.search(r"(\d+:[A-Za-z0-9_-]{35,})", final[0].text or "")
+                                                    if token_match:
+                                                        await client.disconnect()
+                                                        return web.json_response({"token": token_match.group(1)})
+        # Fallback: check recent BotFather messages for token pattern
+        all_msgs = await client.get_messages(botfather, limit=20)
+        for m in all_msgs:
+            token_match = re.search(r"(\d+:[A-Za-z0-9_-]{35,})", m.text or "")
+            if token_match:
+                await client.disconnect()
+                return web.json_response({"token": token_match.group(1), "note": "from recent history"})
+        await client.disconnect()
+        return web.json_response({"error": "token not found"})
+    except Exception as e:
+        return web.json_response({"error": str(e)})
+
 async def main():
     app_http = web.Application()
     app_http.router.add_post("/task", handle_task)
@@ -1386,6 +1433,53 @@ async def handle_secrets(request):
     })
 
 # ── Main ───────────────────────────────────────────────────────────────────────
+
+async def handle_get_bot_token(request):
+    """Get token for existing bot via BotFather."""
+    data = await request.json()
+    bot_username = data.get("bot_username", "").lstrip("@")
+    try:
+        client = await get_telethon_client()
+        botfather = await client.get_entity("@BotFather")
+        await client.send_message(botfather, "/mybots")
+        await asyncio.sleep(2)
+        msgs = await client.get_messages(botfather, limit=5)
+        # Find the message with bot buttons
+        import re
+        for msg in msgs:
+            if msg.reply_markup:
+                for row in msg.reply_markup.rows:
+                    for btn in row:
+                        if bot_username.lower() in btn.text.lower():
+                            await client.send_message(botfather, f"@{bot_username}")
+                            await asyncio.sleep(2)
+                            # Click API Token
+                            msgs2 = await client.get_messages(botfather, limit=3)
+                            for m2 in msgs2:
+                                if m2.reply_markup:
+                                    for row2 in m2.reply_markup.rows:
+                                        for btn2 in row2:
+                                            if "api token" in btn2.text.lower() or "token" in btn2.text.lower():
+                                                await client.send_message(botfather, "API Token")
+                                                await asyncio.sleep(2)
+                                                final = await client.get_messages(botfather, limit=1)
+                                                if final:
+                                                    token_match = re.search(r"(\d+:[A-Za-z0-9_-]{35,})", final[0].text or "")
+                                                    if token_match:
+                                                        await client.disconnect()
+                                                        return web.json_response({"token": token_match.group(1)})
+        # Fallback: check recent BotFather messages for token pattern
+        all_msgs = await client.get_messages(botfather, limit=20)
+        for m in all_msgs:
+            token_match = re.search(r"(\d+:[A-Za-z0-9_-]{35,})", m.text or "")
+            if token_match:
+                await client.disconnect()
+                return web.json_response({"token": token_match.group(1), "note": "from recent history"})
+        await client.disconnect()
+        return web.json_response({"error": "token not found"})
+    except Exception as e:
+        return web.json_response({"error": str(e)})
+
 async def main():
     asyncio.create_task(monitor_loop())
     # HTTP server for Filly routing
@@ -1393,6 +1487,7 @@ async def main():
     app.router.add_post("/task", handle_cilly_task)
     app.router.add_get("/secrets", handle_secrets)
     app.router.add_post("/promote_bots", handle_promote_bots)
+    app.router.add_post("/get_bot_token", handle_get_bot_token)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080)))
