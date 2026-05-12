@@ -53,6 +53,8 @@ SERVICES = {
     "b441ce93-9736-49b3-9b5d-d0c82e715b28": ("billy-bot",        "bot.py"),
     "9db4108e-19f1-4c1f-a21c-3909442e137c": ("prophet-bot",      "bot.py"),
     "9f868f0c-9c94-4776-a2dc-86a30d812b92": ("tilly-trader",     "bot.py"),
+    "fa7c87cf-454c-4946-ab25-6a5091f0ac47": ("mama-bot",          "bot.py"),
+    "a5e37cc4-0a9f-4700-b6d3-d39b958ce0cb": ("villy-bot",         "bot.py"),
 }
 
 bot    = Bot(token=BOT_TOKEN)
