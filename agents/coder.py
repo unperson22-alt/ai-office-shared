@@ -870,7 +870,9 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func):
         elif any(w in msg_lower for w in ["залей", "push", "запиши код"]):
             intent_data = {"intent": "push_code", "repo": None, "path": None, "task": message_text, "confidence": "low"}
         else:
-            await reply_func("❌ Не смог разобрать запрос, попробуй переформулировать")
+            # Fallback: just answer conversationally
+            answer = await ask_claude(message_text, system=CHAT_PROMPT, model="claude-haiku-4-5-20251001")
+            await reply_func(answer)
             return
 
     intent = intent_data.get("intent", "answer")
