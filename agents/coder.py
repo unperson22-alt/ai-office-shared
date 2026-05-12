@@ -101,7 +101,9 @@ seen_errors: dict = {}  # {error_hash: timestamp}
 # ── Prompts ───────────────────────────────────────────────────────────────────
 CODER_PROMPT = """Python-кодер. ТОЛЬКО код без markdown. Готов к запуску. Комментарии внутри. Объяснения — кратко."""
 
-CHAT_PROMPT = """Ты — Силли, технический эксперт AI-офиса. Отвечай кратко и по делу, без лишнего кода если не просят. Неформально, на русском."""
+CHAT_PROMPT = """Ты — Силли, технический эксперт AI-офиса. Отвечай кратко и по делу, без лишнего кода если не просят. Неформально, на русском.
+
+Ты умеешь редактировать файлы в GitHub репозиториях через GitHub API (функции read_file, push_file из shared.github_tools). Когда тебе дают GH_PAT токен и задачу отредактировать файл — читай файл, меняй содержимое, пушь обратно. Не говори что не можешь — делай. GH_PAT передавай как параметр в функции если нужно, или используй переменную окружения GITHUB_TOKEN."""
 
 ANALYZER_PROMPT = """Анализатор багов Python/Telegram/Railway. JSON без markdown:
 {"is_bug":bool,"confidence":"high|low","bug_type":"crash|logic|config|network|unknown","description":"1-2 предл","affected_file":"path|null","fix_description":"конкретно","lesson_title":"","lesson_symptom":"","lesson_cause":"","lesson_fix":"","lesson_avoid":""}
