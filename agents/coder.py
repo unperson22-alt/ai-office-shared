@@ -165,8 +165,8 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
 
 
 INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
-{"intent":"push_code|fix_bot|create_bot|deploy|read_file|list_files|answer","repo":"name|null","path":"path|null","task":"описание","confidence":"high|low"}
-push_code=залить код, fix_bot=исправить баг, create_bot=новый бот, deploy=редеплой, read_file=прочитать, list_files=список, answer=ответить.
+{"intent":"push_code|fix_bot|create_bot|get_bot_token|deploy|read_file|list_files|answer","repo":"name|null","path":"path|null","task":"описание","confidence":"high|low"}
+push_code=залить код, fix_bot=исправить баг, create_bot=новый бот, get_bot_token=получить токен существующего бота, deploy=редеплой, read_file=прочитать, list_files=список, answer=ответить.
 Репо: billy-bot,tilly-bot,filly-bot,doctor-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard.
 билли→billy, тилли→tilly, макс/милли→milly, доктор→doctor, филли→filly, силли→ai-office-shared."""
 
@@ -973,6 +973,16 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func):
             await reply_func(f"❌ Railway: {ex}")
             return
 
+        # Verify token works
+        async with httpx.AsyncClient(timeout=10) as hc:
+            me = await hc.get(f"https://api.telegram.org/bot{tg_token}/getMe")
+            me_data = me.json()
+        if not me_data.get("ok"):
+            await reply_func(f"❌ Токен не работает: {me_data.get('description','')}")
+            return
+        actual_username = me_data["result"]["username"]
+        await reply_func(f"✅ Токен проверен: @{actual_username}")
+
         # 5. Добавить бота в Office group
         await reply_func("5️⃣ Добавляю бота в Office group...")
         office_group_id = int(os.getenv("OFFICE_CHAT_ID", "0"))
@@ -1043,6 +1053,41 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func):
             f"• Филли обновлён и задеплоен ✅\n\n"
             f"Бот уже работает в офисе 🎉"
         )
+
+    elif intent == "get_bot_token":
+        # Extract bot username from task
+        bot_username = intent_data.get("repo") or ""
+        if not bot_username:
+            import re
+            match = re.search(r"@?(\w+_bot)", task, re.IGNORECASE)
+            bot_username = match.group(1) if match else ""
+        if not bot_username:
+            await reply_func("❓ Укажи username бота (например @ellice_mom_bot)")
+            return
+        await reply_func(f"🔍 Получаю токен для @{bot_username} через BotFather...")
+        try:
+            import re as re2
+            tg_client = await get_telethon_client()
+            botfather = await tg_client.get_entity("@BotFather")
+            await tg_client.send_message(botfather, "/token")
+            await asyncio.sleep(1)
+            await tg_client.send_message(botfather, f"@{bot_username}")
+            await asyncio.sleep(3)
+            msgs = await tg_client.get_messages(botfather, limit=3)
+            token = None
+            for m in msgs:
+                match = re2.search(r"(\d{8,12}:[A-Za-z0-9_-]{35,})", m.text or "")
+                if match:
+                    token = match.group(1)
+                    break
+            await tg_client.disconnect()
+            if token:
+                bot_id = token.split(":")[0]
+                await reply_func(f"✅ Токен получен: {bot_id}:***\n\nОбновить Railway переменную? Укажи имя сервиса.")
+            else:
+                await reply_func("❌ Токен не найден в ответе BotFather. Попробуй /mybots вручную.")
+        except Exception as e:
+            await reply_func(f"❌ Ошибка: {e}")
 
     elif intent == "deploy":
         if not repo:
