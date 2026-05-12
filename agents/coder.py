@@ -1395,11 +1395,12 @@ async def handle_cilly_task(request):
     responses = []
     async def collect(msg: str):
         responses.append(msg)
-        if chat_id and str(chat_id) != str(OFFICE_CHAT_ID):
+        target = chat_id or OFFICE_CHAT_ID
+        if target:
             try:
-                await bot.send_message(chat_id=chat_id, text=msg, parse_mode=None)
-            except Exception:
-                pass
+                await bot.send_message(chat_id=int(target), text=msg, parse_mode=None)
+            except Exception as e:
+                logger.error(f"collect send_message failed: {e}")
 
     await handle_natural_language(f"[{agent}] {text}", int(chat_id) if chat_id else 0, collect)
     return web.json_response({"status": "ok", "responses": responses})
