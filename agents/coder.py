@@ -101,6 +101,8 @@ seen_errors: dict = {}  # {error_hash: timestamp}
 # ── Prompts ───────────────────────────────────────────────────────────────────
 CODER_PROMPT = """Python-кодер. ТОЛЬКО код без markdown. Готов к запуску. Комментарии внутри. Объяснения — кратко."""
 
+CHAT_PROMPT = """Ты — Силли, технический эксперт AI-офиса. Отвечай кратко и по делу, без лишнего кода если не просят. Неформально, на русском."""
+
 ANALYZER_PROMPT = """Анализатор багов Python/Telegram/Railway. JSON без markdown:
 {"is_bug":bool,"confidence":"high|low","bug_type":"crash|logic|config|network|unknown","description":"1-2 предл","affected_file":"path|null","fix_description":"конкретно","lesson_title":"","lesson_symptom":"","lesson_cause":"","lesson_fix":"","lesson_avoid":""}
 high=явный crash/NameError/ImportError/SyntaxError/KeyError→автофикс. low=логика/сеть→спросить."""
@@ -879,7 +881,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func):
     logger.info(f"[nl] intent={intent} repo={repo} path={path}")
 
     if intent == "answer":
-        answer = await ask_claude(message_text)
+        answer = await ask_claude(message_text, system=CHAT_PROMPT, model="claude-haiku-4-5-20251001")
         await reply_func(answer)
 
     elif intent in ("push_code", "fix_bot"):
