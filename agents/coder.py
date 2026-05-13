@@ -679,9 +679,17 @@ async def create_via_botfather(bot_name_en: str, bot_display: str) -> str:
 
         for attempt, bot_username in enumerate(username_candidates):
             logger.info(f"[botfather] попытка {attempt+1}: @{bot_username}")
+
+            # Сбрасываем состояние BotFather перед каждой попыткой
+            # (иначе он ждёт username от предыдущего /newbot)
+            if attempt > 0:
+                await send("/cancel")
+                await asyncio.sleep(1.5)
+
             await send("/newbot")
             await asyncio.sleep(1)
             await send(bot_display)   # имя бота
+            await asyncio.sleep(1.5)
             await send(bot_username)  # username
 
             reply = await last_reply()
@@ -693,7 +701,7 @@ async def create_via_botfather(bot_name_en: str, bot_display: str) -> str:
                 return token_match.group(1)
 
             # Username занят — пробуем следующий
-            if "already taken" in reply.lower() or "taken" in reply.lower() or "sorry" in reply.lower():
+            if any(p in reply.lower() for p in ["already taken", "taken", "sorry", "try something"]):
                 logger.warning(f"[botfather] @{bot_username} занят, пробую следующий...")
                 await asyncio.sleep(1)
                 continue
@@ -902,10 +910,30 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
     """Process any natural language request — detect intent and execute."""
     await reply_func("🧠 Разбираю запрос...")
 
+    # Читаем ops.md — лог последних действий Claude и Силли
+    # Это даёт Силли контекст о том что уже было сделано
+    ops_context = ""
+    try:
+        raw_ops = await read_file("ai-office-shared", OPS_LOG_FILE)
+        if raw_ops:
+            # Берём последние 3000 символов — самые свежие записи
+            ops_context = raw_ops[-3000:]
+    except Exception:
+        pass  # ops.md может не существовать — не страшно
+
+    # Добавляем ops-контекст в intent prompt если есть
+    intent_system = INTENT_PROMPT
+    if ops_context:
+        intent_system = (
+            INTENT_PROMPT +
+            f"\n\nПоследние действия в офисе (ops.md):\n{ops_context}\n\n"
+            "Если задача уже выполнена — скажи об этом вместо повторного выполнения."
+        )
+
     # Detect intent via Haiku (cheap)
     # Truncate to 500 chars for intent detection — Haiku struggles with long messages
     intent_input = message_text[:500] if len(message_text) > 500 else message_text
-    raw = await ask_claude(intent_input, system=INTENT_PROMPT, model="claude-haiku-4-5-20251001")
+    raw = await ask_claude(intent_input, system=intent_system, model="claude-haiku-4-5-20251001")
     raw = raw.strip()
     start, end = raw.find("{"), raw.rfind("}") + 1
     if start != -1 and end > start:
