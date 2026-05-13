@@ -982,7 +982,7 @@ async def tg_get_folder_id(folder_name: str) -> int | None:
     try:
         filters = await client(GetDialogFiltersRequest())
         for f in filters.filters:
-            if hasattr(f, 'title') and (f.title.text if hasattr(f.title, 'text') else str(f.title)).lower() == folder_name.lower():
+            if hasattr(f, 'title') and (f.title.text if hasattr(f.title, 'text') else str(f.title)).strip().lower() == folder_name.strip().lower():
                 return f.id
         # Логируем все найденные папки для диагностики
         names = [(f.title.text if hasattr(f.title, 'text') else str(f.title)) for f in filters.filters if hasattr(f, 'title')]
@@ -1002,7 +1002,7 @@ async def tg_add_peer_to_folder(peer_id: int, folder_name: str = "Office") -> bo
         all_names = [(f.title.text if hasattr(f.title, 'text') else str(f.title)) for f in filters.filters if hasattr(f, 'title')]
         logger.info(f"tg_add_peer_to_folder: все папки: {all_names}, ищем: '{folder_name}'")
         for f in filters.filters:
-            if hasattr(f, 'title') and (f.title.text if hasattr(f.title, 'text') else str(f.title)).lower() == folder_name.lower():
+            if hasattr(f, 'title') and (f.title.text if hasattr(f.title, 'text') else str(f.title)).strip().lower() == folder_name.strip().lower():
                 target = f
                 break
         if not target:
@@ -1132,6 +1132,37 @@ async def railway_get_service_id(repo_name: str) -> str | None:
         if edge["node"]["name"] == repo_name:
             return edge["node"]["id"]
     return None
+
+
+async def railway_get_bot_url(name_hint: str) -> str:
+    """Ищет сервис на Railway по имени, возвращает публичный URL."""
+    try:
+        data = await railway_graphql(
+            """query($id: String!) {
+                 project(id: $id) { services { edges { node { id name } } } }
+               }""",
+            {"id": PROJECT_ID}
+        )
+        services = data.get("data", {}).get("project", {}).get("services", {}).get("edges", [])
+        # Нормализуем hint
+        hint_clean = name_hint.replace("_bot", "").replace("_", "-").replace(" ", "-").lower()
+        candidates = [
+            hint_clean + "-bot",
+            hint_clean,
+            name_hint.replace("_", "-").lower(),
+        ]
+        for svc_edge in services:
+            svc_name = svc_edge["node"]["name"].lower()
+            for c in candidates:
+                if svc_name == c or svc_name.startswith(c):
+                    return f"https://{svc_edge['node']['name']}-production.up.railway.app"
+    except Exception as e:
+        logger.debug(f"railway_get_bot_url failed: {e}")
+    # fallback: стандартный паттерн по hint
+    clean = name_hint.replace("_", "-").lower()
+    if not clean.endswith("-bot"):
+        clean = clean.rstrip("-bot") + "-bot"
+    return f"https://{clean}-production.up.railway.app"
 
 
 async def railway_create_service(repo_name: str, bot_display_name: str, variables: dict = None) -> dict:
@@ -1550,9 +1581,9 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             )
             return
 
-        # Если URL не указан — вычисляем стандартный Railway-паттерн
+        # Если URL не указан — ищем сервис на Railway по имени бота
         if not bot_url:
-            bot_url = f"https://{bot_username.replace('_', '-')}-production.up.railway.app"
+            bot_url = await railway_get_bot_url(bot_username)
 
         await reply_func(
             f"✅ Нашёл: @{bot_username}\n"
