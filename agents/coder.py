@@ -1059,27 +1059,33 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
 
         await reply_func(f"📦 Репо: `{bot_repo}`\n👤 Имя: {bot_display}\n📝 Промпт: {bot_prompt}")
 
-        # Проверяем не существует ли уже такой бот в SERVICES
-        existing = next((sid for sid, (r, _) in SERVICES.items() if r == bot_repo), None)
-        if existing:
-            await reply_func(f"⚠️ Бот `{bot_repo}` уже существует в Railway (service {existing[:8]}). Создание отменено.")
-            return
-
-        # Проверяем репо на GitHub
-        try:
-            async with httpx.AsyncClient(timeout=10) as _c:
-                _r = await _c.get(
-                    f"https://api.github.com/repos/unperson22-alt/{bot_repo}",
-                    headers={{"Authorization": f"token {os.getenv('GITHUB_TOKEN','')}"}}
+        # Если сервис уже существует — проверяем есть ли TELEGRAM_TOKEN
+        # Если нет — resume: пропускаем создание репо/кода и сразу идём за токеном
+        resume_mode = False
+        existing_sid = next((sid for sid, (r, _) in SERVICES.items() if r == bot_repo), None)
+        if not existing_sid:
+            existing_sid = await railway_get_service_id(bot_repo)
+        if existing_sid:
+            try:
+                vars_data = await railway_graphql(
+                    """query($proj: String!, $svc: String!, $env: String!) {
+                         variables(projectId: $proj, serviceId: $svc, environmentId: $env)
+                       }""",
+                    {"proj": PROJECT_ID, "svc": existing_sid, "env": ENVIRONMENT_ID}
                 )
-            if _r.status_code == 200:
-                await reply_func(f"⚠️ Репо `{bot_repo}` уже существует на GitHub. Создание отменено — бот уже есть.")
-                return
-        except Exception:
-            pass
+                existing_vars = vars_data.get("data", {}).get("variables", {})
+                if "TELEGRAM_TOKEN" in existing_vars:
+                    await reply_func(f"✅ Бот `{bot_repo}` уже полностью настроен.")
+                    return
+                else:
+                    await reply_func("⚠️ Сервис существует, но токена нет — получаю через BotFather...")
+                    resume_mode = True
+            except Exception:
+                resume_mode = True
 
-        # 1. Создать GitHub репо
-        await reply_func("1️⃣ Создаю GitHub репо...")
+                # 1. Создать GitHub репо
+        if not resume_mode:
+            await reply_func("1️⃣ Создаю GitHub репо...")
         try:
             repo_info = await create_repo(bot_repo, description=f"AI office bot: {bot_display}")
         except ValueError as ex:
@@ -1089,7 +1095,8 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             return
 
         # 2. Пушу шаблон
-        await reply_func("2️⃣ Генерирую и заливаю код...")
+        if not resume_mode:
+            await reply_func("2️⃣ Генерирую и заливаю код...")
         bot_code = BOT_TEMPLATE.format(bot_name=bot_display, system_prompt=bot_prompt)
         try:
             await push_file(bot_repo, "bot.py", bot_code, f"init: {bot_display} bot")
