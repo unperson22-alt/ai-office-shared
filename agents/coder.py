@@ -950,12 +950,22 @@ async def get_telethon_client() -> TelegramClient:
 
 
 async def tg_add_bot_to_group(bot_username: str, group_id: int) -> bool:
-    """Добавить бота в группу по group_id."""
+    """Добавить бота в группу по group_id. Поддерживает Chat и Channel/Supergroup."""
+    from telethon.tl.types import Chat, Channel
+    from telethon.tl.functions.messages import AddChatUserRequest
     client = await get_telethon_client()
     try:
-        bot_entity = await client.get_entity(bot_username)
+        bot_entity   = await client.get_entity(bot_username)
         group_entity = await client.get_entity(group_id)
-        await client(InviteToChannelRequest(group_entity, [bot_entity]))
+        if isinstance(group_entity, Channel):
+            await client(InviteToChannelRequest(group_entity, [bot_entity]))
+        else:
+            # Обычный Chat
+            await client(AddChatUserRequest(
+                chat_id=group_entity.id,
+                user_id=bot_entity,
+                fwd_limit=0
+            ))
         logger.info(f"tg_add_bot_to_group: {bot_username} → {group_id}")
         return True
     except Exception as e:
@@ -971,8 +981,11 @@ async def tg_get_folder_id(folder_name: str) -> int | None:
     try:
         filters = await client(GetDialogFiltersRequest())
         for f in filters.filters:
-            if hasattr(f, 'title') and f.title.lower() == folder_name.lower():
+            if hasattr(f, 'title') and str(f.title).lower() == folder_name.lower():
                 return f.id
+        # Логируем все найденные папки для диагностики
+        names = [str(f.title) for f in filters.filters if hasattr(f, 'title')]
+        logger.info(f"tg_get_folder_id: папки найдены: {names}, искали: '{folder_name}'")
         return None
     finally:
         await client.disconnect()
@@ -984,18 +997,20 @@ async def tg_add_peer_to_folder(peer_id: int, folder_name: str = "Office") -> bo
     try:
         filters = await client(GetDialogFiltersRequest())
         target = None
+        # Логируем все папки для диагностики
+        all_names = [str(f.title) for f in filters.filters if hasattr(f, 'title')]
+        logger.info(f"tg_add_peer_to_folder: все папки: {all_names}, ищем: '{folder_name}'")
         for f in filters.filters:
-            if hasattr(f, 'title') and f.title.lower() == folder_name.lower():
+            if hasattr(f, 'title') and str(f.title).lower() == folder_name.lower():
                 target = f
                 break
         if not target:
-            logger.warning(f"Папка '{folder_name}' не найдена")
+            logger.warning(f"Папка '{folder_name}' не найдена. Доступны: {all_names}")
             return False
 
         peer_entity = await client.get_entity(peer_id)
         input_peer = await client.get_input_entity(peer_entity)
 
-        # Проверяем что ещё не добавлен
         existing_ids = [getattr(p, 'channel_id', None) or getattr(p, 'user_id', None) or getattr(p, 'chat_id', None)
                         for p in target.include_peers]
         new_id = getattr(input_peer, 'channel_id', None) or getattr(input_peer, 'user_id', None) or getattr(input_peer, 'chat_id', None)
@@ -1571,10 +1586,19 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             try:
                 entity = await client_tmp.get_entity(f"@{bot_username}")
                 peer_id = entity.id
+                # Заодно узнаём реальные имена папок
+                from telethon.tl.functions.messages import GetDialogFiltersRequest as _GDF
+                filters_resp = await client_tmp(_GDF())
+                folder_names = [str(f.title) for f in filters_resp.filters if hasattr(f, 'title')]
             finally:
                 await client_tmp.disconnect()
             ok = await tg_add_peer_to_folder(peer_id, tg_folder)
-            await reply_func(f"✅ Добавлен в папку {tg_folder}" if ok else f"⚠️ Папка {tg_folder} не найдена")
+            if ok:
+                await reply_func(f"✅ Добавлен в папку {tg_folder}")
+            else:
+                await reply_func(f"⚠️ Папка '{tg_folder}' не найдена. Доступные папки: {folder_names}\nДобавь вручную или скажи точное название.")
+        except Exception as e:
+            await reply_func(f"⚠️ Папка: {e}")
         except Exception as e:
             await reply_func(f"⚠️ Папка: {e}")
 
