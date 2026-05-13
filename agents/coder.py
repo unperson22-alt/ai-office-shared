@@ -1423,8 +1423,9 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         bot_display   = ext.get("name_ru", "Крис").capitalize()
         name_en       = ext.get("name_en", bot_display.lower())
         bot_key       = ext.get("key", bot_display.upper())
-        bot_url       = ext.get("url") or ""
-        bot_url       = bot_url.rstrip("/") if bot_url else ""
+        # URL: берём из запроса или вычисляем стандартный Railway-паттерн
+        bot_url_raw = ext.get("url") or ""
+        bot_url     = bot_url_raw.rstrip("/") if bot_url_raw else ""
         bot_description = ext.get("description", f"Внешний ассистент {bot_display}")
         tg_folder     = ext.get("tg_folder") or "Office"
         tg_new_group  = ext.get("tg_group")  # название новой группы если нужна
@@ -1472,10 +1473,14 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             )
             return
 
+        # Если URL не указан — вычисляем стандартный Railway-паттерн
+        if not bot_url:
+            bot_url = f"https://{bot_username.replace('_', '-')}-production.up.railway.app"
+
         await reply_func(
             f"✅ Нашёл: @{bot_username}\n"
             f"Имя: {bot_display} | Ключ: {bot_key}\n"
-            f"URL: {bot_url or 'нет (только Telegram)'}\n"
+            f"URL: {bot_url}\n"
             f"Роль: {bot_description}"
         )
 
@@ -1512,62 +1517,56 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         except Exception as e:
             await reply_func(f"⚠️ Папка: {e}")
 
-        # ── Шаг 5: Обновить Филли (routing) — только если есть URL ──────────
-        if bot_url:
-            await reply_func("5️⃣ Обновляю Филли (routing)...")
-            try:
-                filly_code = await read_file("filly-bot", "bot.py")
+        # ── Шаг 5: Обновить Филли (routing) — всегда ────────────────────────
+        await reply_func("5️⃣ Обновляю Филли (routing)...")
+        try:
+            filly_code = await read_file("filly-bot", "bot.py")
 
-                # BOT_URLS
-                urls_start = filly_code.find("BOT_URLS")
-                urls_end   = filly_code.find("}", urls_start)
-                last_comma = filly_code.rfind(",", urls_start, urls_end)
-                filly_code = (filly_code[:last_comma+1]
-                              + f'\n    "{bot_key}":  "{bot_url}",'
-                              + filly_code[last_comma+1:])
+            # BOT_URLS
+            urls_start = filly_code.find("BOT_URLS")
+            urls_end   = filly_code.find("}", urls_start)
+            last_comma = filly_code.rfind(",", urls_start, urls_end)
+            filly_code = (filly_code[:last_comma+1]
+                          + f'\n    "{bot_key}":  "{bot_url}",'
+                          + filly_code[last_comma+1:])
 
-                # ROUTER_SYSTEM
-                anchor_router = "Только одно слово. Если непонятно — БИЛЛИ."
-                filly_code = filly_code.replace(
-                    anchor_router,
-                    f'{bot_key} — {bot_description}\n{anchor_router}'
-                )
+            # ROUTER_SYSTEM
+            anchor_router = "Только одно слово. Если непонятно — БИЛЛИ."
+            filly_code = filly_code.replace(
+                anchor_router,
+                f'{bot_key} — {bot_description}\n{anchor_router}'
+            )
 
-                # DM_AGENT_SYSTEMS
-                dm_start = filly_code.find("DM_AGENT_SYSTEMS")
-                dm_end   = filly_code.find("}", dm_start)
-                last_dm  = filly_code.rfind(",", dm_start, dm_end)
-                filly_code = (filly_code[:last_dm+1]
-                              + f'\n    "{bot_key}":  "Ты — {bot_display}. {bot_description} Неформально, на русском.",'
-                              + filly_code[last_dm+1:])
+            # DM_AGENT_SYSTEMS
+            dm_start = filly_code.find("DM_AGENT_SYSTEMS")
+            dm_end   = filly_code.find("}", dm_start)
+            last_dm  = filly_code.rfind(",", dm_start, dm_end)
+            filly_code = (filly_code[:last_dm+1]
+                          + f'\n    "{bot_key}":  "Ты — {bot_display}. {bot_description} Неформально, на русском.",'
+                          + filly_code[last_dm+1:])
 
-                # _name_map
-                nm_anchor = '"силли": "СИЛЛИ"'
-                alias = bot_username.replace("_bot","").replace("_","")
-                filly_code = filly_code.replace(
-                    nm_anchor,
-                    f'"{bot_display.lower()}": "{bot_key}", "{alias}": "{bot_key}",\n        {nm_anchor}'
-                )
+            # _name_map
+            nm_anchor = '"силли": "СИЛЛИ"'
+            alias = bot_username.replace("_bot","").replace("_","")
+            filly_code = filly_code.replace(
+                nm_anchor,
+                f'"{bot_display.lower()}": "{bot_key}", "{alias}": "{bot_key}",\n        {nm_anchor}'
+            )
 
-                await push_file("filly-bot", "bot.py", filly_code,
-                                f"feat: add external bot {bot_display} to routing")
-                await redeploy_service("5d61d403-feee-455e-9c0d-523f0e7c79d5")
-                await reply_func("✅ Филли обновлён и задеплоен")
-            except Exception as e:
-                await reply_func(f"⚠️ Ошибка обновления Филли: {e}")
-        else:
-            await reply_func(f"ℹ️ URL endpoint не указан — роутинг через Филли не настроен.\nЕсли у бота появится URL — скажи, добавлю.")
+            await push_file("filly-bot", "bot.py", filly_code,
+                            f"feat: add external bot {bot_display} to routing")
+            await redeploy_service("5d61d403-feee-455e-9c0d-523f0e7c79d5")
+            await reply_func("✅ Филли обновлён и задеплоен")
+        except Exception as e:
+            await reply_func(f"⚠️ Ошибка обновления Филли: {e}")
 
-        # ── Итог ─────────────────────────────────────────────────────────────
-        routing_status = f"Роутинг Филли: {bot_key} → {bot_url} ✅" if bot_url else "Роутинг: нет (без endpoint)"
-        group_status   = f"Группа «{tg_new_group}»: {created_group_id} ✅" if tg_new_group and created_group_id else ""
         await reply_func(
             f"✅ *{bot_display}* подключён!\n\n"
             f"• @{bot_username} найден автоматически ✅\n"
-            + (f"• {group_status}\n" if group_status else "")
+            + (f"• Группа «{tg_new_group}» создана ✅\n" if tg_new_group and created_group_id else "")
             + f"• Офис-группа ✅\n"
             f"• Папка {tg_folder} ✅\n"
-            f"• {routing_status}"
+            f"• Роутинг Филли: {bot_key} → {bot_url} ✅"
         )
 
     elif intent == "deploy":
