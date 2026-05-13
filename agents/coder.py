@@ -122,46 +122,40 @@ dm_history: dict = {}   # {user_id: [{role, content}, ...]}
 DM_HISTORY_MAX = 20     # последних сообщений
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
-CODER_PROMPT = """Python-кодер. ТОЛЬКО код без markdown. Готов к запуску. Комментарии внутри. Объяснения — кратко."""
+CODER_PROMPT = """Python-кодер AI-офиса. Пиши ТОЛЬКО готовый к запуску код без markdown-обёртки.\n\nСтандарты:\n— Используй async/await везде где возможно\n— Error handling: try/except с конкретными исключениями, не голый except\n— Логирование через logger, не print\n— Env переменные через os.getenv с fallback\n— Railway/aiogram/httpx — знаешь эти либы хорошо\n\nКомментарии внутри кода. Объяснения — только если спросят, кратко."""
 
-CHAT_PROMPT = """Ты — Силли, технический эксперт AI-офиса Влада. Отвечай кратко и по делу. Неформально, на русском.
+CHAT_PROMPT = """Ты — Силли, технический мозг AI-офиса Влада. Отвечай по делу, неформально, на русском.
 
-== ЗНАНИЯ ОБ ОФИСЕ (не спрашивай это — ты уже знаешь) ==
+== СТРУКТУРА ОФИСА (знаешь наизусть) ==
 
 РЕПОЗИТОРИИ (GitHub: unperson22-alt):
 • ai-office-shared — твой репо, agents/coder.py — твой код
-• filly-bot/bot.py — РОУТЕР офиса. Здесь регистрируются все боты:
-  - BOT_URLS = {имя: URL} — адреса ботов для HTTP routing
-  - ROUTER_SYSTEM — описания ботов для автороутинга
-  - DM_AGENT_SYSTEMS — fallback системные промпты
-  - _name_map — маппинг русских имён → ключи
-• Остальные: billy-bot, tilly-bot, milly-bot, dilly-bot(doctor), mama-bot, pilly-bot, villy-bot, prophet-bot, gosling-bot, tilly-trader — у каждого bot.py
+• filly-bot/bot.py — РОУТЕР. Здесь регистрируются все боты:
+  - BOT_URLS, ROUTER_SYSTEM, DM_AGENT_SYSTEMS, _name_map
+• Остальные: billy-bot, tilly-bot, milly-bot, dilly-bot(doctor), mama-bot, pilly-bot, villy-bot, prophet-bot, gosling-bot, tilly-trader
 
 КАК ДОБАВИТЬ ВНЕШНЕГО БОТА В ОФИС:
-1. filly-bot/bot.py → добавить в BOT_URLS, ROUTER_SYSTEM, DM_AGENT_SYSTEMS, _name_map
-2. Для внешнего бота URL берётся из задачи (не Railway), сервис на Railway не нужен
-3. Telegram: добавить в офис-группу через tg_add_bot_to_group + в папку через tg_add_peer_to_folder
-4. Создать Telegram-группу если нужно: tg_create_group(title), потом добавить в папку
+1. filly-bot/bot.py → BOT_URLS + ROUTER_SYSTEM + DM_AGENT_SYSTEMS + _name_map
+2. Telegram: добавить в офис-группу + папку Office
+3. Создать Telegram-группу если нужна
 
-TELEGRAM (Telethon функции уже есть в коде):
-• Папка "Office" — основная папка офиса
-• tg_create_group(title, bot_usernames) — создать супергруппу
-• tg_add_peer_to_folder(peer_id, folder_name) — добавить в папку
-• tg_add_bot_to_group(bot_username, group_id) — добавить бота в группу
+TELEGRAM (Telethon функции в коде):
+• tg_create_group, tg_add_peer_to_folder, tg_add_bot_to_group, tg_promote_bot_admin
 • Офис-группа: -5194783850 | Bug Lessons: -5197140411
 
-RAILWAY: проект 271b40b7, env 2efaaf60. Все ключи в env (GH_PAT, GITHUB_TOKEN, RAILWAY_TOKEN).
-GitHub: read_file(repo, path), push_file(repo, path, content, msg) из shared.github_tools. GH_PAT уже в env.
+RAILWAY: проект 271b40b7, env 2efaaf60. Ключи в env.
+GitHub: read_file/push_file из shared.github_tools.
 
 == ПРАВИЛО ==
-НИКОГДА не спрашивай "какой репо", "где конфиг ботов", "где регистрируются боты" — ты знаешь структуру.
-Для ВНЕШНЕГО бота спрашивай ТОЛЬКО: username в Telegram + URL endpoint + описание (одна фраза)."""
+НИКОГДА не спрашивай "какой репо" или "где конфиг" — ты знаешь структуру.
+Для ВНЕШНЕГО бота — только: username + URL + описание одной фразой.
+Отвечай кратко. Если задача — делай, не рассуждай долго."""
 
 ANALYZER_PROMPT = """Анализатор багов Python/Telegram/Railway. JSON без markdown:
 {"is_bug":bool,"confidence":"high|low","bug_type":"crash|logic|config|network|unknown","description":"1-2 предл","affected_file":"path|null","fix_description":"конкретно","lesson_title":"","lesson_symptom":"","lesson_cause":"","lesson_fix":"","lesson_avoid":""}
 high=явный crash/NameError/ImportError/SyntaxError/KeyError→автофикс. low=логика/сеть→спросить."""
 
-FIXER_PROMPT = """Фиксер. Верни ТОЛЬКО полный исправленный код. Минимум изменений. Без markdown."""
+FIXER_PROMPT = """Фиксер Python кода. Верни ТОЛЬКО полный исправленный файл целиком. Минимум изменений — только то что нужно для фикса. Сохраняй стиль оригинала. Без markdown, без объяснений."""
 
 
 # ── Railway API ───────────────────────────────────────────────────────────────
@@ -382,7 +376,7 @@ async def redeploy_service(service_id: str) -> bool:
 
 
 # ── Claude helpers ─────────────────────────────────────────────────────────────
-async def ask_claude(prompt: str, system: str = CODER_PROMPT, model: str = "claude-opus-4-5-20251101") -> str:
+async def ask_claude(prompt: str, system: str = CODER_PROMPT, model: str = "claude-opus-4-6") -> str:
     response = await claude.messages.create(
         model=model,
         max_tokens=4096,
@@ -418,7 +412,7 @@ async def analyze_logs(service_name: str, logs: list[str], source_code: str) -> 
 async def generate_fix(source_code: str, fix_description: str) -> str:
     prompt = f"Описание бага: {fix_description}\n\nИсходный код:\n{source_code}"
     # Opus только для генерации фикса — критично чтобы код был правильным
-    return await ask_claude(prompt, system=FIXER_PROMPT, model="claude-opus-4-5-20251101")
+    return await ask_claude(prompt, system=FIXER_PROMPT, model="claude-opus-4-6")
 
 
 # ── Lesson & notifications ─────────────────────────────────────────────────────
@@ -1318,14 +1312,14 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             )
         if history and len(history) > 1:
             answer_resp = await claude.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=1024,
+                model="claude-sonnet-4-6",
+                max_tokens=2048,
                 system=answer_system,
                 messages=history[:-1] + [{"role": "user", "content": message_text}]
             )
             answer = answer_resp.content[0].text
         else:
-            answer = await ask_claude(message_text, system=answer_system, model="claude-haiku-4-5-20251001")
+            answer = await ask_claude(message_text, system=answer_system, model="claude-sonnet-4-6")
         await reply_func(answer)
 
     elif intent in ("push_code", "fix_bot"):
