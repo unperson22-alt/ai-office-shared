@@ -945,19 +945,12 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
     except Exception:
         pass  # ops.md может не существовать — не страшно
 
-    # Добавляем ops-контекст в intent prompt если есть
-    intent_system = INTENT_PROMPT
-    if ops_context:
-        intent_system = (
-            INTENT_PROMPT +
-            f"\n\nПоследние действия в офисе (ops.md):\n{ops_context}\n\n"
-            "Если задача уже выполнена — скажи об этом вместо повторного выполнения."
-        )
+    # ops.md используется ТОЛЬКО для answer-контекста, не для intent detection
+    # (иначе "pilly-bot создан" в ops.md сбивает intent с create_bot на get_bot_token)
 
-    # Detect intent via Haiku (cheap)
-    # Truncate to 500 chars for intent detection — Haiku struggles with long messages
+    # Detect intent via Haiku (cheap) — без ops.md контекста
     intent_input = message_text[:500] if len(message_text) > 500 else message_text
-    raw = await ask_claude(intent_input, system=intent_system, model="claude-haiku-4-5-20251001")
+    raw = await ask_claude(intent_input, system=INTENT_PROMPT, model="claude-haiku-4-5-20251001")
     raw = raw.strip()
     start, end = raw.find("{"), raw.rfind("}") + 1
     if start != -1 and end > start:
@@ -968,7 +961,8 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
     except Exception:
         # Keyword fallback — better than failing silently
         msg_lower = message_text.lower()
-        if any(w in msg_lower for w in ["создай бота", "create bot", "новый бот"]):
+        if any(w in msg_lower for w in ["создай бота", "create bot", "новый бот", "зарегистрируй бота",
+                                           "зарегистрировать бота", "newbot", "зарегистрируй нового"]):
             intent_data = {"intent": "create_bot", "repo": None, "path": None, "task": message_text, "confidence": "low"}
         elif any(w in msg_lower for w in ["задеплой", "redeploy", "передеплой"]):
             intent_data = {"intent": "deploy", "repo": None, "path": None, "task": message_text, "confidence": "low"}
@@ -988,17 +982,23 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
     logger.info(f"[nl] intent={intent} repo={repo} path={path}")
 
     if intent == "answer":
-        # Передаём историю разговора если есть — Силли помнит контекст
+        # Для answer — используем ops.md как контекст и историю разговора
+        answer_system = CHAT_PROMPT
+        if ops_context:
+            answer_system = (
+                CHAT_PROMPT +
+                f"\n\nПоследние действия в офисе (ops.md, последние записи):\n{ops_context}"
+            )
         if history and len(history) > 1:
             answer_resp = await claude.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=1024,
-                system=CHAT_PROMPT,
+                system=answer_system,
                 messages=history[:-1] + [{"role": "user", "content": message_text}]
             )
             answer = answer_resp.content[0].text
         else:
-            answer = await ask_claude(message_text, system=CHAT_PROMPT, model="claude-haiku-4-5-20251001")
+            answer = await ask_claude(message_text, system=answer_system, model="claude-haiku-4-5-20251001")
         await reply_func(answer)
 
     elif intent in ("push_code", "fix_bot"):
