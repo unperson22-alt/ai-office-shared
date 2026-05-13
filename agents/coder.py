@@ -880,24 +880,44 @@ async def railway_set_variables(service_id: str, variables: dict) -> bool:
     )
     return data.get("data", {}).get("variableCollectionUpsert") is True
 
-async def railway_create_service(repo_name: str, bot_display_name: str, variables: dict = None) -> dict:
-    """Создать сервис на Railway, подключить GitHub репо и записать переменные."""
-    # 1. Создать сервис
+async def railway_get_service_id(repo_name: str) -> str | None:
+    """Найти service_id по имени сервиса в проекте."""
     data = await railway_graphql(
-        """mutation($input: ServiceCreateInput!) {
-             serviceCreate(input: $input) { id name }
+        """query($id: String!) {
+             project(id: $id) { services { edges { node { id name } } } }
            }""",
-        {"input": {
-            "projectId": PROJECT_ID,
-            "name": repo_name,
-            "source": {"repo": f"unperson22-alt/{repo_name}"}
-        }}
+        {"id": PROJECT_ID}
     )
-    if "errors" in data:
-        raise Exception(f"serviceCreate failed: {data['errors'][0]['message']}")
-    service_id = data["data"]["serviceCreate"]["id"]
+    for edge in data.get("data", {}).get("project", {}).get("services", {}).get("edges", []):
+        if edge["node"]["name"] == repo_name:
+            return edge["node"]["id"]
+    return None
 
-    # 2. Записать переменные если переданы
+
+async def railway_create_service(repo_name: str, bot_display_name: str, variables: dict = None) -> dict:
+    """Создать сервис на Railway. Если уже существует — использовать его."""
+    # Проверяем существует ли уже
+    existing_id = await railway_get_service_id(repo_name)
+    if existing_id:
+        logger.info(f"[railway] сервис '{repo_name}' уже существует: {existing_id}")
+        service_id = existing_id
+    else:
+        data = await railway_graphql(
+            """mutation($input: ServiceCreateInput!) {
+                 serviceCreate(input: $input) { id name }
+               }""",
+            {"input": {
+                "projectId": PROJECT_ID,
+                "name": repo_name,
+                "source": {"repo": f"unperson22-alt/{repo_name}"}
+            }}
+        )
+        if "errors" in data:
+            raise Exception(f"serviceCreate failed: {data['errors'][0]['message']}")
+        service_id = data["data"]["serviceCreate"]["id"]
+        logger.info(f"[railway] создан сервис '{repo_name}': {service_id}")
+
+    # Записать переменные если переданы
     if variables:
         ok = await railway_set_variables(service_id, variables)
         if not ok:
