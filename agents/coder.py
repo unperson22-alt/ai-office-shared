@@ -736,8 +736,10 @@ async def monitor_loop():
 
                 # Фильтр игнорируемых паттернов — проверяем весь блок целиком
                 # (Traceback и Conflict — разные строки, нужно смотреть на весь контекст)
-                error_block = "\n".join(error_logs)
-                if any(p in error_block for p in IGNORE_PATTERNS):
+                # Проверяем IGNORE_PATTERNS по всем логам (не только error строкам)
+                # иначе Conflict в соседней строке от Traceback не ловится
+                all_log_block = "\n".join(logs)
+                if any(p in all_log_block for p in IGNORE_PATTERNS):
                     logger.info(f"[monitor] {repo}: only ignorable errors (Conflict/etc), skipping")
                     continue
 
