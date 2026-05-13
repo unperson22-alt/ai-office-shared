@@ -57,6 +57,7 @@ SERVICES = {
     "9f868f0c-9c94-4776-a2dc-86a30d812b92": ("tilly-trader",     "bot.py"),
     "fa7c87cf-454c-4946-ab25-6a5091f0ac47": ("mama-bot",          "bot.py"),
     "5533bc5f-24aa-4079-903b-50bcde4cdd01": ("pilly-bot",         "bot.py"),
+    "92f70bbb-70ea-474c-be0d-5cc1c9bd8f4e": ("kriss-bot",        "bot.py"),
     "a5e37cc4-0a9f-4700-b6d3-d39b958ce0cb": ("villy-bot",         "bot.py"),
 }
 
