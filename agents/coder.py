@@ -627,7 +627,67 @@ async def run_daily_audit() -> str:
     else:
         lines.append("✅ Логи: ошибок за последние 2 часа нет")
 
-    # 4. Quick model names sanity check
+    # 4. Bug lesson scan — ищем новые паттерны ошибок которых нет в lessons.json
+    new_lesson_count = 0
+    try:
+        raw_lessons = await read_file("ai-office-shared", LESSONS_FILE)
+        existing_lessons = json.loads(raw_lessons) if raw_lessons.strip() else []
+
+        # Собираем все ошибки за сутки по всем сервисам
+        all_errors: dict[str, list[str]] = {}
+        for service_id, (repo, _) in SERVICES.items():
+            try:
+                logs = await get_service_logs(service_id)
+                errs = [l for l in logs if any(p in l for p in ERROR_PATTERNS)
+                        and not any(i in l for i in IGNORE_LOG)]
+                if errs:
+                    all_errors[repo] = errs
+            except Exception:
+                pass
+
+        if all_errors:
+            # Просим Haiku найти новые паттерны которых нет в known bugs
+            errors_summary = "\n---\n".join(
+                f"{repo}:\n" + "\n".join(errs[:10])
+                for repo, errs in all_errors.items()
+            )
+            known_summary = json.dumps(
+                [{"id": l.get("id"), "title": l.get("title"), "symptom": l.get("symptom","")} for l in existing_lessons],
+                ensure_ascii=False
+            )
+            scan_prompt = (
+                f"Known bug lessons:\n{known_summary}\n\n"
+                f"Today's errors by service:\n{errors_summary}\n\n"
+                f"Find errors that are NOT covered by known lessons. "
+                f"For each new unique bug pattern return JSON array (max 3):\n"
+                f'[{{"service":"...","title":"...","symptom":"...","cause":"...","fix":"...","avoid":"..."}}]\n'
+                f"Return empty array [] if nothing new. JSON only, no markdown."
+            )
+            raw_new = await ask_claude(scan_prompt, system="Return only valid JSON array, no markdown.", model="claude-haiku-4-5-20251001")
+            raw_new = raw_new.strip()
+            s, e = raw_new.find("["), raw_new.rfind("]") + 1
+            new_bugs = json.loads(raw_new[s:e]) if s != -1 and e > s else []
+
+            for bug in new_bugs[:3]:
+                await post_lesson(
+                    title=bug.get("title", "Unknown bug"),
+                    symptom=bug.get("symptom", ""),
+                    cause=bug.get("cause", ""),
+                    context=bug.get("service", ""),
+                    fix=bug.get("fix", ""),
+                    how_to_avoid=bug.get("avoid", "")
+                )
+                new_lesson_count += 1
+
+    except Exception as e:
+        logger.error(f"[daily_audit] bug scan failed: {e}")
+
+    if new_lesson_count:
+        lines.append(f"📚 Новых уроков записано: {new_lesson_count}")
+    else:
+        lines.append("📚 Новых паттернов багов не найдено")
+
+    # 5. Итог
     lines.append("")
     status_icon = "🟢" if not deploy_fail and not health_fail and not error_services else "🟡"
     lines.append(f"{status_icon} Статус офиса: {'НОРМА' if status_icon == '🟢' else 'ТРЕБУЕТ ВНИМАНИЯ'}")
