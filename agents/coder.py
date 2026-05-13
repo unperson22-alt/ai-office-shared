@@ -17,6 +17,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 from aiogram.filters import CommandStart
 from anthropic import AsyncAnthropic
+import redis.asyncio as aioredis
 
 from shared.github_tools import push_file, read_file, list_files, create_repo
 from telethon import TelegramClient
@@ -65,6 +66,21 @@ claude = AsyncAnthropic(api_key=ANTHROPIC_KEY)
 from collections import deque
 recent_group_msgs: deque = deque(maxlen=30)  # (sender, text, is_bot)
 
+# Redis — персистентная дедупликация seen_errors и last_seen
+REDIS_URL = os.getenv("REDIS_URL", "")
+_redis: aioredis.Redis | None = None
+
+async def get_redis() -> aioredis.Redis | None:
+    global _redis
+    if _redis is None and REDIS_URL:
+        try:
+            _redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+            await _redis.ping()
+        except Exception as e:
+            logger.warning(f"Redis unavailable: {e}")
+            _redis = None
+    return _redis
+
 # Системные промпты каждого бота — для мгновенного ответа с web search
 BOT_SYSTEMS_WEB = {
     "тилли": (
@@ -91,12 +107,12 @@ BOT_SYSTEMS_WEB = {
 pending_fixes: dict = {}
 
 # Последние seen timestamps логов по сервису чтобы не дублировать
-last_seen: dict = {}
+last_seen: dict = {}  # fallback in-memory (Redis preferred)
 
 # Дедупликация: hash ошибки → timestamp последнего анализа
-# Одна и та же ошибка не анализируется повторно в течение ERROR_COOLDOWN секунд
+# Персистентно хранится в Redis; fallback на in-memory seen_errors при недоступности Redis
 ERROR_COOLDOWN = 3600  # 1 час
-seen_errors: dict = {}  # {error_hash: timestamp}
+seen_errors: dict = {}  # in-memory fallback
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 CODER_PROMPT = """Python-кодер. ТОЛЬКО код без markdown. Готов к запуску. Комментарии внутри. Объяснения — кратко."""
@@ -235,7 +251,8 @@ async def get_service_logs(service_id: str) -> list[str]:
         return []
 
     # Только новые логи с момента последней проверки
-    cutoff = last_seen.get(service_id, 0)
+    r = await get_redis()
+    cutoff = float(await r.get(f"last_seen:{service_id}") or 0) if r else last_seen.get(service_id, 0)
     new_logs = []
     latest_ts = cutoff
     for l in logs:
@@ -249,7 +266,11 @@ async def get_service_logs(service_id: str) -> list[str]:
             new_logs.append(l.get("message", ""))
             if ts > latest_ts:
                 latest_ts = ts
-    last_seen[service_id] = latest_ts
+    r = await get_redis()
+    if r:
+        await r.set(f"last_seen:{service_id}", latest_ts)
+    else:
+        last_seen[service_id] = latest_ts
     return new_logs
 
 
@@ -437,17 +458,23 @@ async def monitor_loop():
                 import hashlib
                 error_signature = hashlib.md5("\n".join(error_logs[:3]).encode()).hexdigest()
                 now = time.time()
-                last_analysis = seen_errors.get(f"{service_id}:{error_signature}", 0)
+                redis_key = f"seen_error:{service_id}:{error_signature}"
+                r = await get_redis()
+                if r:
+                    last_analysis = float(await r.get(redis_key) or 0)
+                else:
+                    last_analysis = seen_errors.get(f"{service_id}:{error_signature}", 0)
                 if now - last_analysis < ERROR_COOLDOWN:
                     logger.info(f"[monitor] skipping duplicate error in {repo} (cooldown)")
                     continue
-                seen_errors[f"{service_id}:{error_signature}"] = now
-
-                # Чистим старые записи чтобы dict не рос бесконечно
-                cutoff = now - ERROR_COOLDOWN
-                expired = [k for k, v in seen_errors.items() if v < cutoff]
-                for k in expired:
-                    del seen_errors[k]
+                if r:
+                    await r.setex(redis_key, ERROR_COOLDOWN, now)  # auto-expires
+                else:
+                    seen_errors[f"{service_id}:{error_signature}"] = now
+                    cutoff = now - ERROR_COOLDOWN
+                    expired = [k for k, v in seen_errors.items() if v < cutoff]
+                    for k in expired:
+                        del seen_errors[k]
 
                 logger.info(f"[monitor] found {len(error_logs)} error lines in {repo}, analyzing...")
 
