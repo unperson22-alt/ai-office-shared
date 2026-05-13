@@ -1035,8 +1035,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             await reply_func(f"❌ Ошибка: {e}")
 
     elif intent == "create_bot":
-        # Extract bot name and persona from task
-        await reply_func(f"🤖 Создаю бота: *{task}*...", )
+        await reply_func(f"🤖 Создаю бота: *{task}*...")
 
         # Ask Claude to extract name + system prompt
         setup_raw = await ask_claude(
@@ -1059,6 +1058,25 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             return
 
         await reply_func(f"📦 Репо: `{bot_repo}`\n👤 Имя: {bot_display}\n📝 Промпт: {bot_prompt}")
+
+        # Проверяем не существует ли уже такой бот в SERVICES
+        existing = next((sid for sid, (r, _) in SERVICES.items() if r == bot_repo), None)
+        if existing:
+            await reply_func(f"⚠️ Бот `{bot_repo}` уже существует в Railway (service {existing[:8]}). Создание отменено.")
+            return
+
+        # Проверяем репо на GitHub
+        try:
+            async with httpx.AsyncClient(timeout=10) as _c:
+                _r = await _c.get(
+                    f"https://api.github.com/repos/unperson22-alt/{bot_repo}",
+                    headers={{"Authorization": f"token {os.getenv('GITHUB_TOKEN','')}"}}
+                )
+            if _r.status_code == 200:
+                await reply_func(f"⚠️ Репо `{bot_repo}` уже существует на GitHub. Создание отменено — бот уже есть.")
+                return
+        except Exception:
+            pass
 
         # 1. Создать GitHub репо
         await reply_func("1️⃣ Создаю GitHub репо...")
@@ -1509,10 +1527,18 @@ async def cmd_lesson(message: Message):
 async def cmd_natural_language(message: Message):
     """Handle any non-command message as a natural language request."""
     is_dm = message.chat.type == "private"
-    is_mention = message.text and any(w in message.text.lower() for w in ["силли", "cilly", "@cilly"])
 
-    if not is_dm and not is_mention:
-        return
+    # В группе — ТОЛЬКО если сообщение начинается с имени или явного тега
+    # Игнорируем если просто упоминается в середине текста (чтобы не хватать чужие разговоры)
+    if not is_dm:
+        txt_lower = (message.text or "").lower().strip()
+        is_direct = (
+            txt_lower.startswith("силли") or
+            txt_lower.startswith("cilly") or
+            txt_lower.startswith("@cilly")
+        )
+        if not is_direct:
+            return
 
     text = message.text
     for mention in ["силли,", "силли", "cilly,", "cilly", "@cilly_bot"]:
