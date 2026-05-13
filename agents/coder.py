@@ -1398,107 +1398,108 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             await reply_func(f"❌ Ошибка: {e}")
 
     elif intent == "add_external_bot":
-        # Подключение внешнего бота (не на Railway) в офис-систему
-        # Нужно знать: username, URL endpoint, описание
         import re as _re
-        msg_lower = message_text.lower()
 
-        # Пытаемся вытащить из задачи username, URL, описание
-        username_match = _re.search(r"@?([a-z_]+bot)\b", msg_lower)
-        url_match = _re.search(r"https?://[^\s]+", message_text)
-
-        if not username_match or not url_match:
-            # Не хватает данных — спрашиваем конкретно только то чего не знаем
-            missing = []
-            if not username_match:
-                missing.append("username бота в Telegram (например @kris_bot)")
-            if not url_match:
-                missing.append("URL endpoint бота (куда слать /task запросы)")
-            await reply_func(
-                "Почти готово. Нужно только:\n" +
-                "\n".join(f"• {m}" for m in missing) +
-                "\n\nОписание для роутера (одна фраза — что делает бот) — опционально."
-            )
-            return
-
-        bot_username = username_match.group(1)
-        bot_url = url_match.group(0).rstrip("/")
-        bot_key = task.split()[0].upper() if task else bot_username.replace("_bot", "").upper()
-
-        # Извлекаем описание через Haiku
-        desc_raw = await ask_claude(
-            f"Из этого запроса извлеки: 1) отображаемое имя бота (одно слово по-русски), "
-            f"2) ключ для роутера (одно слово капсом), 3) описание роли (одна фраза).\n"
-            f"Запрос: {task}\n"
-            f"Username: @{bot_username}\n"
-            f"JSON без markdown: {{\"display\":\"...\",\"key\":\"...\",\"description\":\"...\"}}",
+        # ── Шаг 0: вытащить всё из задачи через Haiku ────────────────────────
+        extraction_raw = await ask_claude(
+            f"Из запроса извлеки параметры внешнего бота.\n"
+            f"Запрос: {task}\n\n"
+            f"JSON без markdown:\n"
+            f"{{\"name_ru\": \"имя по-русски одним словом\","
+            f"\"name_en\": \"имя латиницей строчными без пробелов\","
+            f"\"key\": \"ключ для роутера КАПСОМ\","
+            f"\"url\": \"URL endpoint или null\","
+            f"\"description\": \"роль и функции одной фразой на русском\","
+            f"\"tg_folder\": \"название папки куда добавить или null\","
+            f"\"tg_group\": \"название новой группы для создания или null\"}}",
             model="claude-haiku-4-5-20251001"
         )
         try:
-            s, e = desc_raw.find("{"), desc_raw.rfind("}") + 1
-            desc_data = json.loads(desc_raw[s:e])
-            bot_display = desc_data.get("display", bot_username.replace("_bot", "").capitalize())
-            bot_key = desc_data.get("key", bot_display.upper())
-            bot_description = desc_data.get("description", f"Внешний ассистент {bot_display}")
+            s, e = extraction_raw.find("{"), extraction_raw.rfind("}") + 1
+            ext = json.loads(extraction_raw[s:e])
         except Exception:
-            bot_display = bot_username.replace("_bot", "").capitalize()
-            bot_description = f"Внешний ассистент {bot_display}"
+            ext = {}
 
-        await reply_func(f"Подключаю внешний бот: *{bot_display}* (@{bot_username})\nURL: {bot_url}")
+        bot_display   = ext.get("name_ru", "Крис").capitalize()
+        name_en       = ext.get("name_en", bot_display.lower())
+        bot_key       = ext.get("key", bot_display.upper())
+        bot_url       = ext.get("url") or ""
+        bot_url       = bot_url.rstrip("/") if bot_url else ""
+        bot_description = ext.get("description", f"Внешний ассистент {bot_display}")
+        tg_folder     = ext.get("tg_folder") or "Office"
+        tg_new_group  = ext.get("tg_group")  # название новой группы если нужна
 
-        # 1. Обновить filly-bot — добавить в роутинг
-        await reply_func("1️⃣ Обновляю Филли (routing)...")
-        try:
-            filly_code = await read_file("filly-bot", "bot.py")
+        # ── Шаг 1: найти username через Telegram API (автоподбор) ────────────
+        await reply_func(f"🔍 Ищу @{name_en}_bot в Telegram...")
 
-            # BOT_URLS — добавить перед закрывающей скобкой
-            # Находим последнюю запись в BOT_URLS
-            bot_urls_end = filly_code.rfind("}", filly_code.find("BOT_URLS"))
-            if bot_urls_end > -1:
-                # Вставляем перед последней }
-                last_entry_pos = filly_code.rfind(",", filly_code.find("BOT_URLS"), bot_urls_end)
-                new_entry = f'\n    "{bot_key}":  "{bot_url}",'
-                filly_code = filly_code[:last_entry_pos+1] + new_entry + filly_code[last_entry_pos+1:]
+        candidates = [
+            f"{name_en}_bot",
+            f"{name_en}ai_bot",
+            f"{name_en}_assistant_bot",
+            f"ai{name_en}_bot",
+            f"{name_en}2_bot",
+            f"{name_en}_office_bot",
+            f"{name_en}ru_bot",
+            f"the{name_en}_bot",
+        ]
 
-            # ROUTER_SYSTEM — добавить строку с описанием
-            router_anchor = "Только одно слово. Если непонятно — БИЛЛИ."
-            filly_code = filly_code.replace(
-                router_anchor,
-                f'{bot_key} — {bot_description}\n{router_anchor}'
+        # Если в задаче явно указан @username — ставим его первым
+        explicit = _re.search(r"@([A-Za-z][A-Za-z0-9_]{3,})", message_text)
+        if explicit:
+            candidates.insert(0, explicit.group(1))
+
+        bot_username = None
+        tg_token = os.getenv("CODER_BOT_TOKEN", "")
+        async with httpx.AsyncClient(timeout=10) as hc:
+            for candidate in candidates:
+                try:
+                    r = await hc.get(
+                        f"https://api.telegram.org/bot{tg_token}/getChat",
+                        params={"chat_id": f"@{candidate}"}
+                    )
+                    if r.json().get("ok"):
+                        bot_username = candidate
+                        logger.info(f"[add_external_bot] found @{candidate}")
+                        break
+                except Exception:
+                    continue
+
+        if not bot_username:
+            tried = ", ".join(f"@{c}" for c in candidates[:5])
+            await reply_func(
+                f"Перебрал варианты ({tried}…) — ни один не найден в Telegram.\n"
+                f"Скинь точный @username бота."
             )
+            return
 
-            # DM_AGENT_SYSTEMS — добавить fallback
-            dm_end = filly_code.rfind("}", filly_code.find("DM_AGENT_SYSTEMS"))
-            if dm_end > -1:
-                last_dm = filly_code.rfind(",", filly_code.find("DM_AGENT_SYSTEMS"), dm_end)
-                dm_entry = f'\n    "{bot_key}":  "Ты — {bot_display}. {bot_description} Неформально, на русском.",'
-                filly_code = filly_code[:last_dm+1] + dm_entry + filly_code[last_dm+1:]
+        await reply_func(
+            f"✅ Нашёл: @{bot_username}\n"
+            f"Имя: {bot_display} | Ключ: {bot_key}\n"
+            f"URL: {bot_url or 'нет (только Telegram)'}\n"
+            f"Роль: {bot_description}"
+        )
 
-            # _name_map — добавить маппинг
-            name_map_anchor = '"силли": "СИЛЛИ"'
-            filly_code = filly_code.replace(
-                name_map_anchor,
-                f'"{bot_display.lower()}": "{bot_key}", "{bot_username.replace("_bot","").replace("_","")}": "{bot_key}",\n        ' + name_map_anchor
-            )
+        # ── Шаг 2: Создать Telegram-группу если нужна ────────────────────────
+        created_group_id = None
+        if tg_new_group:
+            await reply_func(f"2️⃣ Создаю группу «{tg_new_group}»...")
+            created_group_id = await tg_create_group(tg_new_group, [f"@{bot_username}"])
+            if created_group_id:
+                await reply_func(f"✅ Группа создана: {created_group_id}")
+                # Добавить группу в папку
+                ok = await tg_add_peer_to_folder(created_group_id, tg_folder)
+                await reply_func(f"✅ Группа добавлена в папку {tg_folder}" if ok else f"⚠️ Папка {tg_folder} не найдена")
+            else:
+                await reply_func("⚠️ Не удалось создать группу")
 
-            await push_file("filly-bot", "bot.py", filly_code, f"feat: add external bot {bot_display} to routing")
-            filly_id = "5d61d403-feee-455e-9c0d-523f0e7c79d5"
-            await redeploy_service(filly_id)
-            await reply_func(f"✅ Филли обновлён, редеплой запущен")
-        except Exception as e:
-            await reply_func(f"⚠️ Ошибка обновления Филли: {e}")
-
-        # 2. Добавить бота в офис-группу
-        await reply_func("2️⃣ Добавляю в офис-группу...")
+        # ── Шаг 3: Добавить бота в офис-группу ──────────────────────────────
+        await reply_func("3️⃣ Добавляю в офис-группу...")
         office_id = int(os.getenv("OFFICE_CHAT_ID", "-5194783850"))
         added = await tg_add_bot_to_group(f"@{bot_username}", office_id)
-        if added:
-            await reply_func("✅ Добавлен в офис-группу")
-        else:
-            await reply_func("⚠️ Не удалось добавить в группу (возможно уже там или нет прав)")
+        await reply_func("✅ Добавлен в офис-группу" if added else "⚠️ Не удалось (возможно уже там)")
 
-        # 3. Добавить в папку Office
-        await reply_func("3️⃣ Добавляю в папку Office...")
+        # ── Шаг 4: Добавить бота в папку Office ─────────────────────────────
+        await reply_func(f"4️⃣ Добавляю в папку {tg_folder}...")
         try:
             client_tmp = await get_telethon_client()
             try:
@@ -1506,17 +1507,67 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                 peer_id = entity.id
             finally:
                 await client_tmp.disconnect()
-            ok = await tg_add_peer_to_folder(peer_id, "Office")
-            await reply_func("✅ Добавлен в папку Office" if ok else "⚠️ Папка Office не найдена")
+            ok = await tg_add_peer_to_folder(peer_id, tg_folder)
+            await reply_func(f"✅ Добавлен в папку {tg_folder}" if ok else f"⚠️ Папка {tg_folder} не найдена")
         except Exception as e:
             await reply_func(f"⚠️ Папка: {e}")
 
+        # ── Шаг 5: Обновить Филли (routing) — только если есть URL ──────────
+        if bot_url:
+            await reply_func("5️⃣ Обновляю Филли (routing)...")
+            try:
+                filly_code = await read_file("filly-bot", "bot.py")
+
+                # BOT_URLS
+                urls_start = filly_code.find("BOT_URLS")
+                urls_end   = filly_code.find("}", urls_start)
+                last_comma = filly_code.rfind(",", urls_start, urls_end)
+                filly_code = (filly_code[:last_comma+1]
+                              + f'\n    "{bot_key}":  "{bot_url}",'
+                              + filly_code[last_comma+1:])
+
+                # ROUTER_SYSTEM
+                anchor_router = "Только одно слово. Если непонятно — БИЛЛИ."
+                filly_code = filly_code.replace(
+                    anchor_router,
+                    f'{bot_key} — {bot_description}\n{anchor_router}'
+                )
+
+                # DM_AGENT_SYSTEMS
+                dm_start = filly_code.find("DM_AGENT_SYSTEMS")
+                dm_end   = filly_code.find("}", dm_start)
+                last_dm  = filly_code.rfind(",", dm_start, dm_end)
+                filly_code = (filly_code[:last_dm+1]
+                              + f'\n    "{bot_key}":  "Ты — {bot_display}. {bot_description} Неформально, на русском.",'
+                              + filly_code[last_dm+1:])
+
+                # _name_map
+                nm_anchor = '"силли": "СИЛЛИ"'
+                alias = bot_username.replace("_bot","").replace("_","")
+                filly_code = filly_code.replace(
+                    nm_anchor,
+                    f'"{bot_display.lower()}": "{bot_key}", "{alias}": "{bot_key}",\n        {nm_anchor}'
+                )
+
+                await push_file("filly-bot", "bot.py", filly_code,
+                                f"feat: add external bot {bot_display} to routing")
+                await redeploy_service("5d61d403-feee-455e-9c0d-523f0e7c79d5")
+                await reply_func("✅ Филли обновлён и задеплоен")
+            except Exception as e:
+                await reply_func(f"⚠️ Ошибка обновления Филли: {e}")
+        else:
+            await reply_func(f"ℹ️ URL endpoint не указан — роутинг через Филли не настроен.\nЕсли у бота появится URL — скажи, добавлю.")
+
+        # ── Итог ─────────────────────────────────────────────────────────────
+        routing_status = f"Роутинг Филли: {bot_key} → {bot_url} ✅" if bot_url else "Роутинг: нет (без endpoint)"
+        group_status   = f"Группа «{tg_new_group}»: {created_group_id} ✅" if tg_new_group and created_group_id else ""
         await reply_func(
-            f"✅ *{bot_display}* подключён к офису!\n\n"
-            f"• Роутинг в Филли: @{bot_display.lower()} → {bot_key} ✅\n"
-            f"• Офис-группа ✅\n"
-            f"• Папка Office ✅\n\n"
-            f"Скажи '{bot_display}' или '{bot_display.lower()}' в офисе — запрос пойдёт к нему."
+            f"✅ *{bot_display}* подключён!\n\n"
+            f"• @{bot_username} найден автоматически ✅\n"
+            + (f"• {group_status}\n" if group_status else "")
+            + f"• Офис-группа ✅\n"
+            f"• Папка {tg_folder} ✅\n"
+            f"• {routing_status}"
         )
 
     elif intent == "deploy":
