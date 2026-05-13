@@ -677,6 +677,10 @@ async def create_via_botfather(bot_name_en: str, bot_display: str) -> str:
             msgs = await client.get_messages(botfather, limit=1)
             return msgs[0].text if msgs else ""
 
+        # Сбрасываем любое незавершённое состояние BotFather перед началом
+        await send("/cancel")
+        await asyncio.sleep(1)
+
         for attempt, bot_username in enumerate(username_candidates):
             logger.info(f"[botfather] попытка {attempt+1}: @{bot_username}")
 
@@ -1033,7 +1037,8 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             setup_raw = setup_raw.strip()
             s, e = setup_raw.find("{"), setup_raw.rfind("}") + 1
             setup = json.loads(setup_raw[s:e])
-            bot_repo   = setup["repo"].lower().replace(" ", "-") + "-bot"
+            _raw_repo  = setup["repo"].lower().replace(" ", "-").replace("_", "-")
+            bot_repo   = _raw_repo if _raw_repo.endswith("-bot") else _raw_repo + "-bot"
             bot_display = setup["display"]
             bot_prompt  = setup["prompt"]
         except Exception as ex:
