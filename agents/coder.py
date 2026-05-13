@@ -467,10 +467,11 @@ async def monitor_loop():
                 if not error_logs:
                     continue
 
-                # Фильтр игнорируемых паттернов (нормальные события при редеплое и т.п.)
-                error_logs = [l for l in error_logs if not any(p in l for p in IGNORE_PATTERNS)]
-                if not error_logs:
-                    logger.info(f"[monitor] {repo}: only ignorable errors, skipping")
+                # Фильтр игнорируемых паттернов — проверяем весь блок целиком
+                # (Traceback и Conflict — разные строки, нужно смотреть на весь контекст)
+                error_block = "\n".join(error_logs)
+                if any(p in error_block for p in IGNORE_PATTERNS):
+                    logger.info(f"[monitor] {repo}: only ignorable errors (Conflict/etc), skipping")
                     continue
 
                 # Дедупликация: хэш первых 3 строк ошибки
