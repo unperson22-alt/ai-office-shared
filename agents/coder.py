@@ -399,6 +399,19 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
 # ── Monitor loop ───────────────────────────────────────────────────────────────
 ERROR_PATTERNS = ["Traceback", "Error:", "Exception:", "CRITICAL", "crashed", "exit code"]
 
+# Паттерны которые НЕ являются багами — игнорируем
+IGNORE_PATTERNS = [
+    "Conflict: terminated by other getUpdates",  # нормально при редеплое
+    "terminated by other getUpdates request",
+    "make sure that only one bot instance",
+    "NetworkError while getting Updates",        # временная сетевая ошибка
+    "TimedOut",                                  # telegram timeout — не баг
+    "DeprecationWarning",                        # предупреждение, не ошибка
+]
+
+# Игнорировать ошибки старше этого времени (секунды) — стартовый шум редеплоя
+ERROR_MAX_AGE = 120  # 2 минуты
+
 # Фразы которые означают что боту не хватает инструмента
 RESPONSE_ANALYZER_PROMPT = """Анализатор ответов AI-агентов. Есть ли проблема с возможностями?
 ПРОБЛЕМА: агент не может получить актуальные данные и говорит об этом / отказывается / просит юзера найти самому.
@@ -452,6 +465,12 @@ async def monitor_loop():
                 # Быстрый фильтр — есть ли ошибки вообще
                 error_logs = [l for l in logs if any(p in l for p in ERROR_PATTERNS)]
                 if not error_logs:
+                    continue
+
+                # Фильтр игнорируемых паттернов (нормальные события при редеплое и т.п.)
+                error_logs = [l for l in error_logs if not any(p in l for p in IGNORE_PATTERNS)]
+                if not error_logs:
+                    logger.info(f"[monitor] {repo}: only ignorable errors, skipping")
                     continue
 
                 # Дедупликация: хэш первых 3 строк ошибки
