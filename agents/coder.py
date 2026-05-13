@@ -115,6 +115,10 @@ last_seen: dict = {}  # fallback in-memory (Redis preferred)
 ERROR_COOLDOWN = 3600  # 1 час
 seen_errors: dict = {}  # in-memory fallback
 
+# История DM разговоров с Владом — чтобы Силли помнил контекст
+dm_history: dict = {}   # {user_id: [{role, content}, ...]}
+DM_HISTORY_MAX = 20     # последних сообщений
+
 # ── Prompts ───────────────────────────────────────────────────────────────────
 CODER_PROMPT = """Python-кодер. ТОЛЬКО код без markdown. Готов к запуску. Комментарии внутри. Объяснения — кратко."""
 
@@ -649,33 +653,55 @@ async def create_via_botfather(bot_name_en: str, bot_display: str) -> str:
     if not all([api_id, api_hash, session]):
         raise EnvironmentError("TELEGRAM_API_ID / TELEGRAM_API_HASH / TELETHON_SESSION не заданы")
 
-    bot_username = f"{bot_name_en}_bot"
+    # Кандидаты username — пробуем по очереди пока не создадим
+    username_candidates = [
+        f"{bot_name_en}_bot",
+        f"{bot_name_en}ai_bot",
+        f"{bot_name_en}2_bot",
+        f"{bot_name_en}3_bot",
+        f"{bot_name_en}_office_bot",
+        f"ai{bot_name_en}_bot",
+        f"{bot_name_en}_ru_bot",
+    ]
+
+    import re as _re
 
     async with TelegramClient(StringSession(session), api_id, api_hash) as client:
         botfather = await client.get_entity("@BotFather")
 
         async def send(text: str):
             await client.send_message(botfather, text)
-            await asyncio.sleep(2)
+            await asyncio.sleep(2.5)
 
         async def last_reply() -> str:
             msgs = await client.get_messages(botfather, limit=1)
             return msgs[0].text if msgs else ""
 
-        # /newbot
-        await send("/newbot")
-        await send(bot_display)        # имя бота
-        await send(bot_username)       # username
+        for attempt, bot_username in enumerate(username_candidates):
+            logger.info(f"[botfather] попытка {attempt+1}: @{bot_username}")
+            await send("/newbot")
+            await asyncio.sleep(1)
+            await send(bot_display)   # имя бота
+            await send(bot_username)  # username
 
-        reply = await last_reply()
+            reply = await last_reply()
 
-        # Извлекаем токен из ответа BotFather
-        import re
-        match = re.search(r"(\d+:[A-Za-z0-9_-]{35,})", reply)
-        if not match:
-            raise ValueError(f"Не нашёл токен в ответе BotFather: {reply[:200]}")
+            # Успех — есть токен
+            token_match = _re.search(r"(\d+:[A-Za-z0-9_-]{35,})", reply)
+            if token_match:
+                logger.info(f"[botfather] создан @{bot_username}")
+                return token_match.group(1)
 
-        return match.group(1)
+            # Username занят — пробуем следующий
+            if "already taken" in reply.lower() or "taken" in reply.lower() or "sorry" in reply.lower():
+                logger.warning(f"[botfather] @{bot_username} занят, пробую следующий...")
+                await asyncio.sleep(1)
+                continue
+
+            # Другая ошибка — не пытаемся дальше
+            raise ValueError(f"BotFather ошибка (@{bot_username}): {reply[:200]}")
+
+        raise ValueError(f"Все {len(username_candidates)} вариантов username заняты для {bot_name_en}")
 
 
 
@@ -872,7 +898,7 @@ async def railway_create_service(repo_name: str, bot_display_name: str, variable
     return {"service_id": service_id}
 
 
-async def handle_natural_language(message_text: str, chat_id: int, reply_func):
+async def handle_natural_language(message_text: str, chat_id: int, reply_func, history: list = None):
     """Process any natural language request — detect intent and execute."""
     await reply_func("🧠 Разбираю запрос...")
 
@@ -910,7 +936,17 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func):
     logger.info(f"[nl] intent={intent} repo={repo} path={path}")
 
     if intent == "answer":
-        answer = await ask_claude(message_text, system=CHAT_PROMPT, model="claude-haiku-4-5-20251001")
+        # Передаём историю разговора если есть — Силли помнит контекст
+        if history and len(history) > 1:
+            answer_resp = await claude.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=1024,
+                system=CHAT_PROMPT,
+                messages=history[:-1] + [{"role": "user", "content": message_text}]
+            )
+            answer = answer_resp.content[0].text
+        else:
+            answer = await ask_claude(message_text, system=CHAT_PROMPT, model="claude-haiku-4-5-20251001")
         await reply_func(answer)
 
     elif intent in ("push_code", "fix_bot"):
@@ -1406,22 +1442,31 @@ async def cmd_lesson(message: Message):
 @dp.message(F.text & ~F.text.startswith("/"))
 async def cmd_natural_language(message: Message):
     """Handle any non-command message as a natural language request."""
-    # Only respond to direct messages or group messages that mention Cilly
     is_dm = message.chat.type == "private"
     is_mention = message.text and any(w in message.text.lower() for w in ["силли", "cilly", "@cilly"])
 
     if not is_dm and not is_mention:
-        return  # ignore group chatter not directed at Cilly
+        return
 
-    # Strip mention if present
     text = message.text
     for mention in ["силли,", "силли", "cilly,", "cilly", "@cilly_bot"]:
         text = text.replace(mention, "").strip()
 
+    user_id = message.from_user.id
+
+    # Сохраняем сообщение в историю
+    if user_id not in dm_history:
+        dm_history[user_id] = []
+    dm_history[user_id].append({"role": "user", "content": text})
+    if len(dm_history[user_id]) > DM_HISTORY_MAX:
+        dm_history[user_id] = dm_history[user_id][-DM_HISTORY_MAX:]
+
     async def reply(msg: str):
+        # Сохраняем ответ в историю
+        dm_history[user_id].append({"role": "assistant", "content": msg})
         await message.answer(msg, parse_mode=None)
 
-    await handle_natural_language(text, message.chat.id, reply)
+    await handle_natural_language(text, message.chat.id, reply, history=dm_history[user_id])
 
 
 # ── HTTP endpoint for Filly routing (family bots → Cilly) ────────────────────
