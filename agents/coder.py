@@ -122,9 +122,38 @@ DM_HISTORY_MAX = 20     # последних сообщений
 # ── Prompts ───────────────────────────────────────────────────────────────────
 CODER_PROMPT = """Python-кодер. ТОЛЬКО код без markdown. Готов к запуску. Комментарии внутри. Объяснения — кратко."""
 
-CHAT_PROMPT = """Ты — Силли, технический эксперт AI-офиса. Отвечай кратко и по делу, без лишнего кода если не просят. Неформально, на русском.
+CHAT_PROMPT = """Ты — Силли, технический эксперт AI-офиса Влада. Отвечай кратко и по делу. Неформально, на русском.
 
-Ты умеешь редактировать файлы в GitHub репозиториях через GitHub API (функции read_file, push_file из shared.github_tools). Когда тебе дают GH_PAT токен и задачу отредактировать файл — читай файл, меняй содержимое, пушь обратно. Не говори что не можешь — делай. GH_PAT передавай как параметр в функции если нужно, или используй переменную окружения GITHUB_TOKEN."""
+== ЗНАНИЯ ОБ ОФИСЕ (не спрашивай это — ты уже знаешь) ==
+
+РЕПОЗИТОРИИ (GitHub: unperson22-alt):
+• ai-office-shared — твой репо, agents/coder.py — твой код
+• filly-bot/bot.py — РОУТЕР офиса. Здесь регистрируются все боты:
+  - BOT_URLS = {имя: URL} — адреса ботов для HTTP routing
+  - ROUTER_SYSTEM — описания ботов для автороутинга
+  - DM_AGENT_SYSTEMS — fallback системные промпты
+  - _name_map — маппинг русских имён → ключи
+• Остальные: billy-bot, tilly-bot, milly-bot, dilly-bot(doctor), mama-bot, pilly-bot, villy-bot, prophet-bot, gosling-bot, tilly-trader — у каждого bot.py
+
+КАК ДОБАВИТЬ ВНЕШНЕГО БОТА В ОФИС:
+1. filly-bot/bot.py → добавить в BOT_URLS, ROUTER_SYSTEM, DM_AGENT_SYSTEMS, _name_map
+2. Для внешнего бота URL берётся из задачи (не Railway), сервис на Railway не нужен
+3. Telegram: добавить в офис-группу через tg_add_bot_to_group + в папку через tg_add_peer_to_folder
+4. Создать Telegram-группу если нужно: tg_create_group(title), потом добавить в папку
+
+TELEGRAM (Telethon функции уже есть в коде):
+• Папка "Office" — основная папка офиса
+• tg_create_group(title, bot_usernames) — создать супергруппу
+• tg_add_peer_to_folder(peer_id, folder_name) — добавить в папку
+• tg_add_bot_to_group(bot_username, group_id) — добавить бота в группу
+• Офис-группа: -5194783850 | Bug Lessons: -5197140411
+
+RAILWAY: проект 271b40b7, env 2efaaf60. Все ключи в env (GH_PAT, GITHUB_TOKEN, RAILWAY_TOKEN).
+GitHub: read_file(repo, path), push_file(repo, path, content, msg) из shared.github_tools. GH_PAT уже в env.
+
+== ПРАВИЛО ==
+НИКОГДА не спрашивай "какой репо", "где конфиг ботов", "где регистрируются боты" — ты знаешь структуру.
+Для ВНЕШНЕГО бота спрашивай ТОЛЬКО: username в Telegram + URL endpoint + описание (одна фраза)."""
 
 ANALYZER_PROMPT = """Анализатор багов Python/Telegram/Railway. JSON без markdown:
 {"is_bug":bool,"confidence":"high|low","bug_type":"crash|logic|config|network|unknown","description":"1-2 предл","affected_file":"path|null","fix_description":"конкретно","lesson_title":"","lesson_symptom":"","lesson_cause":"","lesson_fix":"","lesson_avoid":""}
@@ -190,10 +219,11 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
 
 
 INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
-{"intent":"push_code|fix_bot|create_bot|get_bot_token|deploy|read_file|list_files|answer","repo":"name|null","path":"path|null","task":"описание","confidence":"high|low"}
-push_code=залить код, fix_bot=исправить баг, create_bot=новый бот, get_bot_token=получить токен существующего бота, deploy=редеплой, read_file=прочитать, list_files=список, answer=ответить.
-Репо: billy-bot,tilly-bot,filly-bot,doctor-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard.
-билли→billy, тилли→tilly, макс/милли→milly, доктор→doctor, филли→filly, силли→ai-office-shared."""
+{"intent":"push_code|fix_bot|create_bot|add_external_bot|get_bot_token|deploy|read_file|list_files|answer","repo":"name|null","path":"path|null","task":"описание","confidence":"high|low"}
+push_code=залить код, fix_bot=исправить баг, create_bot=новый бот на Railway с нуля, add_external_bot=подключить чужого/внешнего бота (уже существует, не на Railway), get_bot_token=получить токен, deploy=редеплой, read_file=прочитать, list_files=список, answer=ответить.
+ВАЖНО: "подключить бота", "добавить чужого бота", "зарегистрировать внешний бот", "добавить в офис бота X" → add_external_bot, НЕ create_bot.
+Репо: billy-bot,tilly-bot,filly-bot,dilly-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard,mama-bot,pilly-bot,villy-bot,prophet-bot,gosling-bot,tilly-trader.
+билли→billy, тилли→tilly, макс/милли→milly, доктор/дилли→dilly, филли→filly, силли→ai-office-shared."""
 
 
 OPS_LOG_FILE = "logs/ops.md"
@@ -1366,6 +1396,128 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                 await reply_func("❌ Токен не найден в ответе BotFather. Попробуй /mybots вручную.")
         except Exception as e:
             await reply_func(f"❌ Ошибка: {e}")
+
+    elif intent == "add_external_bot":
+        # Подключение внешнего бота (не на Railway) в офис-систему
+        # Нужно знать: username, URL endpoint, описание
+        import re as _re
+        msg_lower = message_text.lower()
+
+        # Пытаемся вытащить из задачи username, URL, описание
+        username_match = _re.search(r"@?([a-z_]+bot)\b", msg_lower)
+        url_match = _re.search(r"https?://[^\s]+", message_text)
+
+        if not username_match or not url_match:
+            # Не хватает данных — спрашиваем конкретно только то чего не знаем
+            missing = []
+            if not username_match:
+                missing.append("username бота в Telegram (например @kris_bot)")
+            if not url_match:
+                missing.append("URL endpoint бота (куда слать /task запросы)")
+            await reply_func(
+                "Почти готово. Нужно только:\n" +
+                "\n".join(f"• {m}" for m in missing) +
+                "\n\nОписание для роутера (одна фраза — что делает бот) — опционально."
+            )
+            return
+
+        bot_username = username_match.group(1)
+        bot_url = url_match.group(0).rstrip("/")
+        bot_key = task.split()[0].upper() if task else bot_username.replace("_bot", "").upper()
+
+        # Извлекаем описание через Haiku
+        desc_raw = await ask_claude(
+            f"Из этого запроса извлеки: 1) отображаемое имя бота (одно слово по-русски), "
+            f"2) ключ для роутера (одно слово капсом), 3) описание роли (одна фраза).\n"
+            f"Запрос: {task}\n"
+            f"Username: @{bot_username}\n"
+            f"JSON без markdown: {{\"display\":\"...\",\"key\":\"...\",\"description\":\"...\"}}",
+            model="claude-haiku-4-5-20251001"
+        )
+        try:
+            s, e = desc_raw.find("{"), desc_raw.rfind("}") + 1
+            desc_data = json.loads(desc_raw[s:e])
+            bot_display = desc_data.get("display", bot_username.replace("_bot", "").capitalize())
+            bot_key = desc_data.get("key", bot_display.upper())
+            bot_description = desc_data.get("description", f"Внешний ассистент {bot_display}")
+        except Exception:
+            bot_display = bot_username.replace("_bot", "").capitalize()
+            bot_description = f"Внешний ассистент {bot_display}"
+
+        await reply_func(f"Подключаю внешний бот: *{bot_display}* (@{bot_username})\nURL: {bot_url}")
+
+        # 1. Обновить filly-bot — добавить в роутинг
+        await reply_func("1️⃣ Обновляю Филли (routing)...")
+        try:
+            filly_code = await read_file("filly-bot", "bot.py")
+
+            # BOT_URLS — добавить перед закрывающей скобкой
+            # Находим последнюю запись в BOT_URLS
+            bot_urls_end = filly_code.rfind("}", filly_code.find("BOT_URLS"))
+            if bot_urls_end > -1:
+                # Вставляем перед последней }
+                last_entry_pos = filly_code.rfind(",", filly_code.find("BOT_URLS"), bot_urls_end)
+                new_entry = f'\n    "{bot_key}":  "{bot_url}",'
+                filly_code = filly_code[:last_entry_pos+1] + new_entry + filly_code[last_entry_pos+1:]
+
+            # ROUTER_SYSTEM — добавить строку с описанием
+            router_anchor = "Только одно слово. Если непонятно — БИЛЛИ."
+            filly_code = filly_code.replace(
+                router_anchor,
+                f'{bot_key} — {bot_description}\n{router_anchor}'
+            )
+
+            # DM_AGENT_SYSTEMS — добавить fallback
+            dm_end = filly_code.rfind("}", filly_code.find("DM_AGENT_SYSTEMS"))
+            if dm_end > -1:
+                last_dm = filly_code.rfind(",", filly_code.find("DM_AGENT_SYSTEMS"), dm_end)
+                dm_entry = f'\n    "{bot_key}":  "Ты — {bot_display}. {bot_description} Неформально, на русском.",'
+                filly_code = filly_code[:last_dm+1] + dm_entry + filly_code[last_dm+1:]
+
+            # _name_map — добавить маппинг
+            name_map_anchor = '"силли": "СИЛЛИ"'
+            filly_code = filly_code.replace(
+                name_map_anchor,
+                f'"{bot_display.lower()}": "{bot_key}", "{bot_username.replace("_bot","").replace("_","")}": "{bot_key}",\n        ' + name_map_anchor
+            )
+
+            await push_file("filly-bot", "bot.py", filly_code, f"feat: add external bot {bot_display} to routing")
+            filly_id = "5d61d403-feee-455e-9c0d-523f0e7c79d5"
+            await redeploy_service(filly_id)
+            await reply_func(f"✅ Филли обновлён, редеплой запущен")
+        except Exception as e:
+            await reply_func(f"⚠️ Ошибка обновления Филли: {e}")
+
+        # 2. Добавить бота в офис-группу
+        await reply_func("2️⃣ Добавляю в офис-группу...")
+        office_id = int(os.getenv("OFFICE_CHAT_ID", "-5194783850"))
+        added = await tg_add_bot_to_group(f"@{bot_username}", office_id)
+        if added:
+            await reply_func("✅ Добавлен в офис-группу")
+        else:
+            await reply_func("⚠️ Не удалось добавить в группу (возможно уже там или нет прав)")
+
+        # 3. Добавить в папку Office
+        await reply_func("3️⃣ Добавляю в папку Office...")
+        try:
+            client_tmp = await get_telethon_client()
+            try:
+                entity = await client_tmp.get_entity(f"@{bot_username}")
+                peer_id = entity.id
+            finally:
+                await client_tmp.disconnect()
+            ok = await tg_add_peer_to_folder(peer_id, "Office")
+            await reply_func("✅ Добавлен в папку Office" if ok else "⚠️ Папка Office не найдена")
+        except Exception as e:
+            await reply_func(f"⚠️ Папка: {e}")
+
+        await reply_func(
+            f"✅ *{bot_display}* подключён к офису!\n\n"
+            f"• Роутинг в Филли: @{bot_display.lower()} → {bot_key} ✅\n"
+            f"• Офис-группа ✅\n"
+            f"• Папка Office ✅\n\n"
+            f"Скажи '{bot_display}' или '{bot_display.lower()}' в офисе — запрос пойдёт к нему."
+        )
 
     elif intent == "deploy":
         if not repo:
