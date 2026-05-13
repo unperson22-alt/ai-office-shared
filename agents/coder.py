@@ -669,48 +669,61 @@ async def create_via_botfather(bot_name_en: str, bot_display: str) -> str:
     async with TelegramClient(StringSession(session), api_id, api_hash) as client:
         botfather = await client.get_entity("@BotFather")
 
-        async def send(text: str):
-            await client.send_message(botfather, text)
-            await asyncio.sleep(2.5)
+        # Ждём новое сообщение от BotFather после отправки — надёжнее чем просто sleep
+        async def send_and_wait(text: str, wait: float = 3.0) -> str:
+            """Отправить сообщение BotFather и дождаться его ответа."""
+            # Запоминаем ID последнего сообщения до отправки
+            before = await client.get_messages(botfather, limit=1)
+            last_id = before[0].id if before else 0
 
-        async def last_reply() -> str:
+            await client.send_message(botfather, text)
+
+            # Ждём новый ответ (polling до 10 секунд)
+            for _ in range(int(wait / 0.5)):
+                await asyncio.sleep(0.5)
+                msgs = await client.get_messages(botfather, limit=1)
+                if msgs and msgs[0].id > last_id:
+                    return msgs[0].text or ""
+            # Fallback — вернуть последнее что есть
             msgs = await client.get_messages(botfather, limit=1)
             return msgs[0].text if msgs else ""
 
-        # Сбрасываем любое незавершённое состояние BotFather перед началом
-        await send("/cancel")
-        await asyncio.sleep(1)
+        # Сбрасываем любое незавершённое состояние перед началом
+        logger.info("[botfather] сбрасываю состояние /cancel")
+        await send_and_wait("/cancel", wait=3.0)
 
         for attempt, bot_username in enumerate(username_candidates):
             logger.info(f"[botfather] попытка {attempt+1}: @{bot_username}")
 
-            # Сбрасываем состояние BotFather перед каждой попыткой
-            # (иначе он ждёт username от предыдущего /newbot)
             if attempt > 0:
-                await send("/cancel")
-                await asyncio.sleep(1.5)
+                # Сбрасываем состояние между попытками
+                await send_and_wait("/cancel", wait=2.0)
 
-            await send("/newbot")
-            await asyncio.sleep(1)
-            await send(bot_display)   # имя бота
-            await asyncio.sleep(1.5)
-            await send(bot_username)  # username
+            reply_name = await send_and_wait("/newbot", wait=4.0)
+            logger.info(f"[botfather] /newbot → {reply_name[:80]}")
 
-            reply = await last_reply()
+            # BotFather просит имя бота
+            if "name" not in reply_name.lower() and "alright" not in reply_name.lower():
+                logger.warning(f"[botfather] неожиданный ответ на /newbot: {reply_name[:100]}")
+
+            reply_user = await send_and_wait(bot_display, wait=4.0)  # имя бота
+            logger.info(f"[botfather] display → {reply_user[:80]}")
+
+            reply = await send_and_wait(bot_username, wait=5.0)      # username
+            logger.info(f"[botfather] username → {reply[:80]}")
 
             # Успех — есть токен
             token_match = _re.search(r"(\d+:[A-Za-z0-9_-]{35,})", reply)
             if token_match:
-                logger.info(f"[botfather] создан @{bot_username}")
+                logger.info(f"[botfather] ✅ создан @{bot_username}")
                 return token_match.group(1)
 
             # Username занят — пробуем следующий
             if any(p in reply.lower() for p in ["already taken", "taken", "sorry", "try something"]):
                 logger.warning(f"[botfather] @{bot_username} занят, пробую следующий...")
-                await asyncio.sleep(1)
                 continue
 
-            # Другая ошибка — не пытаемся дальше
+            # Другая ошибка
             raise ValueError(f"BotFather ошибка (@{bot_username}): {reply[:200]}")
 
         raise ValueError(f"Все {len(username_candidates)} вариантов username заняты для {bot_name_en}")
