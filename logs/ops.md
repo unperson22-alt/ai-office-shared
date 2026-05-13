@@ -61,3 +61,17 @@
 
 **[2026-05-12 17:06 UTC] Силли — office-dashboard:** автофикс: Добавить параметры read_timeout и write_timeout в Applicatio
 > confidence=high | файл=main.py | статус=редеплой запущен ✅
+
+**[2026-05-13 05:13 UTC] Claude — pilly-bot:** Создан сервис для генерации картинок
+> GitHub repo: unperson22-alt/pilly-bot (создан, код залит)
+> Railway service_id: 5533bc5f-24aa-4079-903b-50bcde4cdd01
+> Domain: pilly-bot-production.up.railway.app
+> Env vars установлены: REPLICATE_API_TOKEN, OFFICE_CHAT_ID, LOG_BOT_URL, PILLY_BOT_URL (у всех ботов)
+> TELEGRAM_TOKEN — ещё не добавлен, ждём токен от BotFather
+> Все боты переключены с MAMA_BOT_URL на PILLY_BOT_URL
+> Силли добавлен в SERVICES для мониторинга
+> Mama-bot освобождён от генерации картинок
+
+**[2026-05-13 05:13 UTC] Claude — ai-office-shared/agents/coder.py:** Фиксы Силли
+> FIX: create_via_botfather — добавлен /cancel перед каждым retry (иначе BotFather ждёт username от предыдущего /newbot)
+> FIX: handle_natural_language теперь читает ops.md перед обработкой запроса (контекст о сделанном)
