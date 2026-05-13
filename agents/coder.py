@@ -982,10 +982,10 @@ async def tg_get_folder_id(folder_name: str) -> int | None:
     try:
         filters = await client(GetDialogFiltersRequest())
         for f in filters.filters:
-            if hasattr(f, 'title') and str(f.title).lower() == folder_name.lower():
+            if hasattr(f, 'title') and (f.title.text if hasattr(f.title, 'text') else str(f.title)).lower() == folder_name.lower():
                 return f.id
         # Логируем все найденные папки для диагностики
-        names = [str(f.title) for f in filters.filters if hasattr(f, 'title')]
+        names = [(f.title.text if hasattr(f.title, 'text') else str(f.title)) for f in filters.filters if hasattr(f, 'title')]
         logger.info(f"tg_get_folder_id: папки найдены: {names}, искали: '{folder_name}'")
         return None
     finally:
@@ -999,10 +999,10 @@ async def tg_add_peer_to_folder(peer_id: int, folder_name: str = "Office") -> bo
         filters = await client(GetDialogFiltersRequest())
         target = None
         # Логируем все папки для диагностики
-        all_names = [str(f.title) for f in filters.filters if hasattr(f, 'title')]
+        all_names = [(f.title.text if hasattr(f.title, 'text') else str(f.title)) for f in filters.filters if hasattr(f, 'title')]
         logger.info(f"tg_add_peer_to_folder: все папки: {all_names}, ищем: '{folder_name}'")
         for f in filters.filters:
-            if hasattr(f, 'title') and str(f.title).lower() == folder_name.lower():
+            if hasattr(f, 'title') and (f.title.text if hasattr(f.title, 'text') else str(f.title)).lower() == folder_name.lower():
                 target = f
                 break
         if not target:
@@ -1581,25 +1581,23 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         await reply_func("✅ Добавлен в офис-группу" if added else "⚠️ Не удалось (возможно уже там)")
 
         # ── Шаг 4: Добавить бота в папку Office ─────────────────────────────
+        folder_ok = False
         await reply_func(f"4️⃣ Добавляю в папку {tg_folder}...")
         try:
             client_tmp = await get_telethon_client()
             try:
                 entity = await client_tmp.get_entity(f"@{bot_username}")
                 peer_id = entity.id
-                # Заодно узнаём реальные имена папок
                 from telethon.tl.functions.messages import GetDialogFiltersRequest as _GDF
                 filters_resp = await client_tmp(_GDF())
-                folder_names = [str(f.title) for f in filters_resp.filters if hasattr(f, 'title')]
+                folder_names = [(f.title.text if hasattr(f.title, 'text') else str(f.title)) for f in filters_resp.filters if hasattr(f, 'title')]
             finally:
                 await client_tmp.disconnect()
-            ok = await tg_add_peer_to_folder(peer_id, tg_folder)
-            if ok:
+            folder_ok = await tg_add_peer_to_folder(peer_id, tg_folder)
+            if folder_ok:
                 await reply_func(f"✅ Добавлен в папку {tg_folder}")
             else:
-                await reply_func(f"⚠️ Папка '{tg_folder}' не найдена. Доступные папки: {folder_names}\nДобавь вручную или скажи точное название.")
-        except Exception as e:
-            await reply_func(f"⚠️ Папка: {e}")
+                await reply_func(f"⚠️ Папка '{tg_folder}' не найдена.\nДоступные: {folder_names}\nСкажи точное название — добавлю.")
         except Exception as e:
             await reply_func(f"⚠️ Папка: {e}")
 
@@ -1650,8 +1648,8 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             f"✅ *{bot_display}* подключён!\n\n"
             f"• @{bot_username} найден автоматически ✅\n"
             + (f"• Группа «{tg_new_group}» создана ✅\n" if tg_new_group and created_group_id else "")
-            + f"• Офис-группа ✅\n"
-            f"• Папка {tg_folder} ✅\n"
+            + f"• Офис-группа {'✅' if added else '⚠️'}\n"
+            f"• Папка {tg_folder} {'✅' if folder_ok else '⚠️ не найдена'}\n"
             f"• Роутинг Филли: {bot_key} → {bot_url} ✅"
         )
 
