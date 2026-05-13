@@ -182,5 +182,55 @@
       "railway",
       "unstable_connection"
     ]
+  },
+  {
+    "id": 9,
+    "ts": "2026-05-13",
+    "title": "Telethon f.title is TextWithEntities not str",
+    "symptom": "tg_add_peer_to_folder crash: TextWithEntities has no attribute lower",
+    "cause": "Telethon 1.3x+ returns TextWithEntities object for DialogFilter.title",
+    "fix": "Use (f.title.text if hasattr(f.title,'text') else str(f.title)).strip().lower()",
+    "avoid": "Always use hasattr check before calling string methods on Telethon objects",
+    "file": "agents/coder.py"
+  },
+  {
+    "id": 10,
+    "ts": "2026-05-13",
+    "title": "InviteToChannelRequest fails for regular Chat groups",
+    "symptom": "tg_add_bot_to_group: Cannot cast InputPeerChat to any kind of InputChannel",
+    "cause": "InviteToChannelRequest only works for Channel/Supergroup, not Chat",
+    "fix": "isinstance check: Channel→InviteToChannelRequest, Chat→AddChatUserRequest",
+    "avoid": "Always check isinstance(entity, Channel) before InviteToChannelRequest",
+    "file": "agents/coder.py"
+  },
+  {
+    "id": 11,
+    "ts": "2026-05-13",
+    "title": "BOT_TEMPLATE double-escaped quotes cause SyntaxError",
+    "symptom": "Created bot crashes: SyntaxError unexpected character after line continuation. SYSTEM = \\\"\\\"\\\"",
+    "cause": "Triple-quoted string in BOT_TEMPLATE gets double-escaped by .format()",
+    "fix": "Use single-quoted SYSTEM string in template. Validate with ast.parse() before push",
+    "avoid": "Run ast.parse() on generated code before pushing to GitHub",
+    "file": "agents/coder.py"
+  },
+  {
+    "id": 12,
+    "ts": "2026-05-13",
+    "title": "railway_get_bot_url: wrong URL from Telegram username pattern",
+    "symptom": "URL kriss-ai-office-bot-production instead of kriss-bot-production",
+    "cause": "URL was derived from Telegram username, not Railway service name",
+    "fix": "Query Railway GraphQL API for service list, match by name hint",
+    "avoid": "Never derive Railway URL from Telegram username - always use Railway API",
+    "file": "agents/coder.py"
+  },
+  {
+    "id": 13,
+    "ts": "2026-05-13",
+    "title": "Cilly lacked office infrastructure knowledge in CHAT_PROMPT",
+    "symptom": "Cilly asked 'which repo?', 'where are bots registered?' for basic office tasks",
+    "cause": "CHAT_PROMPT had no knowledge of office architecture, repo structure, group IDs",
+    "fix": "Added full office map to CHAT_PROMPT: repos, filly-bot/bot.py BOT_URLS, group IDs, Telethon functions",
+    "avoid": "Always include infrastructure map in system prompt for infra-aware agents",
+    "file": "agents/coder.py"
   }
 ]
