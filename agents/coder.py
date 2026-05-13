@@ -669,62 +669,60 @@ async def create_via_botfather(bot_name_en: str, bot_display: str) -> str:
     async with TelegramClient(StringSession(session), api_id, api_hash) as client:
         botfather = await client.get_entity("@BotFather")
 
-        # Ждём новое сообщение от BotFather после отправки — надёжнее чем просто sleep
-        async def send_and_wait(text: str, wait: float = 3.0) -> str:
-            """Отправить сообщение BotFather и дождаться его ответа."""
-            # Запоминаем ID последнего сообщения до отправки
-            before = await client.get_messages(botfather, limit=1)
-            last_id = before[0].id if before else 0
-
+        async def send(text: str):
             await client.send_message(botfather, text)
 
-            # Ждём новый ответ (polling до 10 секунд)
-            for _ in range(int(wait / 0.5)):
+        async def wait_for_reply(expect_patterns: list, timeout: float = 8.0) -> str:
+            """Ждать ответа BotFather содержащего один из паттернов."""
+            for _ in range(int(timeout / 0.5)):
                 await asyncio.sleep(0.5)
                 msgs = await client.get_messages(botfather, limit=1)
-                if msgs and msgs[0].id > last_id:
-                    return msgs[0].text or ""
-            # Fallback — вернуть последнее что есть
+                if msgs:
+                    text = msgs[0].text or ""
+                    if any(p.lower() in text.lower() for p in expect_patterns):
+                        return text
+            # Вернуть последнее что есть даже если паттерн не найден
             msgs = await client.get_messages(botfather, limit=1)
             return msgs[0].text if msgs else ""
 
-        # Сбрасываем любое незавершённое состояние перед началом
-        logger.info("[botfather] сбрасываю состояние /cancel")
-        await send_and_wait("/cancel", wait=3.0)
+        # Сбрасываем состояние: /start — всегда работает
+        await send("/start")
+        await asyncio.sleep(3)
 
         for attempt, bot_username in enumerate(username_candidates):
             logger.info(f"[botfather] попытка {attempt+1}: @{bot_username}")
 
             if attempt > 0:
-                # Сбрасываем состояние между попытками
-                await send_and_wait("/cancel", wait=2.0)
+                await send("/start")
+                await asyncio.sleep(2)
 
-            reply_name = await send_and_wait("/newbot", wait=4.0)
-            logger.info(f"[botfather] /newbot → {reply_name[:80]}")
+            # Шаг 1: /newbot
+            await send("/newbot")
+            reply1 = await wait_for_reply(["name", "call it", "alright", "bot"], timeout=6.0)
+            logger.info(f"[botfather] /newbot → {reply1[:80]}")
 
-            # BotFather просит имя бота
-            if "name" not in reply_name.lower() and "alright" not in reply_name.lower():
-                logger.warning(f"[botfather] неожиданный ответ на /newbot: {reply_name[:100]}")
+            # Шаг 2: имя бота
+            await send(bot_display)
+            reply2 = await wait_for_reply(["username", "ending", "must end", "t.me"], timeout=6.0)
+            logger.info(f"[botfather] display → {reply2[:80]}")
 
-            reply_user = await send_and_wait(bot_display, wait=4.0)  # имя бота
-            logger.info(f"[botfather] display → {reply_user[:80]}")
-
-            reply = await send_and_wait(bot_username, wait=5.0)      # username
-            logger.info(f"[botfather] username → {reply[:80]}")
+            # Шаг 3: username
+            await send(bot_username)
+            reply3 = await wait_for_reply(["token", "congratulations", "done", "taken", "sorry", "invalid"], timeout=8.0)
+            logger.info(f"[botfather] username → {reply3[:120]}")
 
             # Успех — есть токен
-            token_match = _re.search(r"(\d+:[A-Za-z0-9_-]{35,})", reply)
+            token_match = _re.search(r"(\d+:[A-Za-z0-9_-]{35,})", reply3)
             if token_match:
-                logger.info(f"[botfather] ✅ создан @{bot_username}")
+                logger.info(f"[botfather] ✅ создан @{bot_username}: {token_match.group(1)[:20]}...")
                 return token_match.group(1)
 
-            # Username занят — пробуем следующий
-            if any(p in reply.lower() for p in ["already taken", "taken", "sorry", "try something"]):
+            # Username занят
+            if any(p in reply3.lower() for p in ["already taken", "taken", "sorry", "try something"]):
                 logger.warning(f"[botfather] @{bot_username} занят, пробую следующий...")
                 continue
 
-            # Другая ошибка
-            raise ValueError(f"BotFather ошибка (@{bot_username}): {reply[:200]}")
+            raise ValueError(f"BotFather неожиданный ответ (@{bot_username}): {reply3[:200]}")
 
         raise ValueError(f"Все {len(username_candidates)} вариантов username заняты для {bot_name_en}")
 
