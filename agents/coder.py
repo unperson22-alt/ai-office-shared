@@ -268,7 +268,7 @@ async def redeploy_service(service_id: str) -> bool:
 
 
 # ── Claude helpers ─────────────────────────────────────────────────────────────
-async def ask_claude(prompt: str, system: str = CODER_PROMPT, model: str = "claude-opus-4-5") -> str:
+async def ask_claude(prompt: str, system: str = CODER_PROMPT, model: str = "claude-opus-4-5-20251101") -> str:
     response = await claude.messages.create(
         model=model,
         max_tokens=4096,
@@ -304,7 +304,7 @@ async def analyze_logs(service_name: str, logs: list[str], source_code: str) -> 
 async def generate_fix(source_code: str, fix_description: str) -> str:
     prompt = f"Описание бага: {fix_description}\n\nИсходный код:\n{source_code}"
     # Opus только для генерации фикса — критично чтобы код был правильным
-    return await ask_claude(prompt, system=FIXER_PROMPT, model="claude-opus-4-5")
+    return await ask_claude(prompt, system=FIXER_PROMPT, model="claude-opus-4-5-20251101")
 
 
 # ── Lesson & notifications ─────────────────────────────────────────────────────
