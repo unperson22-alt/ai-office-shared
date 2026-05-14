@@ -525,6 +525,10 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
 # ── Monitor loop ───────────────────────────────────────────────────────────────
 ERROR_PATTERNS = ["Traceback", "Error:", "Exception:", "CRITICAL", "crashed", "exit code"]
 
+# Kill-switch для аварийной остановки мониторинга (например, во время массовых деплоев)
+# Поставь в Railway: CILLY_MONITOR_PAUSED=true → Cilly перестанет анализировать логи ботов
+MONITOR_PAUSED = lambda: os.getenv("CILLY_MONITOR_PAUSED", "").lower() in ("1", "true", "yes")
+
 # Паттерны которые НЕ являются багами — игнорируем
 IGNORE_PATTERNS = [
     "Conflict: terminated by other getUpdates",  # нормально при редеплое
@@ -772,27 +776,37 @@ async def monitor_loop():
     await asyncio.sleep(30)  # подождать пока бот стартует
     logger.info("[monitor] started")
     while True:
+        if MONITOR_PAUSED():
+            logger.info("[monitor] paused via CILLY_MONITOR_PAUSED env var, sleeping...")
+            await asyncio.sleep(60)
+            continue
         for service_id, (repo, main_file) in SERVICES.items():
             try:
                 logs = await get_service_logs(service_id)
                 if not logs:
                     continue
 
-                # Быстрый фильтр — есть ли ошибки вообще
+                # === Filter Layer 1: если в логе вообще присутствует deployment noise — пропускаем весь цикл
+                # (Conflict/getUpdates ошибки порождают stack trace из строк, не содержащих ignore-паттернов;
+                #  они проходили per-line filter и шли на анализ к Claude. Это была реальная дыра.)
+                if any(any(p in l for p in IGNORE_PATTERNS) for l in logs):
+                    logger.info(f"[monitor] {repo}: deployment-related noise in logs (Conflict/restart), skipping whole cycle")
+                    continue
+
+                # === Filter Layer 2: есть ли реальные ошибки помимо deployment-шума
                 error_logs = [l for l in logs if any(p in l for p in ERROR_PATTERNS)]
                 if not error_logs:
                     continue
 
-                # Фильтр игнорируемых паттернов — применяем только к error_logs
-                # (Если реальная ошибка стоит рядом с Conflict при редеплое — не пропускаем)
+                # Доп. per-line ignore (на случай других известных шумовых паттернов)
                 filtered_errors = [
                     l for l in error_logs
                     if not any(p in l for p in IGNORE_PATTERNS)
                 ]
                 if not filtered_errors:
-                    logger.info(f"[monitor] {repo}: only ignorable errors (Conflict/etc), skipping")
+                    logger.info(f"[monitor] {repo}: only ignorable errors after per-line filter, skipping")
                     continue
-                error_logs = filtered_errors  # используем только реальные ошибки дальше
+                error_logs = filtered_errors
 
                 # Дедупликация: хэш первых 3 строк ошибки
                 import hashlib
