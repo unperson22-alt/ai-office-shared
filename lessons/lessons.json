@@ -232,5 +232,55 @@
     "fix": "Added full office map to CHAT_PROMPT: repos, filly-bot/bot.py BOT_URLS, group IDs, Telethon functions",
     "avoid": "Always include infrastructure map in system prompt for infra-aware agents",
     "file": "agents/coder.py"
+  },
+  {
+    "id": 14,
+    "ts": "2026-05-14",
+    "title": "Дублирующиеся ключи в Python dict ломают роутинг",
+    "symptom": "Бот роутит всех на последний URL из дублирующихся ключей; первые варианты молча игнорируются. Баг не вызывает ошибки — тихий сбой.",
+    "cause": "В dict Python при дублировании ключа побеждает последнее значение. В filly-bot ключ \"КРИС\" был прописан 3 раза в BOT_URLS, DM_AGENT_SYSTEMS и _name_map — первые два URL просто терялись.",
+    "context": "filly-bot/bot.py",
+    "fix": "Убрать дублирующиеся ключи, оставить один правильный. Python не предупреждает об этом ни на этапе запуска, ни в логах.",
+    "avoid": "При добавлении нового бота в роутер всегда проверять словари на уникальность ключей. Использовать линтер (pylint/flake8 с --W0108) или явный assert на старте."
+  },
+  {
+    "id": 15,
+    "ts": "2026-05-14",
+    "title": "time.sleep() в async контексте блокирует весь event loop",
+    "symptom": "Бот зависает на 2-8 секунд при каждом Anthropic 529 retry. В это время не обрабатываются другие сообщения, HTTP-запросы к боту тоже висят.",
+    "cause": "Функция _anthropic_call была sync (def), вызывала time.sleep(), и при этом вызывалась из async handle_message. time.sleep блокирует не только себя, но весь asyncio event loop.",
+    "context": "filly-bot/bot.py, gosling-bot/bot.py",
+    "fix": "Переделать _anthropic_call в async def, заменить time.sleep на await asyncio.sleep, anthropic.Anthropic на AsyncAnthropic, все вызовы добавить await.",
+    "avoid": "В async-проектах никогда не использовать time.sleep, requests, или другие блокирующие вызовы. Для Anthropic — всегда AsyncAnthropic. При code review искать sync def с sleep внутри async контекста."
+  },
+  {
+    "id": 16,
+    "ts": "2026-05-14",
+    "title": "Новый бот не попал в SERVICES у Силли — мониторинг слепой",
+    "symptom": "gosling-bot падал и поднимался, но Силли никогда не реагировал и не отправлял уроки — бот просто не существовал для мониторинга.",
+    "cause": "При создании gosling-bot его service_id не добавили в SERVICES в coder.py. Силли мониторит только то что прописано явно.",
+    "context": "ai-office-shared/agents/coder.py",
+    "fix": "Добавить ed03c9d3-e83f-4675-9f0a-a4d4fc622365: (gosling-bot, bot.py) в SERVICES.",
+    "avoid": "После создания каждого нового бота: обязательный чеклист — добавить service_id в SERVICES у Силли. Можно автоматизировать: при create_bot Силли сам добавляет свой service_id."
+  },
+  {
+    "id": 17,
+    "ts": "2026-05-14",
+    "title": "IGNORE_PATTERNS по всему лог-блоку маскирует реальные ошибки",
+    "symptom": "Реальный баг в сервисе не замечается Силли если в том же логе есть строка Conflict: terminated by other getUpdates (нормально при редеплое).",
+    "cause": "Проверка any(p in all_log_block ...) смотрит на весь набор логов целиком. Если Traceback стоит рядом с Conflict — весь сервис пропускается.",
+    "context": "ai-office-shared/agents/coder.py — monitor_loop",
+    "fix": "Применять IGNORE_PATTERNS только к error_logs (строкам с ошибками), а не ко всему блоку. filtered_errors = [l for l in error_logs if not any(p in l for p in IGNORE_PATTERNS)]",
+    "avoid": "При написании фильтров логов всегда применять исключения к конкретным строкам-ошибкам, не к общему блоку. Принцип: ignore убирает шум, не закрывает глаза на весь сервис."
+  },
+  {
+    "id": 18,
+    "ts": "2026-05-14",
+    "title": "Деплой Railway не стартует если нет предыдущего успешного деплоя",
+    "symptom": "serviceInstanceRedeploy возвращает true, но новый деплой не появляется в списке. Сервис висит в состоянии вечного FAILED.",
+    "cause": "serviceInstanceRedeploy перезапускает последний УСПЕШНЫЙ деплой. Если сервис никогда не деплоился успешно — Railway не знает что запускать.",
+    "context": "gosling-bot — все 5 деплоев были FAILED, поэтому redeploy ничего не делал",
+    "fix": "Обновить переменную окружения (_CACHE_BUST) через variableCollectionUpsert — Railway создаёт новый деплой при изменении env vars.",
+    "avoid": "Если сервис не имеет ни одного SUCCESS деплоя, использовать variableCollectionUpsert для тригера, а не serviceInstanceRedeploy. При просмотре статусов использовать first: N (свежие), не last: N (старые)."
   }
 ]
