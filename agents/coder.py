@@ -78,6 +78,7 @@ recent_group_msgs: deque = deque(maxlen=30)  # (sender, text, is_bot)
 # Redis — персистентная дедупликация seen_errors и last_seen
 REDIS_URL = os.getenv("REDIS_URL", "")
 _redis: aioredis.Redis | None = None
+_office_decisions: list = []  # правила office:decisions из Redis
 
 async def get_redis() -> aioredis.Redis | None:
     global _redis
@@ -89,6 +90,85 @@ async def get_redis() -> aioredis.Redis | None:
             logger.warning(f"Redis unavailable: {e}")
             _redis = None
     return _redis
+
+# ── Office Decisions (office:decisions Redis key) ────────────────────────────
+DECISIONS_KEY = "office:decisions"
+
+DEFAULT_DECISIONS = {
+    "_meta": {"key": "office:decisions", "updated": "2026-05"},
+    "rules": [
+        {"id": "D001", "do_not": "Авто-фиксить TelegramConflictError при рестарте",
+         "because": "Это норма при deployment. Не баг — не трогать."},
+        {"id": "D002", "do_not": "Деплоить ≥2 ботов без паузы Силли через ollama_switch.py pause",
+         "because": "Deployment-шум триггерит Силли на ложные тревоги."},
+        {"id": "D003", "do_not": "Предлагать PixiJS для анимации дашборда",
+         "because": "Отклонено — переход на Phaser.js. Phaser лучше для персонажной анимации."},
+        {"id": "D004", "do_not": "Слать боту сообщения напрямую, минуя Филли",
+         "because": "Филли — единственная точка входа. Прямые вызовы ломают роутинг."},
+        {"id": "D005", "do_not": "Авто-фиксить баг если он уже фиксился 3+ раза с одним решением",
+         "because": "Повторяющийся баг с одинаковым фиксом = системная проблема. Эскалировать Владу."},
+        {"id": "D006", "do_not": "Создавать единую БД всех изменений для system prompt",
+         "because": "Рост БД → токены → давление на контекст. Решение: SYSTEM_STATE.md + office:decisions."},
+    ]
+}
+
+async def init_office_decisions():
+    """Загружает office:decisions из Redis при старте.
+    Если ключ не найден — создаёт из DEFAULT_DECISIONS."""
+    global _office_decisions
+    r = await get_redis()
+    if not r:
+        logger.warning("[decisions] Redis недоступен, office:decisions не загружен")
+        _office_decisions = DEFAULT_DECISIONS["rules"]
+        return
+    try:
+        raw = await r.get(DECISIONS_KEY)
+        if raw:
+            data = json.loads(raw)
+            _office_decisions = data.get("rules", [])
+            logger.info(f"[decisions] Загружено {len(_office_decisions)} правил из Redis")
+        else:
+            # Первый запуск — инициализируем дефолтными правилами
+            await r.set(DECISIONS_KEY, json.dumps(DEFAULT_DECISIONS, ensure_ascii=False))
+            _office_decisions = DEFAULT_DECISIONS["rules"]
+            logger.info(f"[decisions] office:decisions создан в Redis ({len(_office_decisions)} правил)")
+    except Exception as e:
+        logger.error(f"[decisions] Ошибка при загрузке: {e}")
+        _office_decisions = DEFAULT_DECISIONS["rules"]
+
+
+def _check_decisions(context: str) -> dict | None:
+    """Проверяет контекст против office:decisions.
+    Возвращает первое совпавшее правило или None."""
+    ctx_lower = context.lower()
+    for rule in _office_decisions:
+        keywords = rule.get("do_not", "").lower().split()
+        matches = sum(1 for kw in keywords if len(kw) > 3 and kw in ctx_lower)
+        if matches >= 2:
+            return rule
+    return None
+
+
+async def add_office_decision(rule_id: str, do_not: str, because: str) -> bool:
+    """Добавляет новое правило в office:decisions (Redis + in-memory)."""
+    global _office_decisions
+    import datetime
+    new_rule = {"id": rule_id, "do_not": do_not, "because": because,
+                "added": datetime.datetime.now().strftime("%Y-%m")}
+    try:
+        r = await get_redis()
+        if r:
+            raw = await r.get(DECISIONS_KEY)
+            data = json.loads(raw) if raw else {"rules": []}
+            data["rules"].append(new_rule)
+            await r.set(DECISIONS_KEY, json.dumps(data, ensure_ascii=False))
+        _office_decisions.append(new_rule)
+        logger.info(f"[decisions] Добавлено правило {rule_id}: {do_not}")
+        return True
+    except Exception as e:
+        logger.error(f"[decisions] Ошибка записи: {e}")
+        return False
+
 
 # Системные промпты каждого бота — для мгновенного ответа с web search
 BOT_SYSTEMS_WEB = {
@@ -151,6 +231,8 @@ TELEGRAM (Telethon функции в коде):
 
 RAILWAY: проект 271b40b7, env 2efaaf60. Ключи в env.
 GitHub: read_file/push_file из shared.github_tools.
+SYSTEM_STATE.md в ai-office-shared — читай в начале сложных задач. Секция "Отклонённые решения" — обязательна при архитектурных вопросах.
+office:decisions в Redis — твои ограничения. Загружаются автоматически при старте через init_office_decisions().
 
 == ПРАВИЛО ==
 НИКОГДА не спрашивай "какой репо" или "где конфиг" — ты знаешь структуру.
@@ -491,6 +573,19 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
     fix_desc    = analysis.get("fix_description", "")
     affected    = main_file  # Всегда используем файл из SERVICES, не доверяем LLM
 
+    # Проверяем office:decisions — нет ли запрета на этот фикс
+    if _office_decisions:
+        combined = f"{description} {fix_desc} {service_name}"
+        blocked = _check_decisions(combined)
+        if blocked:
+            await notify_office(
+                f"⛔ Фикс заблокирован правилом {blocked['id']}:\n"
+                f"Нельзя: {blocked['do_not']}\n"
+                f"Причина: {blocked['because']}"
+            )
+            logger.info(f"[decisions] fix blocked by {blocked['id']} for {service_name}")
+            return
+
     try:
         source_code = await read_file(repo, affected)
     except Exception as e:
@@ -829,6 +924,22 @@ async def monitor_loop():
                     expired = [k for k, v in seen_errors.items() if v < cutoff]
                     for k in expired:
                         del seen_errors[k]
+
+                # Счётчик повторений — если баг встречается 3+ раз, эскалируем (правило D005)
+                fix_count_key = f"fix_count:{service_id}:{error_signature}"
+                r_count = await get_redis()
+                if r_count:
+                    fix_count = int(await r_count.get(fix_count_key) or 0)
+                    if fix_count >= 3:
+                        await notify_office(
+                            f"⚠️ ЭСКАЛАЦИЯ: баг в *{repo}* встречается уже {fix_count} раз!\n"
+                            f"Одинаковый фикс не помогает — нужен ручной разбор.\n"
+                            f"Сигнатура: `{error_signature[:16]}`"
+                        )
+                        logger.warning(f"[monitor] escalation: {repo} fix_count={fix_count}")
+                        continue
+                    await r_count.incr(fix_count_key)
+                    await r_count.expire(fix_count_key, 86400 * 7)  # хранить 7 дней
 
                 logger.info(f"[monitor] found {len(error_logs)} error lines in {repo}, analyzing...")
 
@@ -2232,6 +2343,8 @@ async def handle_get_bot_token(request):
         return web.json_response({"error": str(e)})
 
 async def main():
+    # Загружаем office:decisions из Redis при старте
+    await init_office_decisions()
     asyncio.create_task(monitor_loop())
     asyncio.create_task(daily_audit_loop())
     # HTTP server for Filly routing
@@ -2249,5 +2362,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
