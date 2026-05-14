@@ -36,6 +36,11 @@ BOT_TOKEN       = os.getenv("CODER_BOT_TOKEN")
 ANTHROPIC_KEY   = os.getenv("ANTHROPIC_API_KEY")
 LESSONS_CHAT_ID = os.getenv("LESSONS_CHAT_ID")
 OFFICE_CHAT_ID  = os.getenv("OFFICE_CHAT_ID")
+
+# Ollama — локальная модель для лёгких задач (Haiku-tier classification)
+OLLAMA_HOST     = os.getenv("OLLAMA_HOST", "").strip().rstrip("/\\")
+OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL", "qwen3:8b")
+OLLAMA_ENABLED  = os.getenv("OLLAMA_ENABLED", "").lower() in ("1", "true", "yes")
 RAILWAY_TOKEN   = os.getenv("RAILWAY_TOKEN")
 RAILWAY_PROJECT = "271b40b7-199a-429a-88ef-ca417f26a638"
 GITHUB_USER     = "unperson22-alt"
@@ -375,8 +380,40 @@ async def redeploy_service(service_id: str) -> bool:
         return False
 
 
+# ── Ollama helper (silent fallback to Claude) ─────────────────────────────────
+async def _try_ollama(prompt: str, system: str, timeout: float = 20.0) -> str | None:
+    """Пробует локальную Ollama. Возвращает текст или None при любой ошибке."""
+    if not (OLLAMA_ENABLED and OLLAMA_HOST):
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as cli:
+            r = await cli.post(
+                f"{OLLAMA_HOST}/api/chat",
+                json={
+                    "model": OLLAMA_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "stream": False,
+                },
+            )
+            if r.status_code != 200:
+                return None
+            text = r.json().get("message", {}).get("content", "")
+            return text or None
+    except Exception as e:
+        logger.info(f"Ollama unavailable, fallback to Claude: {e.__class__.__name__}: {e}")
+        return None
+
+
 # ── Claude helpers ─────────────────────────────────────────────────────────────
 async def ask_claude(prompt: str, system: str = CODER_PROMPT, model: str = "claude-opus-4-6") -> str:
+    # Haiku-tier (классификация/анализ) сначала пробует Ollama, fallback на Haiku
+    if model == "claude-haiku-4-5-20251001":
+        result = await _try_ollama(prompt, system)
+        if result is not None:
+            return result
     response = await claude.messages.create(
         model=model,
         max_tokens=4096,
