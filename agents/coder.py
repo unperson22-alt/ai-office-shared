@@ -397,6 +397,7 @@ async def _try_ollama(prompt: str, system: str, timeout: float = 20.0) -> str | 
                         {"role": "user", "content": prompt},
                     ],
                     "stream": False,
+                    "keep_alive": "30m",  # держим модель в RAM между циклами
                 },
             )
             if r.status_code != 200:
