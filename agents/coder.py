@@ -64,6 +64,7 @@ SERVICES = {
     "5533bc5f-24aa-4079-903b-50bcde4cdd01": ("pilly-bot",         "bot.py"),
     "92f70bbb-70ea-474c-be0d-5cc1c9bd8f4e": ("kriss-bot",        "bot.py"),
     "a5e37cc4-0a9f-4700-b6d3-d39b958ce0cb": ("villy-bot",         "bot.py"),
+    "ed03c9d3-e83f-4675-9f0a-a4d4fc622365": ("gosling-bot",       "bot.py"),  # был пропущен
 }
 
 bot    = Bot(token=BOT_TOKEN)
@@ -771,14 +772,16 @@ async def monitor_loop():
                 if not error_logs:
                     continue
 
-                # Фильтр игнорируемых паттернов — проверяем весь блок целиком
-                # (Traceback и Conflict — разные строки, нужно смотреть на весь контекст)
-                # Проверяем IGNORE_PATTERNS по всем логам (не только error строкам)
-                # иначе Conflict в соседней строке от Traceback не ловится
-                all_log_block = "\n".join(logs)
-                if any(p in all_log_block for p in IGNORE_PATTERNS):
+                # Фильтр игнорируемых паттернов — применяем только к error_logs
+                # (Если реальная ошибка стоит рядом с Conflict при редеплое — не пропускаем)
+                filtered_errors = [
+                    l for l in error_logs
+                    if not any(p in l for p in IGNORE_PATTERNS)
+                ]
+                if not filtered_errors:
                     logger.info(f"[monitor] {repo}: only ignorable errors (Conflict/etc), skipping")
                     continue
+                error_logs = filtered_errors  # используем только реальные ошибки дальше
 
                 # Дедупликация: хэш первых 3 строк ошибки
                 import hashlib
