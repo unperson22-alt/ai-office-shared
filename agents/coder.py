@@ -728,30 +728,40 @@ async def run_daily_audit() -> str:
 
 
 async def daily_audit_loop():
-    """Запускать полный аудит раз в сутки в 09:00 UTC."""
+    """Запускать полный аудит дважды в сутки: 09:00 и 18:00 UTC."""
     import datetime
-    logger.info("[daily_audit] loop started")
+    logger.info("[daily_audit] loop started (09:00 + 18:00 UTC)")
+
+    AUDIT_HOURS = [9, 18]  # утренний и вечерний аудит
 
     while True:
         now = datetime.datetime.now(datetime.timezone.utc)
-        # Следующие 09:00 UTC
-        target = now.replace(hour=9, minute=0, second=0, microsecond=0)
-        if now >= target:
+        # Ищем ближайший слот из AUDIT_HOURS
+        target = None
+        for hour in AUDIT_HOURS:
+            candidate = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+            if candidate > now:
+                target = candidate
+                break
+        if target is None:
+            # Все слоты сегодня прошли — берём первый завтра
+            target = now.replace(hour=AUDIT_HOURS[0], minute=0, second=0, microsecond=0)
             target += datetime.timedelta(days=1)
+
         wait_seconds = (target - now).total_seconds()
-        logger.info(f"[daily_audit] следующий аудит через {wait_seconds/3600:.1f}ч ({target.strftime('%d.%m %H:%M UTC')})")
+        slot_label = "утренний" if target.hour == 9 else "вечерний"
+        logger.info(f"[daily_audit] следующий аудит ({slot_label}) через {wait_seconds/3600:.1f}ч ({target.strftime('%d.%m %H:%M UTC')})")
 
         await asyncio.sleep(wait_seconds)
 
         try:
             report = await run_daily_audit()
             await notify_office(report)
-            logger.info("[daily_audit] ✅ отчёт отправлен")
-            # Log to ops.md
+            logger.info(f"[daily_audit] ✅ {slot_label} отчёт отправлен")
             await append_ops_log("daily_audit", "all_services", report[:300])
         except Exception as e:
             logger.error(f"[daily_audit] failed: {e}")
-            await notify_office(f"⚠️ Ежедневный аудит упал: {e}")
+            await notify_office(f"⚠️ Аудит ({slot_label}) упал: {e}")
 
         await asyncio.sleep(60)  # небольшой отступ чтобы не запустить дважды
 
