@@ -1306,8 +1306,6 @@ async def railway_create_service(repo_name: str, bot_display_name: str, variable
 
 async def handle_natural_language(message_text: str, chat_id: int, reply_func, history: list = None):
     """Process any natural language request — detect intent and execute."""
-    await reply_func("🧠 Разбираю запрос...")
-
     # Читаем ops.md — лог последних действий Claude и Силли
     # Это даёт Силли контекст о том что уже было сделано
     ops_context = ""
