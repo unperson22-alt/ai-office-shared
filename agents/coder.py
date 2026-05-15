@@ -412,7 +412,7 @@ async def railway_query(query: str, variables: dict = None) -> dict:
         payload["variables"] = variables
     async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
         r = await client.post(
-            "https://backboard.railway.com/graphql/v2",
+            "https://backboard.railway.app/graphql/v2",
             headers={"Authorization": f"Bearer {RAILWAY_TOKEN}", "Content-Type": "application/json"},
             json=payload
         )
@@ -1352,7 +1352,7 @@ async def railway_graphql(query: str, variables: dict = None) -> dict:
         if variables:
             payload["variables"] = variables
         r = await client.post(
-            "https://backboard.railway.com/graphql/v2",
+            "https://backboard.railway.app/graphql/v2",
             headers={"Authorization": f"Bearer {RAILWAY_TOKEN_VAL}", "Content-Type": "application/json"},
             json=payload
         )
