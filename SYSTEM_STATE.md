@@ -12,7 +12,7 @@
 | Платформа | Railway |
 | Workspace ID | `97bab36e` |
 | Project "awake-happiness" | `271b40b7` |
-| Railway API Token | `f21b20a0-3b7e-4746-a991-981f5679afc6` |
+| Railway API Token | `a3792a0b-f903-4ab0-8d72-6fcaade81aab` |
 | Office Telegram Group | `-5194783850` |
 | Bug Lessons Group | `-5197140411` |
 
