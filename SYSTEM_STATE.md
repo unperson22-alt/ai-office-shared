@@ -1,7 +1,7 @@
 # SYSTEM_STATE.md — AI Office Architecture
 > Живой документ. Читается Claude в начале сложных чатов.  
 > Обновляется вручную или Силли после значимых изменений.  
-> Последнее обновление: май 2026
+> Последнее обновление: 15 мая 2026 (Карыч — fix: railway.com→railway.app, новый RAILWAY_TOKEN, GH_PAT обновлён)
 
 ---
 
@@ -12,7 +12,7 @@
 | Платформа | Railway |
 | Workspace ID | `97bab36e` |
 | Project "awake-happiness" | `271b40b7` |
-| Railway API Token | `a3792a0b-f903-4ab0-8d72-6fcaade81aab` |
+| Railway API Token | `155eab9f-dfd9-4bd4-b23e-bf1dd3a62b9b` |
 | Office Telegram Group | `-5194783850` |
 | Bug Lessons Group | `-5197140411` |
 
