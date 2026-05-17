@@ -302,5 +302,32 @@
     "context": "vietnam-bot/bot.py строка 130: topics = json.loads(raw_text)",
     "fix": "Добавить try/except вокруг json.loads() и guard перед ним: если start == -1 (нет '[' в ответе) → return [] вместо краша. send_digest() уже обрабатывает пустой список корректно.",
     "how_to_avoid": "НИКОГДА не вызывай json.loads() на LLM-ответе без try/except. LLM может вернуть что угодно — текст, объяснения, пустую строку. Всегда: try: json.loads() except JSONDecodeError: return fallback."
+  },
+  {
+    "id": 21,
+    "date": "2026-05-17",
+    "bot": "tilly-bot, milly-bot",
+    "symptom": "Боты отвечали на сообщения где упоминалось любое слово содержащее имя бота — например 'basically' для Тилли (substring match)",
+    "root_cause": "should_respond_in_group() использовал `BOT_NAME.lower() in msg_text` — substring match вместо word-boundary. Любое слово содержащее имя бота давало True.",
+    "fix": "Заменили на `re.search(r'\\\\b' + re.escape(BOT_NAME.lower()) + r'\\\\b', msg_text)` — проверка по границам слова.",
+    "prevention": "При детекте имён в тексте всегда использовать word-boundary regex, не substring match."
+  },
+  {
+    "id": 22,
+    "date": "2026-05-17",
+    "bot": "tilly-bot, milly-bot",
+    "symptom": "Потенциальный AttributeError при получении non-text updates в группе (стикеры, фото, service messages)",
+    "root_cause": "handle_message() не проверял `update.message` и `update.message.text` перед обработкой. MessageHandler с filters.TEXT не защищает от всех non-text updates.",
+    "fix": "Добавили guard в начало handle_message: `if not update.message or not update.message.text: return`",
+    "prevention": "Всегда добавлять guard на update.message в начале handle_message для групповых ботов."
+  },
+  {
+    "id": 23,
+    "date": "2026-05-17",
+    "bot": "watchdog-bot",
+    "symptom": "При каждом env var изменении Railway триггерил новый деплой и watchdog слал стартовое сообщение в Telegram. 6 upsert → 6 'Watchdog запущен' в группе.",
+    "root_cause": "Стартовое Telegram-уведомление при запуске бота. Railway деплоит при каждом изменении env vars — при batch upsert это N деплоев.",
+    "fix": "Убрали стартовое tg() сообщение из watchdog. Уведомления только при реальных событиях (Силли упала / восстановилась).",
+    "prevention": "Не слать стартовые уведомления в боты которые могут часто рестартовать. Batch env var изменения в один вызов если возможно."
   }
 ]
