@@ -47,9 +47,21 @@ async def create_repo(repo: str, description: str = "", private: bool = True) ->
 async def push_file(repo: str, path: str, content: str, commit_msg: str) -> dict:
     """
     Создать или обновить файл в репо.
+    Для .py файлов автоматически валидирует синтаксис перед пушем.
     """
     if not GITHUB_TOKEN:
         raise EnvironmentError("GITHUB_TOKEN не задан в переменных окружения Railway")
+
+    # Валидация Python синтаксиса — предотвращает пуш сломанного кода
+    if path.endswith(".py"):
+        try:
+            import ast as _ast
+            _ast.parse(content)
+        except SyntaxError as e:
+            raise ValueError(
+                f"Python SyntaxError в {path}: {e.msg} (строка {e.lineno}). "
+                f"Файл НЕ запушен. Исправь код перед повторной попыткой."
+            )
 
     url = f"{BASE_URL}/repos/{GITHUB_USER}/{repo}/contents/{path}"
     encoded = base64.b64encode(content.encode()).decode()
