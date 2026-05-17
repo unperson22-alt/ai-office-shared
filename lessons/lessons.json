@@ -329,5 +329,35 @@
     "root_cause": "Стартовое Telegram-уведомление при запуске бота. Railway деплоит при каждом изменении env vars — при batch upsert это N деплоев.",
     "fix": "Убрали стартовое tg() сообщение из watchdog. Уведомления только при реальных событиях (Силли упала / восстановилась).",
     "prevention": "Не слать стартовые уведомления в боты которые могут часто рестартовать. Batch env var изменения в один вызов если возможно."
+  },
+  {
+    "id": 24,
+    "date": "2026-05-17",
+    "title": "_client не определён в handle_task (mama-bot)",
+    "symptom": "Эллис возвращала NameError на любой запрос от Филли через /task endpoint",
+    "cause": "В handle_task использовалась _client.messages.create() — _client это параметр функции _call_llm(), в глобальном scope он не существует",
+    "context": "Баг был в оригинальном коде mama-bot, существовал с момента создания. Проявился бы при первом обращении Филли к Эллис",
+    "fix": "Заменить _client.messages.create() на claude.messages.create() в handle_task",
+    "prevention": "В HTTP handlers использовать только process() или явно claude.messages.create(). Функцию _call_llm вызывать только через явный аргумент claude"
+  },
+  {
+    "id": 25,
+    "date": "2026-05-17",
+    "title": "update.message.text = None при нетекстовых сообщениях в группе",
+    "symptom": "Тилли/Милли падали с TypeError при получении фото/стикера/голосового в группе",
+    "cause": "После добавления поддержки группы не был добавлен guard: msg = update.message.text возвращает None для нетекстовых",
+    "context": "Проявляется только в группе — в личке фильтр filters.TEXT отсекал нетекстовые. В группе с новой логикой should_respond_in_group нетекстовые сообщения тоже проходили в handler",
+    "fix": "Добавить 'if not msg: return' сразу после msg = update.message.text",
+    "prevention": "При добавлении обработки группового чата всегда добавлять None guard для message.text"
+  },
+  {
+    "id": 26,
+    "date": "2026-05-17",
+    "title": "Генерация картинок в ответ на групповые сообщения",
+    "symptom": "Тилли/Милли запускали дорогую генерацию картинок если в группе кто-то написал 'нарисуй'",
+    "cause": "Проверка wants_image(msg) не учитывала что бот находится в группе",
+    "context": "При случайном ответе в группе (30% шанс) бот мог запустить image generation по совпадению ключевых слов",
+    "fix": "Условие: if wants_image(msg) and not is_group",
+    "prevention": "Image generation — только в личных чатах. При расширении handler на группу проверять все side-effects"
   }
 ]
