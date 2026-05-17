@@ -2364,6 +2364,11 @@ async def handle_get_bot_token(request):
     except Exception as e:
         return web.json_response({"error": str(e)})
 
+async def handle_health(request):
+    """Simple health check endpoint for external monitoring (Cloudflare Watchdog etc.)."""
+    return web.json_response({"status": "ok", "service": "cilly-bot"})
+
+
 async def main():
     # Загружаем office:decisions из Redis при старте
     await init_office_decisions()
@@ -2374,6 +2379,7 @@ async def main():
     app.router.add_post("/task", handle_cilly_task)
     app.router.add_get("/secrets", handle_secrets)
     app.router.add_post("/promote_bots", handle_promote_bots)
+    app.router.add_get("/health", handle_health)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080)))
