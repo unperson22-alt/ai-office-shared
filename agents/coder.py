@@ -2314,6 +2314,7 @@ async def handle_secrets(request):
     return web.json_response({
         "GITHUB_TOKEN": os.getenv("GITHUB_TOKEN", ""),
         "GH_PAT": os.getenv("GH_PAT", ""),
+        "RAILWAY_TOKEN_VLAD": os.getenv("RAILWAY_TOKEN_VLAD", ""),
     })
 
 # ── Main ───────────────────────────────────────────────────────────────────────
