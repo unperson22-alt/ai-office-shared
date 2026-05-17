@@ -725,9 +725,9 @@ async def run_daily_audit() -> str:
                    }""",
                 {"id": service_id}
             )
-            svc = data.get("data", {}).get("service", {})
+            svc = (data.get("data") or {}).get("service") or {}
             name = svc.get("name", repo)
-            deps = svc.get("deployments", {}).get("edges", [])
+            deps = (svc.get("deployments") or {}).get("edges") or []
             status = deps[0]["node"]["status"] if deps else "NO_DEPLOY"
             if status == "SUCCESS":
                 deploy_ok.append(name)
@@ -1382,7 +1382,7 @@ async def railway_get_service_id(repo_name: str) -> str | None:
            }""",
         {"id": PROJECT_ID}
     )
-    for edge in data.get("data", {}).get("project", {}).get("services", {}).get("edges", []):
+    for edge in ((data.get("data") or {}).get("project") or {}).get("services", {}).get("edges") or []:
         if edge["node"]["name"] == repo_name:
             return edge["node"]["id"]
     return None
@@ -1397,7 +1397,7 @@ async def railway_get_bot_url(name_hint: str) -> str:
                }""",
             {"id": PROJECT_ID}
         )
-        services = data.get("data", {}).get("project", {}).get("services", {}).get("edges", [])
+        services = ((data.get("data") or {}).get("project") or {}).get("services", {}).get("edges") or []
         # Нормализуем hint
         hint_clean = name_hint.replace("_bot", "").replace("_", "-").replace(" ", "-").lower()
         candidates = [
@@ -1579,7 +1579,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                        }""",
                     {"proj": PROJECT_ID, "svc": existing_sid, "env": ENVIRONMENT_ID}
                 )
-                existing_vars = vars_data.get("data", {}).get("variables", {})
+                existing_vars = (vars_data.get("data") or {}).get("variables") or {}
                 if "TELEGRAM_TOKEN" in existing_vars:
                     await reply_func(f"✅ Бот `{bot_repo}` уже полностью настроен.")
                     return
