@@ -282,5 +282,25 @@
     "context": "gosling-bot — все 5 деплоев были FAILED, поэтому redeploy ничего не делал",
     "fix": "Обновить переменную окружения (_CACHE_BUST) через variableCollectionUpsert — Railway создаёт новый деплой при изменении env vars.",
     "avoid": "Если сервис не имеет ни одного SUCCESS деплоя, использовать variableCollectionUpsert для тригера, а не serviceInstanceRedeploy. При просмотре статусов использовать first: N (свежие), не last: N (старые)."
+  },
+  {
+    "id": 19,
+    "title": "Силли пушит невалидный Python — SyntaxError ведёт к CRASHED на 2+ дня",
+    "date": "2026-05-17",
+    "symptom": "cilly-bot статус CRASHED в Railway, не реагирует на сообщения, аудит не проводится. ON_FAILURE retry исчерпан (10 попыток), каждый рестарт даёт тот же SyntaxError.",
+    "cause": "Силли (или LLM через generate_fix) запушила agents/coder.py с SyntaxError строка 262: четыре кавычки '\"\"\"\"' вместо трёх '\"\"\"' в конце CHAT_PROMPT. push_file не валидировал Python синтаксис перед пушем.",
+    "context": "ai-office-shared/agents/coder.py + shared/github_tools.py → push_file()",
+    "fix": "1. Найти SyntaxError через Railway deployment logs. 2. Прочитать файл через GitHub API. 3. ast.parse() для верификации проблемы. 4. Исправить лишнюю кавычку. 5. Запушить фикс. Railway autodeploy → SUCCESS.",
+    "how_to_avoid": "Добавить ast.parse() валидацию в push_file() для всех .py файлов ПЕРЕД пушем. Теперь реализовано в shared/github_tools.py — невалидный код не уйдёт на GitHub никогда."
+  },
+  {
+    "id": 20,
+    "title": "Vietnam-bot крашится каждую ночь: json.loads() без try/except на LLM ответе",
+    "date": "2026-05-17",
+    "symptom": "vietnam-bot падает каждый день в 01:00 UTC. Railway делает restart (ON_FAILURE), на второй попытке в 01:01 успешно. Пользователь видит это как 'бот упал и надо перезапускать'.",
+    "cause": "research_vietnam_topics() вызывает LLM с web_search. Когда LLM не возвращает чистый JSON (объясняет процесс, или ответ начинается не с '['), функция извлечения JSON возвращает пустую строку. json.loads('') → JSONDecodeError → необработанное исключение → exit code 1 → Railway crash.",
+    "context": "vietnam-bot/bot.py строка 130: topics = json.loads(raw_text)",
+    "fix": "Добавить try/except вокруг json.loads() и guard перед ним: если start == -1 (нет '[' в ответе) → return [] вместо краша. send_digest() уже обрабатывает пустой список корректно.",
+    "how_to_avoid": "НИКОГДА не вызывай json.loads() на LLM-ответе без try/except. LLM может вернуть что угодно — текст, объяснения, пустую строку. Всегда: try: json.loads() except JSONDecodeError: return fallback."
   }
 ]
