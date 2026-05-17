@@ -105,3 +105,8 @@
 📚 Новых паттернов багов не найдено
 
 🟡 Статус офиса: ТРЕБУЕТ ВНИМАНИЯ
+
+**[2026-05-17 09:00 UTC] Силли — all_services:** daily_audit
+> 📋 Ежедневный аудит офиса — 17.05.2026 09:00 UTC
+
+❌ Деплои упали: logger-bot:ERROR('NoneType' object has no attribute 'get'), tilly-bot:ERROR('NoneType' object has no attribute 'get'), filly-bot:ERROR('NoneType' object has no attribute 'get'), doctor-bot:ERROR('NoneType' object has no attribute 'get'
