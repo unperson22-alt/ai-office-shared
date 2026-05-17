@@ -43,6 +43,7 @@ OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL", "qwen3:8b")
 OLLAMA_ENABLED  = os.getenv("OLLAMA_ENABLED", "").lower() in ("1", "true", "yes")
 RAILWAY_TOKEN   = os.getenv("RAILWAY_TOKEN")
 RAILWAY_PROJECT = "271b40b7-199a-429a-88ef-ca417f26a638"
+RAILWAY_ENV_ID  = "2efaaf60-ba39-492c-bf86-007fd505493f"
 GITHUB_USER     = "unperson22-alt"
 LESSONS_FILE    = "lessons/lessons.json"
 
@@ -720,15 +721,16 @@ async def run_daily_audit() -> str:
     for service_id, (repo, _) in SERVICES.items():
         try:
             data = await railway_query(
-                """query($id: String!) {
-                     service(id: $id) { name deployments(first:1) { edges { node { status } } } }
+                """query($pid: String!, $sid: String!, $eid: String!) {
+                     deployments(first:1, input:{projectId:$pid, serviceId:$sid, environmentId:$eid}) {
+                       edges { node { status } }
+                     }
                    }""",
-                {"id": service_id}
+                {"pid": RAILWAY_PROJECT, "sid": service_id, "eid": RAILWAY_ENV_ID}
             )
-            svc = (data.get("data") or {}).get("service") or {}
-            name = svc.get("name", repo)
-            deps = (svc.get("deployments") or {}).get("edges") or []
+            deps = (data.get("data") or {}).get("deployments", {}).get("edges") or []
             status = deps[0]["node"]["status"] if deps else "NO_DEPLOY"
+            name = repo
             if status == "SUCCESS":
                 deploy_ok.append(name)
             else:
