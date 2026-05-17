@@ -259,7 +259,7 @@ office:decisions в Redis — твои ограничения.
 == ПРАВИЛО ==
 НИКОГДА не спрашивай "какой репо" или "где конфиг" — ты знаешь структуру.
 Для ВНЕШНЕГО бота — только: username + URL + описание одной фразой.
-Отвечай кратко. Если задача — делай, не рассуждай долго.""""
+Отвечай кратко. Если задача — делай, не рассуждай долго."""
 
 ANALYZER_PROMPT = """Анализатор багов Python/Telegram/Railway. JSON без markdown:
 {"is_bug":bool,"confidence":"high|low","bug_type":"crash|logic|config|network|unknown","description":"1-2 предл","affected_file":"path|null","fix_description":"конкретно","lesson_title":"","lesson_symptom":"","lesson_cause":"","lesson_fix":"","lesson_avoid":""}
