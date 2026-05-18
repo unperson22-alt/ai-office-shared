@@ -43,7 +43,7 @@ OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL", "qwen3:8b")
 OLLAMA_ENABLED  = os.getenv("OLLAMA_ENABLED", "").lower() in ("1", "true", "yes")
 RAILWAY_TOKEN   = os.getenv("RAILWAY_TOKEN")
 RAILWAY_PROJECT = "271b40b7-199a-429a-88ef-ca417f26a638"
-RAILWAY_ENV_ID  = "2efaaf60-ba39-492c-bf86-007fd505493f"
+RAILWAY_ENV_ID  = "2efaaf60-ba39-492c-bf86-007fd505493f"  # BUILD:20260518-1803
 GITHUB_USER     = "unperson22-alt"
 LESSONS_FILE    = "lessons/lessons.json"
 
