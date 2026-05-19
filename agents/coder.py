@@ -14,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message
+from aiogram.types import Message, MessageReactionUpdated
 from aiogram.filters import CommandStart
 from anthropic import AsyncAnthropic
 import redis.asyncio as aioredis
@@ -91,6 +91,29 @@ async def get_redis() -> aioredis.Redis | None:
             logger.warning(f"Redis unavailable: {e}")
             _redis = None
     return _redis
+
+
+# ── FEEDBACK LOOP: msg owner mapping + reactions classification ─────────────
+BOT_NAME_LOWER = "силли"  # Redis-ключ как в /metrics Фили
+REACTION_UP    = {"👍", "❤️", "🔥", "🥰", "👏", "🎉", "🤩", "🙏"}
+REACTION_DOWN  = {"👎", "💩", "🤬", "🤮", "😢"}
+
+async def remember_my_message(msg):
+    """Маркер 'это сообщение Силли' для последующего учёта реакций.
+    Принимает aiogram Message или None (если send_message упал — silently no-op)."""
+    if not msg or not getattr(msg, "message_id", None):
+        return
+    r = await get_redis()
+    if r is None:
+        return
+    try:
+        await r.setex(
+            f"office:msg:{msg.chat.id}:{msg.message_id}",
+            86400 * 14,
+            BOT_NAME_LOWER,
+        )
+    except Exception as e:
+        logger.warning(f"remember_my_message failed: {e}")
 
 # ── Office Decisions (office:decisions Redis key) ────────────────────────────
 DECISIONS_KEY = "office:decisions"
@@ -572,7 +595,8 @@ async def post_lesson(title: str, symptom: str, cause: str, context: str, fix: s
         f"🛡️ Как избежать\n{how_to_avoid}"
     )
     try:
-        await bot.send_message(chat_id=LESSONS_CHAT_ID, text=text)
+        sent = await bot.send_message(chat_id=LESSONS_CHAT_ID, text=text)
+        await remember_my_message(sent)
     except Exception as e:
         logger.error(f"post_lesson failed: {e}")
     # Save compact AI format to lessons.json in parallel
@@ -583,7 +607,8 @@ async def notify_office(text: str):
     if not OFFICE_CHAT_ID:
         return
     try:
-        await bot.send_message(chat_id=OFFICE_CHAT_ID, text=text)
+        sent = await bot.send_message(chat_id=OFFICE_CHAT_ID, text=text)
+        await remember_my_message(sent)
     except Exception as e:
         logger.error(f"notify_office failed: {e}")
 
@@ -2030,11 +2055,12 @@ async def monitor_group_responses(message: Message):
     logger.info(f"Capability gap detected in {bot_display}: {analysis.get('reason')}")
 
     # Объявляем что фиксим
-    await bot.send_message(
+    sent = await bot.send_message(
         chat_id=message.chat.id,
         text=f"🔧 {bot_display} — вижу проблему ({analysis.get('reason', '')}), "
              f"сейчас отвечу с актуальными данными..."
     )
+    await remember_my_message(sent)
 
     try:
         # Немедленно отвечаем от имени бота с web search
@@ -2049,10 +2075,11 @@ async def monitor_group_responses(message: Message):
             block.text for block in response.content if hasattr(block, "text")
         ).strip()
 
-        await bot.send_message(
+        sent = await bot.send_message(
             chat_id=message.chat.id,
             text=f"{bot_display}:\n{answer}"
         )
+        await remember_my_message(sent)
 
         # Фиксим код в фоне — следующий раз бот сам справится
         if repo_info:
@@ -2060,10 +2087,11 @@ async def monitor_group_responses(message: Message):
 
     except Exception as e:
         logger.error(f"instant reply failed for {bot_display}: {e}")
-        await bot.send_message(
+        sent = await bot.send_message(
             chat_id=message.chat.id,
             text=f"❌ Не смог получить данные для {bot_display}: {e}"
         )
+        await remember_my_message(sent)
 
 
 async def _fix_bot_code_background(bot_display: str, repo_info: tuple):
@@ -2078,10 +2106,11 @@ async def _fix_bot_code_background(bot_display: str, repo_info: tuple):
         await push_file(repo, filepath, fixed_code,
                         f"feat({repo}): add web search tool for live data access")
         if OFFICE_CHAT_ID:
-            await bot.send_message(
+            sent = await bot.send_message(
                 chat_id=OFFICE_CHAT_ID,
                 text=f"✅ Код {bot_display} обновлён — web search встроен, следующий раз сам справится."
             )
+            await remember_my_message(sent)
         await post_lesson(
             title=f"Web search добавлен для {bot_display}",
             symptom=f"{bot_display} не мог ответить на вопрос из-за отсутствия live данных",
@@ -2372,6 +2401,47 @@ async def handle_health(request):
     return web.json_response({"status": "ok", "service": "cilly-bot"})
 
 
+# ── REACTIONS HANDLER: 👍/👎 на сообщения Силли → office:quality:силли ──────
+@dp.message_reaction()
+async def handle_reaction(reaction: MessageReactionUpdated):
+    """Реакции на сообщения Силли — HASH up/down. Источник для feedback loop."""
+    chat_id = reaction.chat.id
+    msg_id  = reaction.message_id
+
+    r = await get_redis()
+    if r is None:
+        return
+
+    try:
+        owner = await r.get(f"office:msg:{chat_id}:{msg_id}")
+    except Exception as e:
+        logger.warning(f"reaction owner lookup failed: {e}")
+        return
+    if owner != BOT_NAME_LOWER:
+        return
+
+    old_emojis = {x.emoji for x in (reaction.old_reaction or []) if getattr(x, "emoji", None)}
+    new_emojis = {x.emoji for x in (reaction.new_reaction or []) if getattr(x, "emoji", None)}
+    added   = new_emojis - old_emojis
+    removed = old_emojis - new_emojis
+
+    delta_up   = sum(1 for e in added if e in REACTION_UP)   - sum(1 for e in removed if e in REACTION_UP)
+    delta_down = sum(1 for e in added if e in REACTION_DOWN) - sum(1 for e in removed if e in REACTION_DOWN)
+
+    if delta_up == 0 and delta_down == 0:
+        return
+
+    try:
+        key = f"office:quality:{BOT_NAME_LOWER}"
+        if delta_up:
+            await r.hincrby(key, "up", delta_up)
+        if delta_down:
+            await r.hincrby(key, "down", delta_down)
+        logger.info(f"REACTION msg={msg_id} added={added} removed={removed} du={delta_up} dd={delta_down}")
+    except Exception as e:
+        logger.warning(f"quality hincrby failed: {e}")
+
+
 async def main():
     # Загружаем office:decisions из Redis при старте
     await init_office_decisions()
@@ -2388,7 +2458,10 @@ async def main():
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080)))
     await site.start()
     logger.info("[http] Cilly HTTP server started on :8080")
-    await dp.start_polling(bot)
+    await dp.start_polling(
+        bot,
+        allowed_updates=dp.resolve_used_update_types()
+    )
 
 
 if __name__ == "__main__":
