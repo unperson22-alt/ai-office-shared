@@ -4,14 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-office-shared"
-version = "0.1.0"
+version = "0.1.1"
 description = "Shared library for AI Office Telegram bots"
 requires-python = ">=3.10"
-# Намеренно нет зависимостей — redis.asyncio уже есть в каждом боте.
 dependencies = []
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["ai_office_shared*"]
-# agents/ намеренно исключён — это runtime-код Силли, не библиотека.
 exclude = ["agents*", "tests*"]
