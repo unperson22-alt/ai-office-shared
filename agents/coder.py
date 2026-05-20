@@ -45,7 +45,7 @@ OFFICE_CHAT_ID  = os.getenv("OFFICE_CHAT_ID")
 OLLAMA_HOST     = os.getenv("OLLAMA_HOST", "").strip().rstrip("/\\")
 OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL", "qwen3:8b")
 OLLAMA_ENABLED  = os.getenv("OLLAMA_ENABLED", "").lower() in ("1", "true", "yes")
-RAILWAY_TOKEN   = os.getenv("RAILWAY_TOKEN")
+RAILWAY_TOKEN   = os.getenv("RAILWAY_TOKEN_VLAD") or os.getenv("RAILWAY_TOKEN")  # VLAD-token приоритет (audit fix)
 RAILWAY_PROJECT = "271b40b7-199a-429a-88ef-ca417f26a638"
 RAILWAY_ENV_ID  = "2efaaf60-ba39-492c-bf86-007fd505493f"  # BUILD:20260518-1803
 GITHUB_USER     = "unperson22-alt"
@@ -1311,7 +1311,7 @@ async def monitor_loop():
 
 # ── Bot creation pipeline ─────────────────────────────────────────────────────
 PROJECT_ID = "271b40b7-199a-429a-88ef-ca417f26a638"
-RAILWAY_TOKEN_VAL = os.getenv("RAILWAY_TOKEN", "")
+RAILWAY_TOKEN_VAL = os.getenv("RAILWAY_TOKEN_VLAD", "") or os.getenv("RAILWAY_TOKEN", "")
 
 BOT_TEMPLATE = """import os, logging, asyncio, httpx
 from aiohttp import web
@@ -2777,7 +2777,7 @@ async def handle_promote_bots(request):
     return web.json_response({"results": results})
 
 # ── Secrets endpoint (for Claude to read GH token without exposing in chat) ──
-RAILWAY_SECRET = os.getenv("RAILWAY_TOKEN", "")  # reuse existing Railway token as auth
+RAILWAY_SECRET = os.getenv("RAILWAY_TOKEN_VLAD", "") or os.getenv("RAILWAY_TOKEN", "")  # reuse existing Railway token as auth
 
 async def handle_secrets(request):
     """Returns GH token to authenticated callers (Claude uses Railway token as key)."""
