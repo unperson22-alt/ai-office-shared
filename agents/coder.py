@@ -445,6 +445,90 @@ async def railway_query(query: str, variables: dict = None) -> dict:
         return r.json()
 
 
+
+async def _railway_is_available() -> bool:
+    """Быстрая проверка доступности Railway API (timeout 8 сек)."""
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0)) as c:
+            r = await c.post(
+                "https://backboard.railway.app/graphql/v2",
+                headers={"Authorization": f"Bearer {RAILWAY_TOKEN}", "Content-Type": "application/json"},
+                json={"query": "{ me { id } }"},
+            )
+            return r.status_code == 200
+    except Exception:
+        return False
+
+
+async def get_service_logs_via_redis(repo: str) -> list[str]:
+    """
+    Получить признаки проблем через Redis структурные логи (без Railway API).
+
+    Возвращает список строк в формате совместимом с ERROR_PATTERNS — чтобы
+    monitor_loop мог обработать их тем же путём что и Railway-логи.
+
+    Логика детекта:
+    - api_error за последние 2 часа → признак проблемы
+    - message_received без response_sent в течение 5 мин → timeout/зависание
+    - level=error любое событие → проблема
+    """
+    from ai_office_shared.shared.identity import canonical
+
+    r = await get_redis()
+    if not r:
+        return []
+
+    bot_name = repo.replace("-bot", "")
+    bot_canon = canonical(bot_name)
+    if not bot_canon:
+        return []
+
+    try:
+        events = await read_logs(r, bot_canon, days=1, limit=100)
+    except Exception as e:
+        logger.warning(f"[redis-monitor] read_logs failed for {bot_canon}: {e}")
+        return []
+
+    if not events:
+        return []
+
+    import time as _time
+    now = _time.time()
+    TWO_HOURS = 7200
+    FIVE_MIN  = 300
+
+    synthetic_errors = []
+
+    # Паттерн 1: явные api_error события
+    api_errors = [e for e in events
+                  if e.get("event") == "api_error" or e.get("level") == "error"]
+    for ev in api_errors[:5]:
+        ctx = ev.get("context", {})
+        err_text = ctx.get("error", "") or ev.get("event", "error")
+        synthetic_errors.append(f"ERROR {ev.get('ts','')} {bot_canon}: {err_text}")
+
+    # Паттерн 2: message_received без парного response_sent (в окне 5 мин)
+    received_ids = {}
+    for ev in reversed(events):  # от старых к новым
+        uid = ev.get("user_id")
+        ts_str = ev.get("ts", "")
+        if ev.get("event") == "message_received" and uid:
+            received_ids[uid] = ts_str
+        elif ev.get("event") == "response_sent" and uid in received_ids:
+            del received_ids[uid]  # пара закрыта
+
+    # Оставшиеся в received_ids — без ответа
+    for uid, ts_str in list(received_ids.items())[:3]:
+        synthetic_errors.append(
+            f"ERROR {ts_str} {bot_canon}: message_received uid={uid} without response_sent — possible hang/crash"
+        )
+
+    if synthetic_errors:
+        logger.info(f"[redis-monitor] {bot_canon}: {len(synthetic_errors)} synthetic errors from Redis")
+
+    return synthetic_errors
+
+
 async def get_service_logs(service_id: str) -> list[str]:
     """Получить последние логи сервиса."""
     try:
@@ -921,17 +1005,46 @@ async def daily_audit_loop():
 
 
 async def monitor_loop():
-    """Фоновая задача: каждые 5 минут проверяет логи всех сервисов."""
+    """Фоновая задача: каждые 5 минут проверяет логи всех сервисов.
+
+    Автономный режим: если Railway API недоступен (outage) — переключается
+    на детект через Redis структурные логи. Фикс (GitHub push) не требует
+    Railway API — Railway автодеплоит из ветки сам.
+    """
     await asyncio.sleep(30)  # подождать пока бот стартует
     logger.info("[monitor] started")
+    _railway_down_notified = False  # чтобы не спамить уведомлениями об outage
+
     while True:
         if MONITOR_PAUSED():
             logger.info("[monitor] paused via CILLY_MONITOR_PAUSED env var, sleeping...")
             await asyncio.sleep(60)
             continue
+
+        # Проверяем Railway API один раз в начале цикла
+        railway_ok = await _railway_is_available()
+
+        if not railway_ok:
+            if not _railway_down_notified:
+                await notify_office(
+                    "⚠️ *Railway API недоступен* — переключаюсь на Redis-мониторинг.\n"
+                    "Фиксы через GitHub работают, Railway автодеплоит сам."
+                )
+                _railway_down_notified = True
+            logger.warning("[monitor] Railway API down — using Redis fallback for all services")
+        else:
+            if _railway_down_notified:
+                await notify_office("✅ Railway API снова доступен — возвращаюсь к полному мониторингу.")
+                _railway_down_notified = False
+
         for service_id, (repo, main_file) in SERVICES.items():
             try:
-                logs = await get_service_logs(service_id)
+                # Основной путь: Railway logs. Fallback: Redis structural logs
+                if railway_ok:
+                    logs = await get_service_logs(service_id)
+                else:
+                    logs = await get_service_logs_via_redis(repo)
+
                 if not logs:
                     continue
 
