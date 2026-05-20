@@ -18,6 +18,7 @@ from aiogram.types import Message, MessageReactionUpdated
 from aiogram.filters import CommandStart
 from anthropic import AsyncAnthropic
 import redis.asyncio as aioredis
+from ai_office_shared.shared.logging import log_event
 
 from shared.github_tools import push_file, read_file, list_files, create_repo
 from telethon import TelegramClient
@@ -601,6 +602,10 @@ async def post_lesson(title: str, symptom: str, cause: str, context: str, fix: s
         logger.error(f"post_lesson failed: {e}")
     # Save compact AI format to lessons.json in parallel
     asyncio.create_task(append_lesson_ai(title, symptom, cause, context, fix, how_to_avoid))
+    r = await get_redis()
+    if r:
+        await log_event(r, BOT_NAME_LOWER, "lesson_saved",
+                        title=title[:100])
 
 
 async def notify_office(text: str):
@@ -2053,6 +2058,10 @@ async def monitor_group_responses(message: Message):
         return
 
     logger.info(f"Capability gap detected in {bot_display}: {analysis.get('reason')}")
+    _r = await get_redis()
+    if _r:
+        await log_event(_r, BOT_NAME_LOWER, "capability_gap_detected",
+                        bot=bot_display.lower(), reason=analysis.get("reason","")[:200])
 
     # Объявляем что фиксим
     sent = await bot.send_message(
