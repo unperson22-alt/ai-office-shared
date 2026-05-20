@@ -18,7 +18,7 @@ from aiogram.types import Message, MessageReactionUpdated
 from aiogram.filters import CommandStart
 from anthropic import AsyncAnthropic
 import redis.asyncio as aioredis
-from ai_office_shared.shared.logging import log_event
+from ai_office_shared.shared.logging import log_event, read_logs
 
 from shared.github_tools import push_file, read_file, list_files, create_repo
 from telethon import TelegramClient
@@ -997,11 +997,38 @@ async def monitor_loop():
 
                 logger.info(f"[monitor] found {len(error_logs)} error lines in {repo}, analyzing...")
 
+                # Auto-pull структурных логов из Redis для обогащения контекста анализа
+                redis_log_context = ""
+                try:
+                    _r_logs = await get_redis()
+                    if _r_logs:
+                        from ai_office_shared.shared.identity import canonical
+                        bot_canon = canonical(repo.replace("-bot", ""))
+                        if bot_canon:
+                            recent_events = await read_logs(
+                                _r_logs, bot_canon,
+                                days=1, limit=30,
+                                level_filter=None,
+                            )
+                            if recent_events:
+                                lines = []
+                                for ev in recent_events[:20]:
+                                    ts = ev.get("ts", "")[-8:]  # HH:MM:SSZ
+                                    lines.append(f"[{ts}] {ev.get('level','?').upper()} {ev.get('event','?')} {ev.get('context',{})}")
+                                redis_log_context = "\n--- Redis структурные логи (последние 20 событий) ---\n" + "\n".join(lines)
+                                logger.info(f"[monitor] pulled {len(recent_events)} Redis events for {bot_canon}")
+                except Exception as _e:
+                    logger.warning(f"[monitor] auto-pull Redis logs failed for {repo}: {_e}")
+
                 # Читаем исходник
                 try:
                     source_code = await read_file(repo, main_file)
                 except Exception:
                     source_code = "# файл не удалось прочитать"
+
+                # Если есть Redis-контекст — добавляем к source_code для анализа
+                if redis_log_context:
+                    source_code = source_code + "\n\n" + redis_log_context
 
                 # Check known bugs first — saves Opus tokens on repeated issues
                 known = await search_lessons(error_logs)
@@ -2063,6 +2090,24 @@ async def monitor_group_responses(message: Message):
         await log_event(_r, BOT_NAME_LOWER, "capability_gap_detected",
                         bot=bot_display.lower(), reason=analysis.get("reason","")[:200])
 
+    # Auto-pull Redis-логов бота — Силли видит что там происходило перед gap
+    gap_log_context = ""
+    try:
+        if _r:
+            from ai_office_shared.shared.identity import canonical
+            bot_canon = canonical(bot_display)
+            if bot_canon:
+                gap_events = await read_logs(_r, bot_canon, days=1, limit=20)
+                if gap_events:
+                    gap_lines = []
+                    for ev in gap_events[:15]:
+                        ts = ev.get("ts","")[-8:]
+                        gap_lines.append(f"[{ts}] {ev.get('event','?')} {ev.get('context',{})}")
+                    gap_log_context = "\n\n[Последние события бота из Redis:]\n" + "\n".join(gap_lines)
+                    logger.info(f"[gap] pulled {len(gap_events)} Redis events for {bot_canon}")
+    except Exception as _ge:
+        logger.warning(f"[gap] auto-pull failed for {bot_display}: {_ge}")
+
     # Объявляем что фиксим
     sent = await bot.send_message(
         chat_id=message.chat.id,
@@ -2073,10 +2118,12 @@ async def monitor_group_responses(message: Message):
 
     try:
         # Немедленно отвечаем от имени бота с web search
+        # Redis-контекст добавляем в system если есть — помогает понять причину gap
+        enriched_system = bot_system + gap_log_context if gap_log_context else bot_system
         response = await claude.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1024,
-            system=bot_system,
+            system=enriched_system,
             messages=[{"role": "user", "content": user_question}],
             tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}]
         )
