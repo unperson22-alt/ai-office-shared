@@ -20,7 +20,10 @@ from anthropic import AsyncAnthropic
 import redis.asyncio as aioredis
 from ai_office_shared.shared.logging import log_event, read_logs
 
-from shared.github_tools import push_file, read_file, list_files, create_repo
+from shared.github_tools import (
+    push_file, read_file, list_files, create_repo,
+    create_branch, push_file_to_branch, create_pull_request, merge_pull_request, get_pr_by_url,
+)
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.messages import GetDialogFiltersRequest, UpdateDialogFilterRequest
@@ -219,6 +222,147 @@ BOT_SYSTEMS_WEB = {
 
 # Хранит pending-фиксы ожидающие /approve: {fix_id: fix_data}
 pending_fixes: dict = {}
+
+# ── CC-like subagent: многофайловый рефактор через Sonnet ──────────────────
+
+# Хранит pending PR-approve: {pr_id: {repo, pr_number, branch}}
+pending_prs: dict = {}
+
+async def multi_file_refactor(
+    task: str,
+    file_specs: list[dict],   # [{repo, path}]
+    branch_suffix: str = "",
+) -> dict:
+    """
+    CC-like многофайловый рефактор через Sonnet API.
+
+    Алгоритм:
+    1. Скачивает все файлы через GitHub API
+    2. Один вызов Sonnet: задача + полный контекст всех файлов
+    3. Sonnet возвращает JSON {files: [{repo, path, content, reason}]}
+    4. Создаёт ветку cc/{timestamp}-{suffix} в каждом затронутом репо
+    5. Пушит все изменённые файлы в ветки
+    6. Создаёт PR в каждом репо
+    7. Возвращает список PR-ов для /approve_pr
+
+    file_specs: [{repo: "billy-bot", path: "bot.py"}, ...]
+    """
+    import time as _time
+    ts = int(_time.time())
+    branch = f"cc/{ts}" + (f"-{branch_suffix[:20]}" if branch_suffix else "")
+
+    # Шаг 1: скачиваем все файлы
+    files_content = []
+    for spec in file_specs:
+        try:
+            content = await read_file(spec["repo"], spec["path"])
+            files_content.append({
+                "repo": spec["repo"],
+                "path": spec["path"],
+                "content": content,
+            })
+        except Exception as e:
+            logger.warning(f"[cc] read_file failed {spec['repo']}/{spec['path']}: {e}")
+
+    if not files_content:
+        return {"error": "Не удалось прочитать ни одного файла"}
+
+    # Шаг 2: формируем контекст для Sonnet
+    files_block = ""
+    for f in files_content:
+        files_block += f"\n\n### {f['repo']}/{f['path']}\n```python\n{f['content']}\n```"
+
+    system_prompt = """Ты — инструмент рефакторинга кода. Твоя задача: внести конкретные изменения в предоставленные файлы согласно заданию.
+
+Отвечай ТОЛЬКО валидным JSON без markdown-обёртки:
+{
+  "files": [
+    {
+      "repo": "имя-репо",
+      "path": "path/to/file.py",
+      "content": "полный новый контент файла",
+      "reason": "что изменено и почему"
+    }
+  ],
+  "summary": "краткое описание всех изменений"
+}
+
+ПРАВИЛА:
+- Включай ТОЛЬКО файлы с реальными изменениями
+- content — полный файл, не diff
+- Сохраняй всю существующую логику, меняй только то что нужно
+- Не меняй отступы, форматирование и стиль без необходимости"""
+
+    user_msg = f"ЗАДАЧА: {task}\n\nФАЙЛЫ:{files_block}"
+
+    # Шаг 3: вызов Sonnet
+    try:
+        response = await claude.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=8000,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        raw = response.content[0].text.strip()
+        # Очищаем от markdown если есть
+        if "```" in raw:
+            parts = raw.split("```")
+            for p in parts:
+                p = p.strip().lstrip("json").strip()
+                if p.startswith("{"):
+                    raw = p
+                    break
+        result = json.loads(raw)
+    except Exception as e:
+        return {"error": f"Sonnet call failed: {e}"}
+
+    changed_files = result.get("files", [])
+    if not changed_files:
+        return {"error": "Sonnet не вернул изменений", "summary": result.get("summary", "")}
+
+    # Шаг 4-6: создаём ветки и пушим файлы, создаём PR
+    repos_touched = {}
+    for cf in changed_files:
+        repo = cf["repo"]
+        if repo not in repos_touched:
+            repos_touched[repo] = []
+        repos_touched[repo].append(cf)
+
+    created_prs = []
+    errors = []
+
+    for repo, repo_files in repos_touched.items():
+        try:
+            await create_branch(repo, branch)
+            for cf in repo_files:
+                await push_file_to_branch(
+                    repo, cf["path"], cf["content"],
+                    f"cc: {task[:60]}",
+                    branch,
+                )
+            pr = await create_pull_request(
+                repo,
+                title=f"[CC] {task[:60]}",
+                body=f"**Задача:** {task}\n\n**Изменения:**\n" +
+                     "\n".join(f"- `{cf['path']}`: {cf.get('reason','')}" for cf in repo_files) +
+                     f"\n\n**Summary:** {result.get('summary','')}\n\n_Создано Силли через CC-subagent_",
+                head_branch=branch,
+            )
+            created_prs.append({"repo": repo, "pr": pr, "files": len(repo_files)})
+            logger.info(f"[cc] PR created: {repo} #{pr['number']}")
+        except Exception as e:
+            errors.append(f"{repo}: {e}")
+            logger.error(f"[cc] failed for {repo}: {e}")
+
+    return {
+        "branch": branch,
+        "prs": created_prs,
+        "errors": errors,
+        "summary": result.get("summary", ""),
+        "changed_files": len(changed_files),
+    }
+
+
 
 # Последние seen timestamps логов по сервису чтобы не дублировать
 last_seen: dict = {}  # fallback in-memory (Redis preferred)
@@ -2302,6 +2446,8 @@ async def start(message: Message):
         "/read <repo> <path> — прочитать файл из репо\n"
         "/ls <repo> [path] — список файлов\n"
         "/lesson <title>|<symptom>|<cause>|<ctx>|<fix>|<avoid> — урок в Bug Lessons\n"
+        "/cc <задача> [@бот1 ...] — многофайловый рефактор через CC-subagent\n"
+        "/approve_pr <id|all> — смержить PR из /cc\n"
         "/approve <id> — применить предложенный фикс\n"
         "/skip <id> — пропустить\n"
         "/update_all — обновить всех template-ботов по текущему шаблону"
@@ -2397,6 +2543,133 @@ async def cmd_approve(message: Message):
         )
     except Exception as e:
         await message.answer(f"❌ Ошибка при применении фикса: {e}")
+
+
+
+
+@dp.message(F.text.startswith("/cc"))
+async def cmd_cc(message: Message):
+    """
+    /cc <задача> [@бот1 @бот2 ...]
+    Запускает CC-like многофайловый рефактор.
+
+    Примеры:
+      /cc добавь log_event в handle_message у всех ботов @билли @тилли
+      /cc замени BOT_NAME на BOT_NAME_LOWER во всех bot.py @билли @крисс @доктор
+      /cc обнови ai-office-shared до v0.1.2 в requirements.txt @билли @тилли @милли
+    """
+    from ai_office_shared.shared.identity import canonical, BOTS
+
+    text = message.text[3:].strip()
+    if not text:
+        await message.answer(
+            "Использование: `/cc <задача> [@бот1 @бот2 ...]`\n\n"
+            "Примеры:\n"
+            "• `/cc обнови shared до v0.1.2 @билли @тилли`\n"
+            "• `/cc добавь log_event в handle_message @крисс @доктор`\n\n"
+            "Если боты не указаны — спрошу список файлов явно.",
+            parse_mode="Markdown"
+        )
+        return
+
+    # Парсим упомянутых ботов из задачи
+    import re as _re
+    bot_mentions = _re.findall(r'@(\S+)', text)
+    task_clean = _re.sub(r'@\S+', '', text).strip()
+
+    file_specs = []
+    for mention in bot_mentions:
+        canon = canonical(mention.strip("@,.!?"))
+        if canon and canon in BOTS:
+            repo = BOTS[canon]["repo"]
+            file_specs.append({"repo": repo, "path": "bot.py"})
+
+    if not file_specs:
+        await message.answer(
+            f"⚠️ Не нашёл ботов в задаче. Укажи через @: `/cc {task_clean} @билли @тилли`",
+            parse_mode="Markdown"
+        )
+        return
+
+    repos_list = ", ".join(f"`{s['repo']}`" for s in file_specs)
+    await message.answer(
+        f"🤖 **CC-subagent запущен**\n\n"
+        f"**Задача:** {task_clean}\n"
+        f"**Файлы:** {repos_list}\n\n"
+        f"⏳ Читаю файлы и генерирую изменения...",
+        parse_mode="Markdown"
+    )
+
+    result = await multi_file_refactor(task_clean, file_specs,
+                                        branch_suffix=bot_mentions[0] if bot_mentions else "")
+
+    if "error" in result:
+        await message.answer(f"❌ Ошибка: {result['error']}")
+        return
+
+    prs = result.get("prs", [])
+    errors = result.get("errors", [])
+
+    if not prs:
+        await message.answer(f"⚠️ PR-ы не созданы.\nОшибки: {'; '.join(errors) if errors else 'нет изменений'}")
+        return
+
+    # Регистрируем PR-ы для /approve_pr
+    pr_lines = []
+    for item in prs:
+        pr = item["pr"]
+        pr_id = f"pr_{item['repo']}_{pr['number']}"
+        pending_prs[pr_id] = {
+            "repo": item["repo"],
+            "pr_number": pr["number"],
+            "branch": result["branch"],
+            "html_url": pr["html_url"],
+        }
+        pr_lines.append(f"• [{item['repo']} #{pr['number']}]({pr['html_url']}) — {item['files']} файл(ов)")
+
+    errors_text = f"\n\n⚠️ Ошибки: {'; '.join(errors)}" if errors else ""
+    await message.answer(
+        f"✅ **Готово!** {result['changed_files']} файл(ов) изменено\n\n"
+        f"**PR-ы:**\n" + "\n".join(pr_lines) +
+        f"\n\n**Summary:** {result.get('summary','')}\n\n"
+        f"Для мержа: `/approve_pr {list(pending_prs.keys())[-1]}`" +
+        errors_text,
+        parse_mode="Markdown"
+    )
+
+
+@dp.message(F.text.startswith("/approve_pr"))
+async def cmd_approve_pr(message: Message):
+    """
+    /approve_pr <id>  — мержит PR созданный через /cc
+    /approve_pr all   — мержит все pending PR-ы
+    """
+    arg = message.text[11:].strip()
+
+    if arg == "all":
+        targets = list(pending_prs.items())
+    elif arg in pending_prs:
+        targets = [(arg, pending_prs[arg])]
+    else:
+        await message.answer(
+            f"❌ PR `{arg}` не найден.\n"
+            f"Pending PR-ы: {', '.join(pending_prs.keys()) or 'нет'}",
+            parse_mode="Markdown"
+        )
+        return
+
+    for pr_id, pr_data in targets:
+        pending_prs.pop(pr_id, None)
+        try:
+            ok = await merge_pull_request(pr_data["repo"], pr_data["pr_number"],
+                                           commit_msg=f"cc: approved by Влад")
+            status = "✅ смержен" if ok else "⚠️ не смержен (проверь конфликты)"
+            await message.answer(
+                f"{status}: [{pr_data['repo']} #{pr_data['pr_number']}]({pr_data['html_url']})",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            await message.answer(f"❌ Ошибка мержа {pr_data['repo']} #{pr_data['pr_number']}: {e}")
 
 
 @dp.message(F.text.startswith("/skip"))
