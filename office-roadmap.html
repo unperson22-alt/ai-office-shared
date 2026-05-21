@@ -513,7 +513,7 @@
       <div class="pillar-num">01 / ПАМЯТЬ</div>
       <div class="pillar-title">ГРУППОВОЙ КОНТЕКСТ <span class="chevron">›</span></div>
       <div class="pillar-desc">Боты помнят историю группового чата. office:group:history в Redis, последние 10 сообщений в каждом ответе.</div>
-      <div class="pillar-count">5 задач · 5 готово ✓</div>
+      <div class="pillar-count">5 задач · 4 готово ✓</div>
     </div>
 
     <div class="pillar" onclick="toggle(1)">
@@ -521,7 +521,7 @@
       <div class="pillar-num">02 / ЛЮДИ</div>
       <div class="pillar-title">ПРОФИЛИ УЧАСТНИКОВ <span class="chevron">›</span></div>
       <div class="pillar-desc">Боты адаптируются под каждого человека в группе. Redis-профили у всех ботов — авто-извлечение через Haiku после каждого сообщения.</div>
-      <div class="pillar-count">8 задач · 4 готово</div>
+      <div class="pillar-count">8 задач · 8 готово ✓</div>
     </div>
 
     <div class="pillar" onclick="toggle(2)">
@@ -584,9 +584,9 @@
           <div class="task-badge badge-done">ГОТОВО</div>
         </div>
         <div class="task">
-          <div class="task-header"><div class="task-status done"></div><div class="task-name">Сжатие истории при 15+ ботах</div></div>
-          <div class="task-note">office:group:ctx (TTL 24ч). При 15+ записях Haiku сжимает в сводку fire-and-forget. group_history_get() → [Сводка беседы] + последние 5 сырых. Старое поведение как fallback.</div>
-          <div class="task-badge badge-done">ГОТОВО</div>
+          <div class="task-header"><div class="task-status todo"></div><div class="task-name">Сжатие истории при 15+ ботах</div></div>
+          <div class="task-note">JSON-контекст вместо 20 сырых сообщений. Уже запланировано в архитектуре.</div>
+          <div class="task-badge badge-todo">ПЛАНИРУЕТСЯ</div>
         </div>
       </div>
     </div>
@@ -617,24 +617,24 @@
           <div class="task-badge badge-done">ГОТОВО</div>
         </div>
         <div class="task">
-          <div class="task-header"><div class="task-status todo"></div><div class="task-name">Профиль группы в целом</div></div>
-          <div class="task-note">Офис знает кто участники, их роли, типичные темы. Shared profile: office:members.</div>
-          <div class="task-badge badge-todo">ПЛАНИРУЕТСЯ</div>
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Профиль группы в целом</div></div>
+          <div class="task-note">office:members (TTL 30д). Haiku строит профиль команды по групповой истории. Инжектится в group_history_get() как [Профиль команды]. Обновление раз в неделю fire-and-forget.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
         </div>
         <div class="task">
-          <div class="task-header"><div class="task-status todo"></div><div class="task-name">Автоматический бэклог по каждому участнику</div></div>
-          <div class="task-note">Уже в бэклоге Эллис/Крисс. Периодический Railway Cron для пересмотра профилей.</div>
-          <div class="task-badge badge-todo">ПЛАНИРУЕТСЯ</div>
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Автоматический бэклог по каждому участнику</div></div>
+          <div class="task-note">group_members_update() — раз в неделю Haiku пересматривает профиль команды на основе групповой истории. office:members:last_review как throttle.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
         </div>
         <div class="task">
-          <div class="task-header"><div class="task-status todo"></div><div class="task-name">Quick Reply кнопки у Крисс</div></div>
-          <div class="task-note">Inline-кнопки под ответами для частых действий: 📋 Задачи, 🔄 Статус, 💬 Заметка, ✅ Готово. Крисс сама решает когда их показывать — контекстно.</div>
-          <div class="task-badge badge-todo">ПЛАНИРУЕТСЯ</div>
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Quick Reply кнопки у Крисс</div></div>
+          <div class="task-note">InlineKeyboardMarkup: 📋 Задачи / 🔄 Статус / 💬 Заметка / ✅ Готово. should_show_quick_reply() по ключевым словам. CallbackQueryHandler обрабатывает каждую кнопку.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
         </div>
         <div class="task">
-          <div class="task-header"><div class="task-status todo"></div><div class="task-name">Scheduled сообщения у Крисс</div></div>
-          <div class="task-note">Крисс не может инициировать сообщения сама — только отвечает. Нужен Railway Cron + endpoint /send_scheduled в коде Крисс. Внешний триггер в нужное время дёргает бота → bot.send_message(chat_id=...). Юзкейс: Яна попросила гороскоп каждый день в 12:00 — сейчас это невозможно без cron-обвязки. Приоритет: vietnam-bot проект.</div>
-          <div class="task-badge badge-todo">ПЛАНИРУЕТСЯ</div>
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Scheduled сообщения у Крисс</div></div>
+          <div class="task-note">POST /send_scheduled: {chat_id, message, user_id, generate?}. Если generate=true — прогоняет через Claude. Railway Cron дёргает endpoint по расписанию → Крисс шлёт сообщение. Настройка Cron — в Railway Dashboard.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
         </div>
       </div>
     </div>
