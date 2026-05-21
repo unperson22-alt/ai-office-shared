@@ -41,14 +41,14 @@ OFFICE_BOTS = [
 # Где живёт системный промпт каждого бота (репо → файл → имя константы)
 # Силли дополняет этот словарь когда узнаёт структуру нового бота.
 BOT_PROMPT_LOCATION = {
-    "билли":   ("unperson22-alt/billy-bot",   "bot.py",  "SYSTEM_PROMPT"),
-    "тилли":   ("unperson22-alt/tilly-bot",   "bot.py",  "SYSTEM_PROMPT"),
-    "милли":   ("unperson22-alt/milly-bot",   "bot.py",  "SYSTEM_PROMPT"),
-    "вилли":   ("unperson22-alt/villy-bot",   "bot.py",  "SYSTEM_PROMPT"),
-    "крисс":   ("unperson22-alt/kriss-bot",   "bot.py",  "SYSTEM_PROMPT"),
-    "доктор":  ("unperson22-alt/dilly-bot",   "bot.py",  "SYSTEM_PROMPT"),
-    "гослинг": ("unperson22-alt/gosling-bot", "bot.py",  "SYSTEM_PROMPT"),
-    "эллис":   ("unperson22-alt/mama-bot",    "bot.py",  "SYSTEM_PROMPT"),
+    "билли":   ("unperson22-alt/billy-bot",        "bot.py",          "SYSTEM"),
+    "тилли":   ("unperson22-alt/tilly-bot",        "bot.py",          "SYSTEM"),
+    "милли":   ("unperson22-alt/milly-bot",        "bot.py",          "SYSTEM"),
+    "вилли":   ("unperson22-alt/villy-bot",        "bot.py",          "SYSTEM"),
+    "крисс":   ("unperson22-alt/kriss-bot",        "bot.py",          "SYSTEM_BASE"),
+    "доктор":  ("unperson22-alt/doctor-bot",       "bot.py",          "SYSTEM"),
+    "гослинг": ("unperson22-alt/gosling-bot",      "bot.py",          "GOSLING_SYSTEM"),
+    "эллис":   ("unperson22-alt/mama-bot",         "bot.py",          "SYSTEM_BASE"),
     "силли":   ("unperson22-alt/ai-office-shared", "agents/coder.py", "CHAT_PROMPT"),
 }
 
