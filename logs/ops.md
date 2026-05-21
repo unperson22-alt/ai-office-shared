@@ -150,3 +150,8 @@
 📚 Новых паттернов багов не найдено
 
 🟡 Статус офиса: ТРЕБУЕТ ВНИМАНИЯ
+
+**[2026-05-21 18:00 UTC] Силли — all_services:** daily_audit
+> 📋 Ежедневный аудит офиса — 21.05.2026 18:00 UTC
+
+❌ Деплои упали: logger-bot:NO_DEPLOY, tilly-bot:NO_DEPLOY, filly-bot:NO_DEPLOY, doctor-bot:NO_DEPLOY, milly-bot:NO_DEPLOY, office-dashboard:NO_DEPLOY, billy-bot:NO_DEPLOY, prophet-bot:NO_DEPLOY, tilly-trader:NO_DEPLOY, mama-bot:NO_DEPLOY, pilly-bot:NO
