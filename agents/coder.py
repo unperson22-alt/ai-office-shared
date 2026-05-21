@@ -83,17 +83,42 @@ recent_group_msgs: deque = deque(maxlen=30)  # (sender, text, is_bot)
 # Redis — персистентная дедупликация seen_errors и last_seen
 REDIS_URL = os.getenv("REDIS_URL", "")
 _redis: aioredis.Redis | None = None
+_redis_last_attempt: float = 0
+REDIS_RETRY_INTERVAL = 30  # секунд между попытками переподключения
 _office_decisions: list = []  # правила office:decisions из Redis
 
 async def get_redis() -> aioredis.Redis | None:
-    global _redis
-    if _redis is None and REDIS_URL:
+    global _redis, _redis_last_attempt
+    if _redis is not None:
+        # Проверяем что соединение живое
         try:
-            _redis = aioredis.from_url(REDIS_URL, decode_responses=True)
             await _redis.ping()
-        except Exception as e:
-            logger.warning(f"Redis unavailable: {e}")
+            return _redis
+        except Exception:
+            logger.warning("Redis connection lost, will retry")
             _redis = None
+
+    if not REDIS_URL:
+        return None
+
+    now = time.time()
+    if now - _redis_last_attempt < REDIS_RETRY_INTERVAL:
+        return None  # cooldown — не спамим попытками
+    _redis_last_attempt = now
+
+    try:
+        _redis = aioredis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_timeout=5,
+            socket_connect_timeout=5,
+            retry_on_timeout=True,
+        )
+        await _redis.ping()
+        logger.info("Redis connected successfully")
+    except Exception as e:
+        logger.warning(f"Redis unavailable: {e}")
+        _redis = None
     return _redis
 
 
