@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Office — Roadmap</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Unbounded:wght@300;400;700;900&display=swap');
+
+  :root {
+    --bg: #0a0a0f;
+    --surface: #111118;
+    --border: #1e1e2e;
+    --accent: #ff3c3c;
+    --accent2: #ff8c00;
+    --accent3: #00e5ff;
+    --accent4: #a855f7;
+    --accent5: #f472b6;
+    --accent6: #a3e635;
+    --text: #e8e8f0;
+    --muted: #555570;
+    --done: #22c55e;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,60,60,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,60,60,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 60px 24px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Header */
+  .header {
+    margin-bottom: 64px;
+    animation: fadeDown 0.6s ease both;
+  }
+
+  .header-tag {
+    font-size: 10px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .header-tag::before {
+    content: '';
+    display: inline-block;
+    width: 24px;
+    height: 1px;
+    background: var(--accent);
+  }
+
+  h1 {
+    font-family: 'Unbounded', sans-serif;
+    font-size: clamp(28px, 5vw, 52px);
+    font-weight: 900;
+    line-height: 1.05;
+    letter-spacing: -1px;
+  }
+
+  h1 span {
+    color: var(--accent);
+  }
+
+  .header-sub {
+    margin-top: 16px;
+    color: var(--muted);
+    font-size: 12px;
+    letter-spacing: 1px;
+  }
+
+  /* Status bar */
+  .status-bar {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-bottom: 48px;
+    padding: 20px 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    animation: fadeDown 0.6s 0.1s ease both;
+  }
+
+  .stat {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .stat-val {
+    font-family: 'Unbounded', sans-serif;
+    font-size: 22px;
+    font-weight: 700;
+  }
+
+  .stat-label {
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .stat-val.done { color: var(--done); }
+  .stat-val.wip  { color: var(--accent2); }
+  .stat-val.todo { color: var(--accent3); }
+
+  /* Pillars */
+  .pillars {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 2px;
+    margin-bottom: 2px;
+  }
+
+  .pillar {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 28px;
+    cursor: pointer;
+    transition: all 0.2s;
+    animation: fadeUp 0.5s ease both;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .pillar::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--pillar-color);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.3s ease;
+  }
+
+  .pillar:hover::after,
+  .pillar.active::after {
+    transform: scaleX(1);
+  }
+
+  .pillar:hover,
+  .pillar.active {
+    border-color: var(--pillar-color);
+    background: #13131e;
+  }
+
+  .pillar:nth-child(1) { --pillar-color: var(--accent);  animation-delay: 0.15s; }
+  .pillar:nth-child(2) { --pillar-color: var(--accent2); animation-delay: 0.2s; }
+  .pillar:nth-child(3) { --pillar-color: var(--accent3); animation-delay: 0.25s; }
+  .pillar:nth-child(4) { --pillar-color: var(--accent4); animation-delay: 0.3s; }
+  .pillar:nth-child(5) { --pillar-color: var(--accent5); animation-delay: 0.35s; }
+  .pillar:nth-child(6) { --pillar-color: var(--accent6); animation-delay: 0.4s; }
+
+  .pillar-icon {
+    font-size: 24px;
+    margin-bottom: 16px;
+  }
+
+  .pillar-num {
+    font-family: 'Unbounded', sans-serif;
+    font-size: 10px;
+    letter-spacing: 3px;
+    color: var(--pillar-color);
+    margin-bottom: 8px;
+  }
+
+  .pillar-title {
+    font-family: 'Unbounded', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 10px;
+    line-height: 1.3;
+  }
+
+  .pillar-desc {
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+
+  .pillar-count {
+    margin-top: 16px;
+    font-size: 10px;
+    color: var(--pillar-color);
+    letter-spacing: 1px;
+  }
+
+  /* Detail panel */
+  .detail-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    margin-bottom: 2px;
+    overflow: hidden;
+    max-height: 0;
+    transition: max-height 0.4s ease, padding 0.3s ease;
+  }
+
+  .detail-panel.open {
+    max-height: 800px;
+  }
+
+  .detail-inner {
+    padding: 32px 28px;
+  }
+
+  .tasks {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+  }
+
+  .task {
+    padding: 16px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: border-color 0.2s;
+  }
+
+  .task:hover {
+    border-color: var(--pillar-color);
+  }
+
+  .task-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .task-status {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .task-status.done    { background: var(--done); box-shadow: 0 0 6px var(--done); }
+  .task-status.wip     { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); animation: pulse 2s infinite; }
+  .task-status.todo    { background: var(--muted); }
+  .task-status.vuln    { background: var(--accent); box-shadow: 0 0 6px var(--accent); animation: pulse 1.5s infinite; }
+
+  .task-name {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    line-height: 1.3;
+  }
+
+  .task-note {
+    font-size: 10px;
+    color: var(--muted);
+    line-height: 1.6;
+    padding-left: 18px;
+  }
+
+  .task-badge {
+    font-size: 9px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 2px;
+    align-self: flex-start;
+    margin-left: 18px;
+  }
+
+  .badge-done { background: rgba(34,197,94,0.15); color: var(--done); }
+  .badge-wip  { background: rgba(255,140,0,0.15); color: var(--accent2); }
+  .badge-todo { background: rgba(0,229,255,0.1); color: var(--accent3); }
+  .badge-vuln { background: rgba(255,60,60,0.15); color: var(--accent); }
+
+  /* Vulnerabilities */
+  .section-title {
+    font-family: 'Unbounded', sans-serif;
+    font-size: 11px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .section-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .vuln-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 2px;
+    margin-bottom: 2px;
+    animation: fadeUp 0.5s 0.4s ease both;
+  }
+
+  .vuln-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    padding: 20px 24px;
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+  }
+
+  .vuln-icon { font-size: 20px; flex-shrink: 0; margin-top: 2px; }
+
+  .vuln-title {
+    font-size: 12px;
+    font-weight: 700;
+    margin-bottom: 6px;
+    color: var(--accent);
+  }
+
+  .vuln-desc {
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  .vuln-bot {
+    display: inline-block;
+    font-size: 9px;
+    letter-spacing: 1px;
+    background: rgba(255,60,60,0.1);
+    color: var(--accent);
+    padding: 2px 7px;
+    margin-top: 8px;
+  }
+
+  /* Architecture note */
+  .arch-note {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent3);
+    padding: 24px;
+    margin-top: 2px;
+    animation: fadeUp 0.5s 0.5s ease both;
+  }
+
+  .arch-note pre {
+    font-size: 11px;
+    color: var(--accent3);
+    line-height: 1.8;
+    white-space: pre-wrap;
+    opacity: 0.85;
+  }
+
+  /* Legend */
+  .legend {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-top: 32px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    animation: fadeUp 0.5s 0.6s ease both;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 1px;
+  }
+
+  .legend-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+  }
+
+  /* Connectors */
+  .connectors-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 2px;
+    margin-bottom: 2px;
+    animation: fadeUp 0.5s 0.55s ease both;
+  }
+
+  .connector-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: border-color 0.2s, background 0.2s;
+    cursor: default;
+  }
+
+  .connector-card:hover {
+    border-color: var(--accent4);
+    background: #13131e;
+  }
+
+  .connector-icon {
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+
+  .connector-name {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    line-height: 1.3;
+  }
+
+  .connector-tools {
+    font-size: 9px;
+    color: var(--accent4);
+    letter-spacing: 1px;
+    margin-top: 2px;
+  }
+
+  .connector-tag {
+    font-size: 8px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    padding: 1px 5px;
+    border-radius: 2px;
+    background: rgba(168,85,247,0.12);
+    color: var(--accent4);
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  /* Animations */
+  @keyframes fadeDown {
+    from { opacity: 0; transform: translateY(-20px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.4; }
+  }
+
+  .chevron {
+    float: right;
+    transition: transform 0.3s;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .pillar.active .chevron { transform: rotate(90deg); }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <div class="header-tag">AI OFFICE — СИСТЕМА ОБУЧЕНИЯ</div>
+    <h1>ROADMAP<br><span>2026</span></h1>
+    <div class="header-sub">// кликни на блок → детали задач</div>
+  </div>
+
+  <div class="status-bar">
+    <div class="stat"><span class="stat-val done">39</span><span class="stat-label">ГОТОВО</span></div>
+    <div class="stat"><span class="stat-val wip">0</span><span class="stat-label">В РАБОТЕ</span></div>
+    <div class="stat"><span class="stat-val todo">5</span><span class="stat-label">ЗАПЛАНИРОВАНО</span></div>
+    <div class="stat"><span class="stat-val" style="color:var(--done)">0</span><span class="stat-label">УЯЗВИМОСТИ</span></div>
+    <div class="stat"><span class="stat-val" style="color:var(--muted)">8</span><span class="stat-label">БОТОВ АКТИВНО</span></div>
+    <div class="stat"><span class="stat-val" style="color:var(--accent4)">23</span><span class="stat-label">КОННЕКТОРОВ</span></div>
+  </div>
+
+  <!-- 4 Pillars -->
+  <div class="pillars" id="pillars">
+
+    <div class="pillar" onclick="toggle(0)">
+      <div class="pillar-icon">🧠</div>
+      <div class="pillar-num">01 / ПАМЯТЬ</div>
+      <div class="pillar-title">ГРУППОВОЙ КОНТЕКСТ <span class="chevron">›</span></div>
+      <div class="pillar-desc">Боты помнят историю группового чата. office:group:history в Redis, последние 10 сообщений в каждом ответе.</div>
+      <div class="pillar-count">5 задач · 4 готово ✓</div>
+    </div>
+
+    <div class="pillar" onclick="toggle(1)">
+      <div class="pillar-icon">👤</div>
+      <div class="pillar-num">02 / ЛЮДИ</div>
+      <div class="pillar-title">ПРОФИЛИ УЧАСТНИКОВ <span class="chevron">›</span></div>
+      <div class="pillar-desc">Боты адаптируются под каждого человека в группе. Redis-профили у всех ботов — авто-извлечение через Haiku после каждого сообщения.</div>
+      <div class="pillar-count">8 задач · 4 готово</div>
+    </div>
+
+    <div class="pillar" onclick="toggle(2)">
+      <div class="pillar-icon">⚡</div>
+      <div class="pillar-num">03 / РОУТИНГ</div>
+      <div class="pillar-title">УМНЫЙ ФИЛЛИ <span class="chevron">›</span></div>
+      <div class="pillar-desc">Филли учится на ошибках роутинга. Знает паттерны запросов, адаптирует маршрутизацию, не падает в fallback.</div>
+      <div class="pillar-count">8 задач · 8 готово ✓</div>
+    </div>
+
+    <div class="pillar" onclick="toggle(3)">
+      <div class="pillar-icon">🔁</div>
+      <div class="pillar-num">04 / ПЕТЛЯ</div>
+      <div class="pillar-title">FEEDBACK LOOP <span class="chevron">›</span></div>
+      <div class="pillar-desc">Система оценивает качество ответов. quality.py v0.1.3 — единый контракт. Реакции 👍/👎 пишут в office:quality:{bot}. /metrics починен. Еженедельный отчёт + /approve задеплоены.</div>
+      <div class="pillar-count">7 задач · 7 готово ✓</div>
+    </div>
+
+    <div class="pillar" onclick="toggle(4)">
+      <div class="pillar-icon">💌</div>
+      <div class="pillar-num">05 / СЕМЬЯ</div>
+      <div class="pillar-title">КАНАЛ МАМЫ <span class="chevron">›</span></div>
+      <div class="pillar-desc">Эллис — мост между мамой и офисом. Принимает сообщения, решает мелкие вопросы сама, упоминает несрочное в разговоре, передаёт приветы.</div>
+      <div class="pillar-count">5 задач · 5 готово ✓</div>
+    </div>
+
+    <div class="pillar" onclick="toggle(5)">
+      <div class="pillar-icon">🧬</div>
+      <div class="pillar-num">06 / СИЛЛИ 2.0</div>
+      <div class="pillar-title">САМОПРОКАЧКА <span class="chevron">›</span></div>
+      <div class="pillar-desc">Силли получает Claude Code как руки, библиотеку скиллов как память, и доступ к дебагам всех ботов. Замкнутая петля: видит баг → читает логи → достаёт скилл → правит код через CC.</div>
+      <div class="pillar-count">8 задач · 8 готово</div>
+    </div>
+
+  </div>
+
+  <!-- Detail panels -->
+  <div class="detail-panel" id="panel-0">
+    <div class="detail-inner">
+      <div class="section-title">ЗАДАЧИ — ГРУППОВОЙ КОНТЕКСТ</div>
+      <div class="tasks">
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Redis история в DM</div></div>
+          <div class="task-note">Крисс и Эллис уже хранят историю через Redis. Основа есть.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Группа — Redis вместо RAM</div></div>
+          <div class="task-note">conversation_history перенесена в Redis для всех ботов. Рестарт больше не сбрасывает историю.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Redis для группового чата</div></div>
+          <div class="task-note">office:group:history в Redis. Ключ общий для офиса.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Передавать контекст группы в process()</div></div>
+          <div class="task-note">Каждый бот получает последние 10 сообщений группы при каждом ответе.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status todo"></div><div class="task-name">Сжатие истории при 15+ ботах</div></div>
+          <div class="task-note">JSON-контекст вместо 20 сырых сообщений. Уже запланировано в архитектуре.</div>
+          <div class="task-badge badge-todo">ПЛАНИРУЕТСЯ</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="detail-panel" id="panel-1">
+    <div class="detail-inner">
+      <div class="section-title">ЗАДАЧИ — ПРОФИЛИ УЧАСТНИКОВ</div>
+      <div class="tasks">
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Auto-extract интересов (Эллис)</div></div>
+          <div class="task-note">Эллис уже извлекает факты о пользователе в фоне через Haiku.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Weekly review профиля (Эллис/Крисс)</div></div>
+          <div class="task-note">Раз в неделю Haiku компактизирует заметки о пользователе.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Гослинг помнит Лука</div></div>
+          <div class="task-note">Redis-профиль добавлен. Гослинг накапливает память об их переписке между сессиями.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Redis профили для всех ботов</div></div>
+          <div class="task-note">Система заметок Эллис/Крисс распространена на Билли, Гослинга, Доктора, Тилли, Милли, Вилли. Авто-извлечение через Haiku после каждого сообщения.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status todo"></div><div class="task-name">Профиль группы в целом</div></div>
+          <div class="task-note">Офис знает кто участники, их роли, типичные темы. Shared profile: office:members.</div>
+          <div class="task-badge badge-todo">ПЛАНИРУЕТСЯ</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status todo"></div><div class="task-name">Автоматический бэклог по каждому участнику</div></div>
+          <div class="task-note">Уже в бэклоге Эллис/Крисс. Периодический Railway Cron для пересмотра профилей.</div>
+          <div class="task-badge badge-todo">ПЛАНИРУЕТСЯ</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status todo"></div><div class="task-name">Quick Reply кнопки у Крисс</div></div>
+          <div class="task-note">Inline-кнопки под ответами для частых действий: 📋 Задачи, 🔄 Статус, 💬 Заметка, ✅ Готово. Крисс сама решает когда их показывать — контекстно.</div>
+          <div class="task-badge badge-todo">ПЛАНИРУЕТСЯ</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status todo"></div><div class="task-name">Scheduled сообщения у Крисс</div></div>
+          <div class="task-note">Крисс не может инициировать сообщения сама — только отвечает. Нужен Railway Cron + endpoint /send_scheduled в коде Крисс. Внешний триггер в нужное время дёргает бота → bot.send_message(chat_id=...). Юзкейс: Яна попросила гороскоп каждый день в 12:00 — сейчас это невозможно без cron-обвязки. Приоритет: vietnam-bot проект.</div>
+          <div class="task-badge badge-todo">ПЛАНИРУЕТСЯ</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="detail-panel" id="panel-2">
+    <div class="detail-inner">
+      <div class="section-title">ЗАДАЧИ — УМНЫЙ РОУТИНГ</div>
+      <div class="tasks">
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">HTTP роутинг с fallback</div></div>
+          <div class="task-note">Базовый роутинг через internal URLs работает для большинства ботов.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Prompt Enhancer перед роутингом</div></div>
+          <div class="task-note">Haiku улучшает запрос до маршрутизации — повышает точность роутинга.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Name-map для прямых обращений</div></div>
+          <div class="task-note">"Гослинг, чуешь?" → ГОСЛИНГ минуя LLM-классификатор.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Нет проверки health ботов перед роутингом</div></div>
+          <div class="task-note">Закрыто: health-cache в Redis. Филли проверяет кэш перед роутингом — упавший бот не получает запрос.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Логирование промахов роутинга</div></div>
+          <div class="task-note">office:routing:misses (LPUSH+LTRIM 100) + log_event route_miss/route_ok в ai_office_shared. Три причины: health_cache_down, http_error, exception. Силли читает через read_logs().</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Health-cache у Филли</div></div>
+          <div class="task-note">office:health:{agent} в Redis: TTL 60s для up, 120s для down. route_via_http проверяет кэш перед HTTP — упавший бот пропускается сразу без 25с timeout.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Cloudflare Worker прокси-резерв</div></div>
+          <div class="task-note">Worker перед Филли. Railway лежит → Worker отвечает "технические работы" вместо тишины. Инцидент 2026-05-20: outage спамил алерты 2 мин/цикл без логики "platform down = заткнись". Уже деплоится на ai-office-watchdog.unperson22.workers.dev.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Platform outage detection в watchdog</div></div>
+          <div class="task-note">Перед каждым алертом проверять status.railway.app. Если Major Outage — один алерт и полная тишина до восстановления. Никакого спама.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="detail-panel" id="panel-3">
+    <div class="detail-inner">
+      <div class="section-title">ЗАДАЧИ — FEEDBACK LOOP</div>
+      <div class="tasks">
+        <div class="task">
+          <div class="task-header"><div class="task-status done" style="background:var(--done)"></div><div class="task-name">Bug lessons система (Силли)</div></div>
+          <div class="task-note">26 уроков накоплено. Силли не повторяет известные баги. Основа петли обратной связи.</div>
+          <div class="task-badge badge-done">ГОТОВО (26 уроков)</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Capability gap detection (Силли)</div></div>
+          <div class="task-note">Силли замечает когда бот не смог ответить нормально и автодобавляет web_search.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Реакции как оценка ответа + quality.py</div></div>
+          <div class="task-note">👍/👎 → office:quality:{bot} (HASH up/down). ai_office_shared.shared.quality v0.1.3 — единый owner контракта. Канон: поля up/down, owner office:msg:{chat}:{msg}. SKILL.md обновлён.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">/metrics в Филли — фикс</div></div>
+          <div class="task-note">Корень: Redis-awaits без таймаутов (try/except не ловит зависание). Фикс: asyncio.wait_for(timeout=2.0) на каждый await. Задеплоено 2026-05-21.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Еженедельный отчёт качества</div></div>
+          <div class="task-note">weekly_report.py задеплоен в ai-office-shared. /weekly — отчёт по качеству + топ промахов + предложение по промпту. Порог: 25%+ 👎.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Авто-обновление промптов (с approve)</div></div>
+          <div class="task-note">/approve + /skip задеплоены (группа + личка). BOT_PROMPT_LOCATION верифицирован по всем 8 репо. Pending proposal в Redis. Полный цикл: статистика → предложение → /approve → GitHub push.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">SYSTEM_STATE.md — живой документ</div></div>
+          <div class="task-note">Создан и задеплоен в корень ai-office-shared. Описывает ростер, Redis-контракты, shared lib, дебаг-протокол. Силли обновляет после изменений.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="detail-panel" id="panel-4">
+    <div class="detail-inner">
+      <div class="section-title">ЗАДАЧИ — КАНАЛ МАМЫ</div>
+      <div class="tasks">
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Приветствие с инструкцией для мамы</div></div>
+          <div class="task-note">MOM_SYSTEM_BASE + тёплый /start для мамы: «Если хотите что-то передать Владу — просто напишите мне, я сообщу когда нужно.» MOM_USER_ID env var.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">mom_queue в Redis</div></div>
+          <div class="task-note">office:mom_queue, LPUSH + TTL 7д. mom_queue_push/drain(). Haiku-классификатор: self | queue | urgent. Urgent — немедленно в офис.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Естественное упоминание в разговоре</div></div>
+          <div class="task-note">Филли → fire-and-forget POST /mention к Эллис при каждом сообщении Влада/Лука в группе. Эллис drain()'ит очередь и шлёт «💌 Кстати, мама передавала...» в OFFICE_CHAT_ID.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Автономное решение мелких вопросов</div></div>
+          <div class="task-note">classify_mom_message() (Haiku): "self" → Эллис отвечает сама, "queue" → копит для Влада, "urgent" → немедленно в офис. Рецепты, советы, вопросы о Владе — всё решает сама.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Quick Reply кнопки для мамы</div></div>
+          <div class="task-note">InlineKeyboardMarkup: ✅ Да / ❌ Нет / 🕐 Позже / 📞 Позвони. Показываются когда ответ Эллис заканчивается вопросом. Кнопка 📞 автоматически ставит «Мама просит позвонить» в mom_queue.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="detail-panel" id="panel-5">
+    <div class="detail-inner">
+      <div class="section-title">ЗАДАЧИ — СИЛЛИ 2.0</div>
+      <div class="tasks">
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Claude Code как subagent</div></div>
+          <div class="task-note">Силли вызывает Claude Code CLI для многофайловых рефакторов. CC работает в ветке → PR → ты делаешь /approve → merge. Сейчас Силли правит файлы по одному через GitHub API — синхронные правки контрактов между ботами невозможны без боли.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Skills структура (SKILL.md)</div></div>
+          <div class="task-note">Папки ai-office-shared/skills/{name}/SKILL.md с рецептами. Силли видит знакомый сценарий → подгружает скилл → не изобретает заново. Формат тот же что у Anthropic Skills.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Базовые скиллы (стартовый набор)</div></div>
+          <div class="task-note">5 скиллов задеплоены в ai-office-shared/skills/: railway-deploy, redis-migration, ptb-reactions, telethon-handlers, github-push. Дальше Силли сам пополняет.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Canonical identity registry (tech debt)</div></div>
+          <div class="task-note">ai_office_shared/shared/identity.py: BOTS dict + canonical() + display() + redis_key(). Обратный индекс по всем алиасам (RU/EN, любой регистр). Тэг v0.1.1. Боты переедут при следующей правке shared lib.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Shared library в ai-office-shared/shared/</div></div>
+          <div class="task-note">redis_helpers + tasks модули в ai_office_shared v0.1.2. Боты мигрируют попутно при следующей правке (MIGRATION RULE). Написано, протестировано, задеплоено в пакет.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Структурные логи в Redis</div></div>
+          <div class="task-note">office:logs:{bot}:{date}, LPUSH+LTRIM 1000, TTL 7д. События: route_*/message_received/response_sent/task_received/api_error/lesson_saved/capability_gap_detected. Пакет ai_office_shared v0.1.0, все 10 ботов.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Auto-pull логов при расследовании</div></div>
+          <div class="task-note">Когда Силли ловит баг или capability_gap — сам поднимает последние N логов виновного бота из Redis. Замыкает дебаги → библиотеку → Claude Code в одну цепочку.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+        <div class="task">
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Автономный ремонт без Railway API</div></div>
+          <div class="task-note">Силли чинит ботов через GitHub + Telegram даже когда Railway API недоступен (platform outage). Паттерн: читает логи из Redis → достаёт скилл → пушит фикс в GitHub → Railway автодеплоит из ветки. Railway API не нужен в цепочке исправления.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Vulnerabilities -->
+  <div style="margin-top: 40px; animation: fadeUp 0.5s 0.35s ease both;">
+    <div class="section-title">АКТИВНЫЕ УЯЗВИМОСТИ</div>
+  </div>
+
+  <div class="vuln-grid">
+    <div class="vuln-card" style="border-left-color: var(--done); opacity: 0.6;">
+      <div class="vuln-icon">✅</div>
+      <div>
+        <div class="vuln-title" style="color: var(--done)">УЯЗВИМОСТЕЙ НЕТ</div>
+        <div class="vuln-desc">Все известные проблемы устранены. Последняя закрытая: /metrics timeout (2026-05-21).</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Architecture flow -->
+  <div class="arch-note">
+    <div class="section-title" style="margin-bottom: 16px;">ЦЕЛЕВАЯ АРХИТЕКТУРА</div>
+    <pre>
+СООБЩЕНИЕ В ГРУППЕ
+      │
+      ▼
+ФИЛЛИ ──health-cache──► бот живой? ──нет──► логировать промах → другой бот
+      │                                                              
+      │ да
+      ▼
+Prompt Enhancer (Haiku)
+      │
+      ▼
+Router (Haiku) + Redis group context (последние 10 сообщений)
+      │
+      ▼
+БОТ обрабатывает ──► Redis: user profile + group history update
+      │
+      ▼
+Ответ в группу
+      │
+      ▼
+👍/👎 реакция ──► Redis: quality score
+      │
+      ▼
+СИЛЛИ (еженедельно): анализ → предложение правок промпта → /approve → GitHub push</pre>
+  </div>
+
+  <!-- Connectors -->
+  <div style="margin-top: 40px; animation: fadeUp 0.5s 0.5s ease both;">
+    <div class="section-title">ДОСТУПНЫЕ КОННЕКТОРЫ — 23 СЕРВИСА</div>
+  </div>
+
+  <div class="connectors-grid">
+    <div class="connector-card"><div class="connector-icon">🎨</div><div><div class="connector-name">Adobe</div><div class="connector-tools">57 инструментов</div></div></div>
+    <div class="connector-card"><div class="connector-icon">📊</div><div><div class="connector-name">Airtable</div><div class="connector-tools">21 инструмент</div></div></div>
+    <div class="connector-card"><div class="connector-icon">✅</div><div><div class="connector-name">Asana</div><div class="connector-tools">32 инструмента</div></div></div>
+    <div class="connector-card"><div class="connector-icon">🖼️</div><div><div class="connector-name">Canva</div><div class="connector-tools">34 инструмента</div></div></div>
+    <div class="connector-card"><div class="connector-icon">✍️</div><div><div class="connector-name">Craft</div><div class="connector-tools">2 инструмента</div></div></div>
+    <div class="connector-card"><div class="connector-icon">🎯</div><div><div class="connector-name">Figma</div><div class="connector-tools">17 инструментов</div></div></div>
+    <div class="connector-card"><div class="connector-icon">🎙️</div><div><div class="connector-name">Fireflies</div><div class="connector-tools">20 инструментов</div></div></div>
+    <div class="connector-card"><div class="connector-icon">⚡</div><div><div class="connector-name">Gamma</div><div class="connector-tools">7 инструментов</div></div></div>
+    <div class="connector-card"><div class="connector-icon">📧</div><div><div class="connector-name">Gmail</div><div class="connector-tools">12 инструментов</div></div></div>
+    <div class="connector-card"><div class="connector-icon">📅</div><div><div class="connector-name">Google Calendar</div><div class="connector-tools">8 инструментов</div></div></div>
+    <div class="connector-card"><div class="connector-icon">💾</div><div><div class="connector-name">Google Drive</div><div class="connector-tools">8 инструментов</div></div></div>
+    <div class="connector-card"><div class="connector-icon">🌿</div><div><div class="connector-name">Granola</div><div class="connector-tools">6 инструментов</div></div></div>
+    <div class="connector-card"><div class="connector-icon">📚</div><div><div class="connector-name">Learning Commons</div><div class="connector-tools">3 инструмента</div></div></div>
+    <div class="connector-card"><div class="connector-icon">📐</div><div><div class="connector-name">Linear</div><div class="connector-tools">35 инструментов</div></div></div>
+    <div class="connector-card"><div class="connector-icon">🗂️</div><div><div class="connector-name">Lucid</div><div class="connector-tools">15 инструментов</div></div></div>
+    <div class="connector-card"><div class="connector-icon">🪄</div><div><div class="connector-name">Magic Patterns</div><div class="connector-tools">12 инструментов</div></div></div>
+    <div class="connector-card"><div class="connector-icon">🔁</div><div><div class="connector-name">Make</div><div class="connector-tools">114 инструментов</div><div class="connector-tools" style="color:var(--accent2)">free plan</div></div></div>
+    <div class="connector-card"><div class="connector-icon">🧜</div><div><div class="connector-name">Mermaid Chart</div><div class="connector-tools">1 инструмент</div></div></div>
+    <div class="connector-card"><div class="connector-icon">📝</div><div><div class="connector-name">Notion</div><div class="connector-tools">14 инструментов</div></div></div>
+    <div class="connector-card"><div class="connector-icon">🖊️</div><div><div class="connector-name">tldraw</div><div class="connector-tools">2 инструмента</div></div></div>
+    <div class="connector-card"><div class="connector-icon">🏗️</div><div><div class="connector-name">SketchUp</div><div class="connector-tools">3 инструмента</div></div></div>
+    <div class="connector-card"><div class="connector-icon">📱</div><div><div class="connector-name">Twilio</div><div class="connector-tools">2 инструмента</div></div></div>
+    <div class="connector-card"><div class="connector-icon">💼</div><div><div class="connector-name">ZipRecruiter</div><div class="connector-tools">1 инструмент</div></div></div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:var(--done)"></div>ГОТОВО</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--accent2); animation: pulse 2s infinite"></div>В РАБОТЕ</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--muted)"></div>ПЛАНИРУЕТСЯ</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--accent); animation: pulse 1.5s infinite"></div>УЯЗВИМОСТЬ</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--accent4)"></div>КОННЕКТОР</div>
+  </div>
+
+</div>
+
+<script>
+  const panels = document.querySelectorAll('.detail-panel');
+  const pillars = document.querySelectorAll('.pillar');
+  let active = -1;
+  // panels[0..4] and pillars[0..4] — автоматически подхватывает 5й блок
+
+  function toggle(i) {
+    if (active === i) {
+      panels[i].classList.remove('open');
+      pillars[i].classList.remove('active');
+      active = -1;
+    } else {
+      if (active >= 0) {
+        panels[active].classList.remove('open');
+        pillars[active].classList.remove('active');
+      }
+      panels[i].classList.add('open');
+      pillars[i].classList.add('active');
+      active = i;
+      setTimeout(() => panels[i].scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
+    }
+  }
+</script>
+</body>
+</html>
