@@ -497,9 +497,9 @@
   </div>
 
   <div class="status-bar">
-    <div class="stat"><span class="stat-val done">34</span><span class="stat-label">ГОТОВО</span></div>
+    <div class="stat"><span class="stat-val done">44</span><span class="stat-label">ГОТОВО</span></div>
     <div class="stat"><span class="stat-val wip">0</span><span class="stat-label">В РАБОТЕ</span></div>
-    <div class="stat"><span class="stat-val todo">10</span><span class="stat-label">ЗАПЛАНИРОВАНО</span></div>
+    <div class="stat"><span class="stat-val todo">0</span><span class="stat-label">ЗАПЛАНИРОВАНО</span></div>
     <div class="stat"><span class="stat-val" style="color:var(--done)">0</span><span class="stat-label">УЯЗВИМОСТИ</span></div>
     <div class="stat"><span class="stat-val" style="color:var(--muted)">8</span><span class="stat-label">БОТОВ АКТИВНО</span></div>
     <div class="stat"><span class="stat-val" style="color:var(--accent4)">23</span><span class="stat-label">КОННЕКТОРОВ</span></div>
@@ -513,7 +513,7 @@
       <div class="pillar-num">01 / ПАМЯТЬ</div>
       <div class="pillar-title">ГРУППОВОЙ КОНТЕКСТ <span class="chevron">›</span></div>
       <div class="pillar-desc">Боты помнят историю группового чата. office:group:history в Redis, последние 10 сообщений в каждом ответе.</div>
-      <div class="pillar-count">5 задач · 4 готово ✓</div>
+      <div class="pillar-count">5 задач · 5 готово ✓</div>
     </div>
 
     <div class="pillar" onclick="toggle(1)">
@@ -545,7 +545,7 @@
       <div class="pillar-num">05 / СЕМЬЯ</div>
       <div class="pillar-title">КАНАЛ МАМЫ <span class="chevron">›</span></div>
       <div class="pillar-desc">Эллис — мост между мамой и офисом. Принимает сообщения, решает мелкие вопросы сама, упоминает несрочное в разговоре, передаёт приветы.</div>
-      <div class="pillar-count">5 задач · 0 готово</div>
+      <div class="pillar-count">5 задач · 5 готово ✓</div>
     </div>
 
     <div class="pillar" onclick="toggle(5)">
@@ -584,9 +584,9 @@
           <div class="task-badge badge-done">ГОТОВО</div>
         </div>
         <div class="task">
-          <div class="task-header"><div class="task-status todo"></div><div class="task-name">Сжатие истории при 15+ ботах</div></div>
-          <div class="task-note">JSON-контекст вместо 20 сырых сообщений. Уже запланировано в архитектуре.</div>
-          <div class="task-badge badge-todo">ПЛАНИРУЕТСЯ</div>
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Сжатие истории при 15+ ботах</div></div>
+          <div class="task-note">office:group:ctx (TTL 24ч). При 15+ записях Haiku сжимает в сводку fire-and-forget. group_history_get() → [Профиль команды] + [Сводка беседы] + последние 5 сырых.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
         </div>
       </div>
     </div>
@@ -736,29 +736,29 @@
       <div class="section-title">ЗАДАЧИ — КАНАЛ МАМЫ</div>
       <div class="tasks">
         <div class="task">
-          <div class="task-header"><div class="task-status todo"></div><div class="task-name">Приветствие с инструкцией для мамы</div></div>
-          <div class="task-note">В welcome-сообщение Эллис добавить: «Если хочешь что-то передать — просто напиши мне, я сообщу в офис когда нужно.» Мама знает канал.</div>
-          <div class="task-badge badge-todo">ПЛАНИРУЕТСЯ</div>
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Приветствие с инструкцией для мамы</div></div>
+          <div class="task-note">MOM_SYSTEM_BASE + тёплый /start: «Если хотите что-то передать Владу или Луку — просто напишите мне». MOM_USER_ID env (6507691976) задеплоен в Railway mama-bot.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
         </div>
         <div class="task">
-          <div class="task-header"><div class="task-status todo"></div><div class="task-name">mom_queue в Redis</div></div>
-          <div class="task-note">Ключ office:mom_queue — несрочные сообщения от мамы хранятся до появления адресата в чате. TTL чтобы не накапливались вечно.</div>
-          <div class="task-badge badge-todo">ПЛАНИРУЕТСЯ</div>
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">mom_queue в Redis</div></div>
+          <div class="task-note">office:mom_queue, LPUSH + TTL 7д. Haiku-классификатор: self | queue | urgent. Urgent — немедленно в OFFICE_CHAT_ID, queue — копит до появления Влада в офисном чате.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
         </div>
         <div class="task">
-          <div class="task-header"><div class="task-status todo"></div><div class="task-name">Естественное упоминание в разговоре</div></div>
-          <div class="task-note">Когда ты или Лук пишете в чат — Эллис вплетает в ответ: «Кстати, мама передавала...» Не отдельным уведомлением, а в контексте.</div>
-          <div class="task-badge badge-todo">ПЛАНИРУЕТСЯ</div>
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Естественное упоминание в разговоре</div></div>
+          <div class="task-note">Filly fire-and-forget POST /mention к Эллис при каждом сообщении в группе. Эллис drain()'ит очередь → «💌 Кстати, мама передавала...» в OFFICE_CHAT_ID.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
         </div>
         <div class="task">
-          <div class="task-header"><div class="task-status todo"></div><div class="task-name">Автономное решение мелких вопросов</div></div>
-          <div class="task-note">Если мама спрашивает что-то что Эллис может решить без тебя — решает сама, тебе только итог постфактум. Критерии «можно решить самой» — в промпте.</div>
-          <div class="task-badge badge-todo">ПЛАНИРУЕТСЯ</div>
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Автономное решение мелких вопросов</div></div>
+          <div class="task-note">classify_mom_message() (Haiku): self → Эллис отвечает сама, queue → копит для Влада, urgent → немедленно в офис. Рецепты, вопросы, советы — всё решает сама.</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
         </div>
         <div class="task">
-          <div class="task-header"><div class="task-status todo"></div><div class="task-name">Quick Reply кнопки для мамы</div></div>
-          <div class="task-note">Когда Эллис задаёт маме вопрос — показывает кнопки: ✅ Да / ❌ Нет / 🕐 Позже / 📞 Позвони. Не надо печатать — просто нажать.</div>
-          <div class="task-badge badge-todo">ПЛАНИРУЕТСЯ</div>
+          <div class="task-header"><div class="task-status done"></div><div class="task-name">Quick Reply кнопки для мамы</div></div>
+          <div class="task-note">InlineKeyboardMarkup: ✅ Да / ❌ Нет / 🕐 Позже / 📞 Позвони. Показываются когда ответ заканчивается вопросом. Кнопка 📞 → mom_queue «Мама просит позвонить».</div>
+          <div class="task-badge badge-done">ГОТОВО</div>
         </div>
       </div>
     </div>
