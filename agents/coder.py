@@ -11,6 +11,7 @@ import time
 import httpx
 import logging
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from agents.weekly_report import register_weekly_handlers
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
@@ -2942,6 +2943,10 @@ async def main():
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080)))
     await site.start()
     logger.info("[http] Cilly HTTP server started on :8080")
+    # Weekly report handlers (/weekly, /approve, /skip)
+    _redis_for_weekly = await get_redis()
+    if _redis_for_weekly:
+        register_weekly_handlers(dp, _redis_for_weekly, claude)
     await dp.start_polling(
         bot,
         allowed_updates=dp.resolve_used_update_types()
