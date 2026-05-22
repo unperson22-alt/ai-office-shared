@@ -83,7 +83,7 @@ async def auto_extract_interests(
     """
     try:
         existing = await redis_get_notes(redis_client, bot_name, user_id)
-        r = anthropic_client.messages.create(
+        r = await anthropic_client.messages.create(
             model=HAIKU_MODEL,
             max_tokens=150,
             system=(
@@ -124,7 +124,7 @@ async def weekly_review(
         history_text = "\n".join(
             f"{m['role']}: {m['content'][:200]}" for m in history[-30:]
         )
-        r = anthropic_client.messages.create(
+        r = await anthropic_client.messages.create(
             model=HAIKU_MODEL,
             max_tokens=400,
             system=(
