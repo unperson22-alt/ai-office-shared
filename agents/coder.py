@@ -624,7 +624,7 @@ async def railway_query(query: str, variables: dict = None) -> dict:
         payload["variables"] = variables
     async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
         r = await client.post(
-            "https://backboard.railway.app/graphql/v2",
+            "https://backboard.railway.com/graphql/v2",
             headers={"Authorization": f"Bearer {RAILWAY_TOKEN}", "Content-Type": "application/json"},
             json=payload
         )
@@ -638,7 +638,7 @@ async def _railway_is_available() -> bool:
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(8.0)) as c:
             r = await c.post(
-                "https://backboard.railway.app/graphql/v2",
+                "https://backboard.railway.com/graphql/v2",
                 headers={"Authorization": f"Bearer {RAILWAY_TOKEN}", "Content-Type": "application/json"},
                 json={"query": "{ me { id } }"},
             )
@@ -1022,12 +1022,12 @@ async def run_daily_audit() -> str:
     for service_id, (repo, _) in SERVICES.items():
         try:
             data = await railway_query(
-                """query($pid: String!, $sid: String!, $eid: String!) {
-                     deployments(first:1, input:{projectId:$pid, serviceId:$sid, environmentId:$eid}) {
+                """query($sid: String!) {
+                     deployments(first:1, input:{serviceId:$sid}) {
                        edges { node { status } }
                      }
                    }""",
-                {"pid": RAILWAY_PROJECT, "sid": service_id, "eid": RAILWAY_ENV_ID}
+                {"sid": service_id}
             )
             deps = (data.get("data") or {}).get("deployments", {}).get("edges") or []
             status = deps[0]["node"]["status"] if deps else "NO_DEPLOY"
@@ -1711,7 +1711,7 @@ async def railway_graphql(query: str, variables: dict = None) -> dict:
         if variables:
             payload["variables"] = variables
         r = await client.post(
-            "https://backboard.railway.app/graphql/v2",
+            "https://backboard.railway.com/graphql/v2",
             headers={"Authorization": f"Bearer {RAILWAY_TOKEN_VAL}", "Content-Type": "application/json"},
             json=payload
         )
