@@ -619,6 +619,11 @@ async def append_ops_log(action: str, service: str, details: str = ""):
         logger.debug(f"append_ops_log failed: {e}")
 
 async def railway_query(query: str, variables: dict = None) -> dict:
+    """GraphQL-запрос к Railway API.
+    Бросает RuntimeError если HTTP != 200 или в ответе есть errors.
+    Это позволяет audit-коду отловить AUTH/PERMISSION ошибки явно
+    вместо молчаливого "NO_DEPLOY" при data=null.
+    """
     payload = {"query": query}
     if variables:
         payload["variables"] = variables
@@ -629,7 +634,13 @@ async def railway_query(query: str, variables: dict = None) -> dict:
             json=payload
         )
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        # GraphQL может вернуть HTTP 200 + {"data": null, "errors": [...]}
+        # raise_for_status() это не поймает — проверяем явно
+        if data.get("data") is None and data.get("errors"):
+            msgs = "; ".join(e.get("message", "?") for e in data["errors"])
+            raise RuntimeError(f"Railway GraphQL error: {msgs}")
+        return data
 
 
 
@@ -1036,8 +1047,17 @@ async def run_daily_audit() -> str:
                 deploy_ok.append(name)
             else:
                 deploy_fail.append(f"{name}:{status}")
+        except RuntimeError as e:
+            # GraphQL auth/permission error — критично, Railway API недоступен
+            err_msg = str(e)
+            if "Not Authorized" in err_msg or "Unauthorized" in err_msg:
+                deploy_fail.append(f"{repo}:AUTH_ERROR")
+            else:
+                deploy_fail.append(f"{repo}:GQL_ERROR")
+            logger.error(f"[audit] Railway API error for {repo}: {e}")
         except Exception as e:
-            deploy_fail.append(f"{repo}:ERROR({e})")
+            deploy_fail.append(f"{repo}:ERROR({type(e).__name__})")
+            logger.error(f"[audit] deploy check failed for {repo}: {e}")
 
     if deploy_fail:
         lines.append(f"❌ Деплои упали: {', '.join(deploy_fail)}")
@@ -1705,7 +1725,9 @@ async def tg_promote_bot_admin(bot_username: str, group_id: int) -> bool:
 
 
 async def railway_graphql(query: str, variables: dict = None) -> dict:
-    """Выполнить GraphQL запрос к Railway API."""
+    """Выполнить GraphQL запрос к Railway API.
+    Бросает RuntimeError при GraphQL-уровне ошибок (auth, permission и т.п.).
+    """
     async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
         payload = {"query": query}
         if variables:
@@ -1716,7 +1738,11 @@ async def railway_graphql(query: str, variables: dict = None) -> dict:
             json=payload
         )
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        if data.get("data") is None and data.get("errors"):
+            msgs = "; ".join(e.get("message", "?") for e in data["errors"])
+            raise RuntimeError(f"Railway GraphQL error: {msgs}")
+        return data
 
 async def railway_set_variables(service_id: str, variables: dict) -> bool:
     """Записать переменные окружения в Railway сервис."""
@@ -2955,6 +2981,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
