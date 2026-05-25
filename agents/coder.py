@@ -1450,6 +1450,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response)
 
 
+
+async def handle_redis_dump(request):
+    """Читает Redis ключ и возвращает содержимое. Auth: X-Auth-Token."""
+    auth = request.headers.get("X-Auth-Token", "")
+    if not auth or auth != RAILWAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    data = await request.json()
+    key = data.get("key", "office:group:ctx")
+    limit = data.get("limit", 50)
+    try:
+        r = await get_redis()
+        if not r:
+            return web.json_response({"error": "redis unavailable"})
+        key_type = await r.type(key)
+        result = []
+        if key_type == "list":
+            items = await r.lrange(key, 0, limit-1)
+            for item in items:
+                try:
+                    result.append(json.loads(item))
+                except:
+                    result.append({"raw": item})
+        elif key_type == "string":
+            val = await r.get(key)
+            result = [{"raw": val}]
+        else:
+            all_keys = await r.keys("office:*")
+            result = [{"keys": sorted(all_keys)}]
+        return web.json_response({"key": key, "type": key_type, "count": len(result), "data": result})
+    except Exception as e:
+        return web.json_response({"error": str(e)})
+
 async def main():
     app_http = web.Application()
     app_http.router.add_post("/task", handle_task)
@@ -2981,6 +3013,7 @@ async def main():
     app.router.add_post("/task", handle_cilly_task)
     app.router.add_get("/secrets", handle_secrets)
     app.router.add_post("/post_raw", handle_post_raw)
+    app.router.add_post("/redis_dump", handle_redis_dump)
     app.router.add_post("/promote_bots", handle_promote_bots)
     app.router.add_get("/health", handle_health)
     runner = web.AppRunner(app)
