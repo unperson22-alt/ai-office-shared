@@ -537,11 +537,18 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
 
 
 INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
-{"intent":"push_code|fix_bot|create_bot|add_external_bot|get_bot_token|deploy|read_file|list_files|redis_query|answer","repo":"name|null","path":"path|null","task":"описание","confidence":"high|low"}
-push_code=залить код, fix_bot=исправить баг, create_bot=новый бот с нуля, add_external_bot=подключить внешнего бота, get_bot_token=получить токен, deploy=редеплой, read_file=прочитать файл, list_files=список файлов, redis_query=ЛЮБЫЕ операции с Redis (читать/писать ключи), answer=общий ответ.
-ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis", "логи ботов", "аудит ключей" → ВСЕГДА redis_query, никогда не answer.
+{"intent":"push_code|fix_bot|create_bot|add_external_bot|get_bot_token|deploy|read_file|list_files|redis_query|answer","repo":"repo_name_or_null","path":"file_path_or_null","task":"task_description","confidence":0.0-1.0}
+
+ГЛАВНОЕ ПРАВИЛО — различай вопрос и команду:
+- ВОПРОС о процессе ("как создать бота?", "что нужно для деплоя?", "какой стек?", "как задеплоить?", "с чего начать?") → intent=answer
+- КОМАНДА к действию ("создай бота", "задеплой", "залей код", "исправь баг") → соответствующий intent
+Сигналы вопроса: как, какой, какие, что такое, зачем, почему, расскажи, объясни, с чего начать, какие шаги
+Сигналы команды: создай, сделай, залей, задеплой, исправь, добавь, зарегистрируй
+
+push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не вопрос!), add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, answer=ответить словами.
+ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis" → redis_query.
 ВАЖНО: "подключить бота", "добавить чужого бота" → add_external_bot, НЕ create_bot.
-Репо: billy-bot,tilly-bot,filly-bot,dilly-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard,mama-bot,pilly-bot,villy-bot,prophet-bot,gosling-bot,tilly-trader.
+Репо: billy-bot,tilly-bot,filly-bot,dilly-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard,mama-bot,gosling-bot,villy-bot,prophet-bot,kriss-bot,pilly-bot,doctor-bot,marketing-dept.
 билли→billy, тилли→tilly, макс/милли→milly, доктор/дилли→dilly, филли→filly, силли→ai-office-shared."""
 
 
