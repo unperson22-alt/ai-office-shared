@@ -968,6 +968,10 @@ IGNORE_PATTERNS = [
     "NetworkError while getting Updates",        # временная сетевая ошибка
     "TimedOut",                                  # telegram timeout — не баг
     "DeprecationWarning",                        # предупреждение, не ошибка
+    "httpx.ReadError",                           # сетевой сбой при polling — не баг
+    "httpcore.ReadError",                        # то же
+    "TelegramConflictError",                     # конфликт polling при рестарте
+    "Failed to fetch updates",                   # временный сбой polling
 ]
 
 # Игнорировать ошибки старше этого времени (секунды) — стартовый шум редеплоя
@@ -1983,6 +1987,16 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                 else:
                     raw = await r.lrange(ns, 0, 9)
                     result[ns] = [json.loads(e) for e in raw]
+
+        # ── 7. сброс fix_count (reset / сброс) ───────────────────────
+        if any(w in task_lower for w in ["сбро", "reset", "clear fix", "очист"]):
+            deleted = []
+            async for key in r.scan_iter("fix_count:*"):
+                await r.delete(key)
+                deleted.append(key.split(":")[-1][:8])
+            async for key in r.scan_iter("seen_error:*"):
+                await r.delete(key)
+            result["reset"] = f"Сброшено {len(deleted)} fix_count ключей"
 
         out = json.dumps(result, ensure_ascii=False, indent=2)
         # Если много данных — режем
@@ -3058,34 +3072,6 @@ async def handle_post_raw(request):
 
 
 
-async def handle_doctor_audit(request):
-    """Temp: show fix_count/seen_error Redis keys for escalation audit."""
-    auth = request.headers.get("X-Auth-Token", "")
-    if not auth or auth != RAILWAY_SECRET:
-        return web.json_response({"error": "unauthorized"}, status=401)
-    r = await get_redis()
-    if not r:
-        return web.json_response({"error": "no redis"}, status=503)
-    result = {}
-    try:
-        # fix_count и seen_error — string ключи (INCR/SETEX)
-        for pattern in ["fix_count:*", "seen_error:*"]:
-            async for key in r.scan_iter(pattern):
-                try:
-                    val = await r.get(key)
-                    result[key] = val
-                except Exception as e:
-                    result[key] = f"ERROR: {e}"
-        # TTL для fix_count ключей
-        fc_keys = {k: v for k, v in result.items() if k.startswith("fix_count:")}
-        for k in fc_keys:
-            ttl = await r.ttl(k)
-            result[f"ttl:{k}"] = ttl
-    except Exception as e:
-        result["scan_error"] = str(e)
-    return web.json_response(result,
-        dumps=lambda x, **kw: __import__("json").dumps(x, ensure_ascii=False, **kw))
-
 async def main():
     # Загружаем office:decisions из Redis при старте
     await init_office_decisions()
@@ -3096,7 +3082,6 @@ async def main():
     app.router.add_post("/task", handle_cilly_task)
     app.router.add_get("/secrets", handle_secrets)
     app.router.add_post("/post_raw", handle_post_raw)
-    app.router.add_get("/doctor_audit", handle_doctor_audit)
     app.router.add_post("/promote_bots", handle_promote_bots)
     app.router.add_get("/health", handle_health)
     runner = web.AppRunner(app)
