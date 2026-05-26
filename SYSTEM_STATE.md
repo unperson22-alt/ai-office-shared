@@ -228,3 +228,90 @@
 
 **Shared lib v0.1.5** — текущая актуальная версия.  
 **Marketing-dept** теперь пишет в Redis через log_event (office:logs:нэлли, office:logs:рэй, office:logs:копи, office:logs:лекс).
+
+---
+
+## Архитектура роутинга (2026-05-26)
+
+### Схема
+
+```
+Пользователь → ЛЮБОЙ бот (DM или группа)
+                    ↓ POST /task
+              Филли (filly-bot)
+              ├─ enhance_prompt (Haiku)
+              ├─ _resolve_agent (имя в тексте → LLM классификатор)
+              └─ POST target_bot/task  { source: "ФИЛЛИ" }
+                    ↓
+         Глава отдела (опрашивает своих сам)
+         ├─ МАРТИ  → Рэй / Копи / Лекс / Нелли (внутри marketing-dept)
+         ├─ ТИЛЛИ  → Чарт / Вайс / Леджер / Фир (внутри trading-dept)
+         ├─ ДИЛЛИ  → (в будущем) своя команда
+         └─ СИЛЛИ  → Claude Code субагент
+                    ↓ JSON { "response": "..." }
+              Филли получает ответ
+                    ↓ POST source_bot/reply  { chat_id, text, from_agent }
+              Бот-источник → bot.send_message(chat_id, text)
+                    ↓
+              Пользователь получает ответ
+```
+
+### BOT_URLS Филли (только главы + личные)
+
+| Ключ | Бот | Роль |
+|---|---|---|
+| БИЛЛИ | billy-bot | Личный / дефолт |
+| КРИС | kriss-bot | Личный ассистент |
+| ГОСЛИНГ | gosling-bot | Группа Лука |
+| ЭЛЛИС | mama-bot | Семейный мост |
+| ТИЛЛИ | tilly-bot | Глава трейдинг-отдела |
+| ДИЛЛИ | doctor-bot | Глава медотдела |
+| МАРТИ | marty-bot | Глава маркетинг-отдела |
+| СИЛЛИ | cilly-bot | Технический отдел |
+| МИЛЛИ | milly-bot | Бизнес/автоматизация |
+| ВИЛЛИ | villy-bot | Дизайн |
+| ПРОРОК | prophet-bot | Сценарии/решения |
+
+### Ключевые правила
+
+- **source=ФИЛЛИ** в `/task` → бот возвращает JSON, НЕ пишет в Telegram сам
+- **notify=True** → пишет в офис-группу (явный запрос)
+- **Прямой вызов из группы** → пишет в офис-группу
+- Тилли — эталонная реализация `notify=True` паттерна
+
+### Новые endpoints (все боты)
+
+| Endpoint | Метод | Назначение |
+|---|---|---|
+| `/task` | POST | Входящий запрос (от юзера или Филли) |
+| `/reply` | POST | Принимает ответ от Филли, шлёт юзеру |
+| `/health` | GET | Health check |
+
+### shared lib v0.1.6
+
+`ai_office_shared/shared/routing.py`:
+- `forward_to_filly(message, user_id, reply_bot, reply_chat_id)` — форвард на Филли
+- `make_reply_handler(bot, bot_name)` — фабрика /reply handler
+- `is_routed(data)` — True если source=ФИЛЛИ
+
+---
+
+## Изменения 2026-05-26
+
+| Что | Статус |
+|---|---|
+| Центральный роутинг через Филли | ✅ |
+| /reply endpoint во всех ботах | ✅ |
+| marketing-dept: ray/nelli форвард на Филли | ✅ |
+| send_to_group fix: dilly/cilly молчат при source=ФИЛЛИ | ✅ |
+| prophet-bot: inline routing (без shared lib) | ✅ |
+| mama-bot: railway.json + git в Dockerfile | ✅ |
+| Силли: auto-redeploy при FAILED деплоях | ✅ |
+| shared lib v0.1.6: routing.py | ✅ |
+| Силли: redis_query intent — реальный Redis query | ✅ |
+| Силли: умная эскалация (_deep_diagnose_and_escalate) | ✅ |
+| CLAUDE_WORK_PROTOCOL.md создан | ✅ |
+
+**Ожидает ручного действия:**
+- E2E тест с реальным DM (reply_chat_id != 0)
+- FILLY_URL в Railway Dashboard → marketing-dept (5 сервисов)
