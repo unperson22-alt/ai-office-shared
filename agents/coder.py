@@ -537,9 +537,10 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
 
 
 INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
-{"intent":"push_code|fix_bot|create_bot|add_external_bot|get_bot_token|deploy|read_file|list_files|answer","repo":"name|null","path":"path|null","task":"описание","confidence":"high|low"}
-push_code=залить код, fix_bot=исправить баг, create_bot=новый бот на Railway с нуля, add_external_bot=подключить чужого/внешнего бота (уже существует, не на Railway), get_bot_token=получить токен, deploy=редеплой, read_file=прочитать, list_files=список, answer=ответить.
-ВАЖНО: "подключить бота", "добавить чужого бота", "зарегистрировать внешний бот", "добавить в офис бота X" → add_external_bot, НЕ create_bot.
+{"intent":"push_code|fix_bot|create_bot|add_external_bot|get_bot_token|deploy|read_file|list_files|redis_query|answer","repo":"name|null","path":"path|null","task":"описание","confidence":"high|low"}
+push_code=залить код, fix_bot=исправить баг, create_bot=новый бот с нуля, add_external_bot=подключить внешнего бота, get_bot_token=получить токен, deploy=редеплой, read_file=прочитать файл, list_files=список файлов, redis_query=ЛЮБЫЕ операции с Redis (читать/писать ключи), answer=общий ответ.
+ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis", "логи ботов", "аудит ключей" → ВСЕГДА redis_query, никогда не answer.
+ВАЖНО: "подключить бота", "добавить чужого бота" → add_external_bot, НЕ create_bot.
 Репо: billy-bot,tilly-bot,filly-bot,dilly-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard,mama-bot,pilly-bot,villy-bot,prophet-bot,gosling-bot,tilly-trader.
 билли→billy, тилли→tilly, макс/милли→milly, доктор/дилли→dilly, филли→filly, силли→ai-office-shared."""
 
@@ -1904,6 +1905,90 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         else:
             answer = await ask_claude(message_text, system=answer_system, model="claude-sonnet-4-6")
         await reply_func(answer)
+
+
+    elif intent == "redis_query":
+        """Выполняет реальные Redis операции — scan, get, hgetall, custom audit."""
+        r = await get_redis()
+        if not r:
+            await reply_func("❌ Redis недоступен")
+            return
+
+        task_lower = task.lower()
+        result: dict = {}
+
+        # ── 1. quality audit ──────────────────────────────────────────────
+        if any(w in task_lower for w in ["quality", "реакци", "голос", "👍", "👎", "up", "down", "аудит"]):
+            async for key in r.scan_iter("office:quality:*"):
+                data = await r.hgetall(key)
+                bot = key.split(":")[-1]
+                result[f"quality:{bot}"] = {
+                    "up":   int(data.get("up",   0)),
+                    "down": int(data.get("down", 0)),
+                }
+
+        # ── 2. health audit ───────────────────────────────────────────────
+        if any(w in task_lower for w in ["health", "здоровь", "status", "up/down", "живой", "живые"]):
+            async for key in r.scan_iter("office:health:*"):
+                agent = key.split(":")[-1]
+                result[f"health:{agent}"] = await r.get(key)
+
+        # ── 3. logs ───────────────────────────────────────────────────────
+        if any(w in task_lower for w in ["log", "лог", "событи", "ошибк"]):
+            bot_hint = None
+            for bot in ["билли","тилли","милли","доктор","крисс","эллис","вилли","гослинг","силли","фили"]:
+                if bot in task_lower:
+                    bot_hint = bot
+                    break
+            import datetime as _dt
+            today = _dt.date.today().isoformat()
+            pattern = f"office:logs:{bot_hint}:{today}" if bot_hint else f"office:logs:*:{today}"
+            async for key in r.scan_iter(pattern):
+                entries = await r.lrange(key, 0, 19)
+                result[key] = [json.loads(e) for e in reversed(entries)]
+
+        # ── 4. routing misses ─────────────────────────────────────────────
+        if any(w in task_lower for w in ["miss", "промах", "маршрут", "routing"]):
+            raw_misses = await r.lrange("office:routing:misses", 0, 19)
+            result["routing_misses"] = [json.loads(m) for m in raw_misses]
+
+        # ── 5. произвольный scan pattern ─────────────────────────────────
+        import re as _re
+        pattern_match = _re.search(r'(office:[a-z:*_]+)', task_lower)
+        if pattern_match and not result:
+            pattern_str = pattern_match.group(1)
+            if not pattern_str.endswith("*"):
+                # Точный ключ — пробуем get и hgetall
+                val = await r.get(pattern_str)
+                if val:
+                    result[pattern_str] = val
+                else:
+                    hval = await r.hgetall(pattern_str)
+                    if hval:
+                        result[pattern_str] = hval
+            else:
+                async for key in r.scan_iter(pattern_str):
+                    val = await r.get(key)
+                    result[key] = val or await r.hgetall(key)
+
+        # ── 6. если ничего не нашли — показываем ВСЁ ─────────────────────
+        if not result:
+            for ns in ["office:quality:*", "office:health:*", "office:routing:misses"]:
+                if "*" in ns:
+                    async for key in r.scan_iter(ns):
+                        data = await r.hgetall(key)
+                        if not data:
+                            data = await r.get(key)
+                        result[key] = data
+                else:
+                    raw = await r.lrange(ns, 0, 9)
+                    result[ns] = [json.loads(e) for e in raw]
+
+        out = json.dumps(result, ensure_ascii=False, indent=2)
+        # Если много данных — режем
+        if len(out) > 3000:
+            out = out[:3000] + "\n... (обрезано)"
+        await reply_func(f"```json\n{out}\n```")
 
     elif intent in ("push_code", "fix_bot"):
         if not repo or not path:
