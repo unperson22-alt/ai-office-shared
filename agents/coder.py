@@ -2068,8 +2068,13 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
     except Exception:
         # Keyword fallback — better than failing silently
         msg_lower = message_text.lower()
-        if any(w in msg_lower for w in ["создай бота", "create bot", "новый бот", "зарегистрируй бота",
-                                           "зарегистрировать бота", "newbot", "зарегистрируй нового"]):
+        # Только явные императивные команды — не вопросы о процессе
+        question_signals = ["как ", "какой", "какие", "что нужно", "с чего", "как создать",
+                            "как задеплоить", "как разверн", "подскажи", "расскажи", "объясни"]
+        is_question = any(w in msg_lower for w in question_signals)
+        if not is_question and any(w in msg_lower for w in ["создай бота", "create bot", "зарегистрируй бота",
+                                           "зарегистрировать бота", "newbot", "зарегистрируй нового",
+                                           "создать нового бота", "создай нового"]):
             intent_data = {"intent": "create_bot", "repo": None, "path": None, "task": message_text, "confidence": "low"}
         elif any(w in msg_lower for w in ["задеплой", "redeploy", "передеплой"]):
             intent_data = {"intent": "deploy", "repo": None, "path": None, "task": message_text, "confidence": "low"}
@@ -2081,12 +2086,22 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             await reply_func(answer)
             return
 
-    intent = intent_data.get("intent", "answer")
-    repo   = intent_data.get("repo")
-    path   = intent_data.get("path")
-    task   = intent_data.get("task", message_text)
+    intent     = intent_data.get("intent", "answer")
+    repo       = intent_data.get("repo")
+    path       = intent_data.get("path")
+    task       = intent_data.get("task", message_text)
+    confidence = float(intent_data.get("confidence", 1.0))
 
-    logger.info(f"[nl] intent={intent} repo={repo} path={path}")
+    logger.info(f"[nl] intent={intent} confidence={confidence:.2f} repo={repo}")
+
+    # Для деструктивных/долгих операций — требуем высокую уверенность
+    DESTRUCTIVE = ("create_bot", "deploy", "push_code", "get_bot_token")
+    if intent in DESTRUCTIVE and confidence < 0.75:
+        await reply_func(
+            f"🤔 Не уверен что правильно понял задачу (confidence={confidence:.0%}).\n"
+            f"Уточни: ты хочешь чтобы я **{intent}** выполнил, или это вопрос?"
+        )
+        return
 
     if intent == "answer":
         # Для answer — используем ops.md как контекст и историю разговора
