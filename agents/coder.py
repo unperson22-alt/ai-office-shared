@@ -1615,7 +1615,9 @@ async def handle_task(request):
     user_id = data.get("user_id", YOUR_TELEGRAM_ID)
     await log("MSG_IN", f"[HTTP] {{message[:80]}}")
     response = await process(message, user_id)
-    await send_to_group(f"{bot_name}:\\n{{response}}")
+    _cilly_source = data.get("source", "").upper()
+    if data.get("notify", False) or _cilly_source not in ("ФИЛЛИ", "FILLY", "DISPATCHER"):
+        await send_to_group(f"{bot_name}:\\n{{response}}")
     await log("MSG_OUT", f"{bot_name}: {{response[:80]}}")
     return web.json_response({{"status": "ok", "response": response}})
 
