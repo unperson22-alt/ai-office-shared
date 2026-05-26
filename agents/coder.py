@@ -1216,6 +1216,181 @@ async def daily_audit_loop():
         await asyncio.sleep(60)  # небольшой отступ чтобы не запустить дважды
 
 
+
+async def _deep_diagnose_and_escalate(
+    repo: str,
+    service_id: str,
+    error_signature: str,
+    error_logs: list[str],
+    fix_count: int,
+    redis_client,
+):
+    """
+    Умная диагностика повторяющегося бага.
+    Вместо немедленной эскалации — анализирует сам:
+    1. Проверяет сколько других ботов имеют эту же сигнатуру
+    2. Проверяет это деплой-шум или реальный баг
+    3. Читает исходник + Redis логи + историю фиксов
+    4. Просит Claude поставить диагноз
+    5. Только если Claude не смог — эскалирует Владу с диагнозом
+    """
+    logger.info(f"[deep_diagnose] starting for {repo} sig={error_signature[:8]}")
+
+    # ── 1. Проверяем сколько ботов имеют эту же сигнатуру ────────────────────
+    affected_services = []
+    if redis_client:
+        async for key in redis_client.scan_iter(f"fix_count:*:{error_signature}"):
+            svc = key.split(":")[1]
+            count = int(await redis_client.get(key) or 0)
+            affected_services.append((svc, count))
+
+    systemic = len(affected_services) >= 3
+    if systemic:
+        # Та же ошибка в 3+ ботах = системный шум (деплой/сеть), не баг конкретного бота
+        logger.info(f"[deep_diagnose] systemic noise: same sig in {len(affected_services)} services, skipping escalation")
+        # Сбрасываем счётчики чтобы не эскалировать снова
+        if redis_client:
+            for svc, _ in affected_services:
+                await redis_client.delete(f"fix_count:{svc}:{error_signature}")
+        return  # Тихо, без эскалации
+
+    # ── 2. Собираем контекст для глубокого анализа ───────────────────────────
+    # 2a. Исходник бота
+    source_code = "# не удалось прочитать"
+    try:
+        main_file = SERVICES.get(service_id, (None, "bot.py"))[1]
+        source_code = await read_file(repo, main_file)
+    except Exception:
+        pass
+
+    # 2b. Redis структурные логи
+    redis_ctx = ""
+    try:
+        _r = await get_redis()
+        if _r:
+            from ai_office_shared.shared.identity import canonical
+            bot_canon = canonical(repo.replace("-bot", ""))
+            if bot_canon:
+                events = await read_logs(_r, bot_canon, days=1, limit=30, level_filter=None)
+                if events:
+                    lines_out = []
+                    for ev in events[:20]:
+                        ts = ev.get("ts", "")[-8:]
+                        lines_out.append(
+                            f"[{ts}] {ev.get('level','?').upper()} "
+                            f"{ev.get('event','?')} uid={ev.get('user_id','?')}"
+                        )
+                    redis_ctx = "\n--- Redis события (последние 20) ---\n" + "\n".join(lines_out)
+    except Exception as _e:
+        logger.warning(f"[deep_diagnose] redis ctx failed: {_e}")
+
+    # 2c. Предыдущие попытки починки (ops.md)
+    ops_ctx = ""
+    try:
+        raw_ops = await read_file("ai-office-shared", OPS_LOG_FILE)
+        if raw_ops:
+            # Ищем записи про этот репо
+            relevant = [l for l in raw_ops.split("\n") if repo in l or error_signature[:8] in l]
+            if relevant:
+                ops_ctx = "\n--- История правок (ops.md) ---\n" + "\n".join(relevant[-10:])
+    except Exception:
+        pass
+
+    full_context = (
+        f"Ошибки из логов (последние {len(error_logs)}):\n"
+        + "\n".join(error_logs[:10])
+        + f"\n\nИсходник (первые 3000 символов):\n{source_code[:3000]}"
+        + redis_ctx
+        + ops_ctx
+    )
+
+    # ── 3. Глубокий анализ Claude (Sonnet — дороже, но для реальной диагностики) ──
+    DEEP_ANALYSIS_PROMPT = """Ты — senior инженер AI-офиса. Этот баг уже встречался 3+ раза и стандартный фикс не помог.
+
+Твоя задача — поставить ТОЧНЫЙ диагноз:
+1. Что конкретно ломается (строка кода, функция, контракт)
+2. Почему стандартный фикс не помог (симптом лечили, а не причину?)
+3. Что нужно исправить РЕАЛЬНО (на уровне логики, не патч)
+4. Можешь ли ты это исправить сам прямо сейчас?
+
+Отвечай JSON без markdown:
+{
+  "root_cause": "точная причина в 1-2 предложениях",
+  "why_fix_failed": "почему предыдущие попытки не помогли",
+  "real_fix": "что нужно сделать на самом деле",
+  "can_self_fix": true/false,
+  "self_fix_action": "push_code|redeploy|config_change|null",
+  "self_fix_details": "конкретные изменения если can_self_fix=true",
+  "confidence": "high|medium|low",
+  "escalate_reason": "null или причина почему нужен человек"
+}"""
+
+    try:
+        raw = await ask_claude(
+            f"Повторяющийся баг в {repo} (сигнатура {error_signature[:8]}, fix_count={fix_count}):\n\n{full_context}",
+            system=DEEP_ANALYSIS_PROMPT,
+            model="claude-sonnet-4-6",
+        )
+        raw = raw.strip()
+        s, e = raw.find("{"), raw.rfind("}") + 1
+        diagnosis = json.loads(raw[s:e]) if s != -1 else {}
+    except Exception as ex:
+        logger.error(f"[deep_diagnose] claude analysis failed: {ex}")
+        diagnosis = {"can_self_fix": False, "confidence": "low", "escalate_reason": f"анализ упал: {ex}"}
+
+    can_fix = diagnosis.get("can_self_fix", False)
+    confidence = diagnosis.get("confidence", "low")
+    root_cause = diagnosis.get("root_cause", "неизвестно")
+    real_fix = diagnosis.get("real_fix", "")
+
+    logger.info(f"[deep_diagnose] diagnosis: can_fix={can_fix} confidence={confidence} cause={root_cause[:60]}")
+
+    # ── 4. Пробуем починить сам ───────────────────────────────────────────────
+    if can_fix and confidence in ("high", "medium"):
+        action = diagnosis.get("self_fix_action")
+        details = diagnosis.get("self_fix_details", "")
+
+        await notify_office(
+            f"🔍 *{repo}* — нашла причину повторяющегося бага:\n"
+            f"_{root_cause}_\n\n"
+            f"Применяю фикс: {real_fix[:200]}..."
+        )
+
+        if action == "push_code" and details:
+            # Пытаемся применить фикс через analyze_logs → handle_bug pipeline
+            fix_analysis = {
+                "is_bug": True,
+                "root_cause": root_cause,
+                "fix_description": real_fix,
+                "fix_code_snippet": details,
+                "confidence": confidence,
+            }
+            await handle_bug(service_id, repo, repo,
+                             SERVICES.get(service_id, (None, "bot.py"))[1],
+                             fix_analysis)
+        elif action == "redeploy":
+            ok = await redeploy_service(service_id)
+            await notify_office(
+                f"{'✅' if ok else '⚠️'} *{repo}* — редеплой {'выполнен' if ok else 'не удался'}"
+            )
+        # Сбрасываем счётчик после применения фикса
+        if redis_client:
+            await redis_client.delete(f"fix_count:{service_id}:{error_signature}")
+        return
+
+    # ── 5. Не смогла — эскалируем с ДИАГНОЗОМ, не просто криком ─────────────
+    escalate_reason = diagnosis.get("escalate_reason") or "не смогла подобрать фикс с высокой уверенностью"
+
+    await notify_office(
+        f"⚠️ *{repo}* — повторяющийся баг, нужна помощь\n\n"
+        f"*Причина:* {root_cause}\n"
+        f"*Почему предыдущий фикс не помог:* {diagnosis.get('why_fix_failed', 'неизвестно')}\n"
+        f"*Что нужно сделать:* {real_fix}\n\n"
+        f"*Почему сама не исправила:* {escalate_reason}\n"
+        f"Сигнатура: `{error_signature[:16]}` | fix_count={fix_count}"
+    )
+    logger.warning(f"[deep_diagnose] escalated {repo}: {escalate_reason}")
+
 async def monitor_loop():
     """Фоновая задача: каждые 5 минут проверяет логи всех сервисов.
 
@@ -1304,21 +1479,22 @@ async def monitor_loop():
                     for k in expired:
                         del seen_errors[k]
 
-                # Счётчик повторений — если баг встречается 3+ раз, эскалируем (правило D005)
+                # Счётчик повторений (правило D005)
                 fix_count_key = f"fix_count:{service_id}:{error_signature}"
                 r_count = await get_redis()
+                fix_count = 0
                 if r_count:
                     fix_count = int(await r_count.get(fix_count_key) or 0)
-                    if fix_count >= 3:
-                        await notify_office(
-                            f"⚠️ ЭСКАЛАЦИЯ: баг в *{repo}* встречается уже {fix_count} раз!\n"
-                            f"Одинаковый фикс не помогает — нужен ручной разбор.\n"
-                            f"Сигнатура: `{error_signature[:16]}`"
-                        )
-                        logger.warning(f"[monitor] escalation: {repo} fix_count={fix_count}")
-                        continue
                     await r_count.incr(fix_count_key)
-                    await r_count.expire(fix_count_key, 86400 * 7)  # хранить 7 дней
+                    await r_count.expire(fix_count_key, 86400 * 7)
+
+                if fix_count >= 3:
+                    # Не просто кричать — сначала разобраться самой
+                    logger.warning(f"[monitor] recurring error in {repo} fix_count={fix_count}, running deep analysis")
+                    await _deep_diagnose_and_escalate(
+                        repo, service_id, error_signature, error_logs, fix_count, r_count
+                    )
+                    continue
 
                 logger.info(f"[monitor] found {len(error_logs)} error lines in {repo}, analyzing...")
 
