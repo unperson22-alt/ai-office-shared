@@ -315,3 +315,62 @@
 **Ожидает ручного действия:**
 - E2E тест с реальным DM (reply_chat_id != 0)
 - FILLY_URL в Railway Dashboard → marketing-dept (5 сервисов)
+
+---
+
+## Структура Railway проектов (2026-05-26)
+
+```
+awake-happiness   — Офис
+trading-dept      — Торговый отдел
+marketing-dept    — Маркетинг
+medical-dept      — Медотдел       [создан 2026-05-26]
+family-dept       — Семья          [создан 2026-05-26]
+```
+
+### Распределение ботов по проектам
+
+| Проект | Бот | URL | Роль |
+|---|---|---|---|
+| awake-happiness | filly-bot | filly-bot-production.up.railway.app | Диспетчер |
+| awake-happiness | billy-bot | billy-bot-production.up.railway.app | Дефолт |
+| awake-happiness | cilly-bot | cilly-bot-production.up.railway.app | Техотдел |
+| awake-happiness | milly-bot | milly-bot-production.up.railway.app | Бизнес |
+| awake-happiness | villy-bot | villy-bot-production.up.railway.app | Дизайн |
+| awake-happiness | kriss-bot | kriss-bot-production.up.railway.app | Личный |
+| awake-happiness | prophet-bot | prophet-bot-production-df65.up.railway.app | Решения |
+| trading-dept | tilly-bot | tilly-bot-production.up.railway.app | Глава трейдинга |
+| marketing-dept | marty-bot | marty-bot-production.up.railway.app | Глава маркетинга |
+| marketing-dept | ray-bot | ray-bot-production.up.railway.app | Контент |
+| marketing-dept | copy-bot | copy-bot-production.up.railway.app | Копирайтер |
+| marketing-dept | lex-bot | lex-bot-production.up.railway.app | Юрист |
+| medical-dept | dilly-bot | dilly-bot-production-4a9b.up.railway.app | Глава медотдела |
+| family-dept | ellice-bot | ellice-bot-production.up.railway.app | Глава семьи |
+| family-dept | nelli-bot | nelli-bot-production.up.railway.app | Семейная группа |
+
+### Filly BOT_URLS (только главы отделов + личные)
+
+```python
+"БИЛЛИ":   "billy-bot-production.up.railway.app"
+"КРИС":    "kriss-bot-production.up.railway.app"
+"ГОСЛИНГ": "gosling-bot.railway.internal:8080"
+"СИЛЛИ":   "cilly-bot-production.up.railway.app"
+"МИЛЛИ":   "milly-bot-production.up.railway.app"
+"ВИЛЛИ":   "villy-bot-production.up.railway.app"
+"ПРОРОК":  "prophet-bot-production-df65.up.railway.app"
+"ТИЛЛИ":   "tilly-bot-production.up.railway.app"          # trading-dept
+"ДИЛЛИ":   "dilly-bot-production-4a9b.up.railway.app"     # medical-dept
+"МАРТИ":   "marty-bot-production.up.railway.app"          # marketing-dept
+"ЭЛЛИС":   "ellice-bot-production.up.railway.app"         # family-dept (глава)
+```
+
+### Redis
+Все проекты используют один Redis: `yamabiko.proxy.rlwy.net:11592` (публичный URL).
+Internal URL `redis.railway.internal:6379` доступен только из awake-happiness.
+
+### Изменения 2026-05-26 (реструктуризация)
+- Dilly переехал из awake-happiness → medical-dept (новый URL)
+- Ellice/mama-bot переехала из awake-happiness → family-dept (новый URL)
+- Nelli переехала из marketing-dept → family-dept
+- Ellice = глава family-dept, роутит на Filly
+- Старые сервисы удалены из awake-happiness и marketing-dept
