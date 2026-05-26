@@ -4,8 +4,8 @@
 > деплой нового бота, смена Redis-контракта, обновление shared lib, закрытие уязвимости.
 > Формат обновления — в конце файла.
 
-**Последнее обновление:** 2026-05-20  
-**Версия shared lib:** v0.1.3  
+**Последнее обновление:** 2026-05-26  
+**Версия shared lib:** v0.1.5  
 **Активных ботов:** 10 (+1 роутер)  
 **GitHub org:** unperson22-alt  
 **Платформа:** Railway + Cloudflare Workers
@@ -93,8 +93,8 @@
 |`office:quality:{bot}`         |HASH  |Каждый бот (`record_reaction`)    |Филли `/metrics`                    |—                    |Поля: `up` (int), `down` (int). **bot — lowercase** (билли, тилли…)       |
 |`office:msg:{chat_id}:{msg_id}`|STRING|Каждый бот (`remember_my_message`)|Каждый бот (`reaction_owner`)       |из quality.py        |Имя бота lowercase — нужно для атрибуции реакции                          |
 |`office:logs:{bot}:{date}`     |LIST  |Каждый бот (`log_event`)          |Силли (`read_logs()`)               |7д                   |JSON события. `bot` — lowercase, `date` — `YYYY-MM-DD`. LPUSH + LTRIM 1000|
-|`office:members`               |—     |—                                 |—                                   |—                    |**Не реализован.** Запланирован (Блок 02)                                 |
-|`office:mom_queue`             |—     |—                                 |—                                   |—                    |**Не реализован.** Запланирован (Блок 05)                                 |
+|`office:members`               |STRING|Филли (`group_members_update`)    |Филли (`group_members_get`)         |30д                  |Текстовый профиль команды, генерируется Haiku раз в неделю               |
+|`office:mom_queue`             |LIST  |Эллис (`mama-bot`)                |Эллис (`/mention` endpoint)         |7д                   |JSON очередь сообщений мамы, сбрасывается при пинге из Филли             |
 
 **Типичные события в `office:logs`:**
 `route_ok`, `route_miss`, `route_decision`, `message_received`, `response_sent`,
@@ -119,13 +119,13 @@
 
 > При любом касании бота по любой причине — **обязательно**:
 > 
-> 1. Поднять в `requirements.txt`: `ai_office_shared @ ...@v0.1.3`
+> 1. Поднять в `requirements.txt`: `ai_office_shared @ ...@v0.1.5`
 > 1. Заменить локальные копии на импорты из `ai_office_shared.shared`:
 >    `redis_get_history`, `redis_save_history`, `redis_get_notes`, `redis_add_note`,
 >    `auto_extract_interests`, `weekly_review`
 
-**Текущий статус миграции ботов:** все на `@v0.1.0` (только `log_event`).
-Полная миграция — попутно при следующей правке каждого бота.
+**Текущий статус миграции ботов:** все боты мигрированы на `v0.1.5` (2026-05-26).
+Включает: quality, redis_helpers, tasks, ollama. Локальные копии удалены.
 
 -----
 
@@ -158,8 +158,8 @@
 
 |ID        |Компонент            |Описание                                                                                                                              |Статус            |
 |----------|---------------------|--------------------------------------------------------------------------------------------------------------------------------------|------------------|
-|`BUG-001` |filly-bot `/metrics` |Handler зависает (http=000) — нет таймаутов на Redis-awaits. Патч готов (`handle_metrics_fixed.py`), ждёт деплоя после Railway outage.|⏳ Ожидает деплоя  |
-|`DATA-001`|Доктор / METRICS_BOTS|`office:quality:доктор` vs возможный `office:quality:дилли` у dilly-bot. Проверить `quality_keys_audit.py`.                           |⚠ Требует проверки|
+|`BUG-001` |filly-bot `/metrics` |Handler зависает (http=000) — таймауты asyncio.wait_for добавлены.|✅ Закрыт 2026-05-26|
+|`DATA-001`|Доктор / METRICS_BOTS|`office:quality:доктор` (dilly-bot пишет как "доктор") vs health key "ДИЛЛИ" у Филли. Мониторинг несинхронизирован, требует аудита.|⚠ Требует проверки|
 
 -----
 
@@ -196,3 +196,20 @@
 |Обнаружен рассинхрон данных|Добавить в «Известные проблемы»          |
 
 **Формат коммита:** `docs: update SYSTEM_STATE — {краткое что изменилось}`
+-----
+
+## Рефакторинг 2026-05-26
+
+| Что сделано | Статус |
+|---|---|
+| BUG-002: HTTP_SECRET в filly-bot (NameError) | ✅ Исправлен |
+| BUG-003: /health endpoint у 6 ботов (billy,milly,tilly,dilly,villy,prophet) | ✅ Исправлен (prophet — нужен UI) |
+| BUG-004: miraculous-contentment CRASHED сервис | ✅ Удалён из Railway |
+| BUG-005: shared lib версии (4 разных) | ✅ Все на v0.1.5 |
+| BUG-006: decode_responses=False у 6 ботов | ✅ Унифицировано на True |
+| BUG-007: Дублирование Ollama кода | ✅ Вынесено в shared/ollama.py |
+| BUG-008: KEYS вместо SCAN в redis_helpers | ✅ Исправлен в v0.1.4 |
+| BUG-011: нет Dockerfile у mama-bot | ✅ Добавлен |
+| TD-002: sync Anthropic в trading-dept | ✅ Уже использует asyncio.to_thread |
+
+**prophet-bot требует ручного действия:** Railway Dashboard → prophet-bot → Settings → переподключить GitHub repo (webhook не активен).
