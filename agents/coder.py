@@ -3059,7 +3059,7 @@ async def handle_post_raw(request):
 
 
 async def handle_doctor_audit(request):
-    """Temp: show all Redis keys for doctor-bot escalation."""
+    """Temp: show fix_count/seen_error Redis keys for escalation audit."""
     auth = request.headers.get("X-Auth-Token", "")
     if not auth or auth != RAILWAY_SECRET:
         return web.json_response({"error": "unauthorized"}, status=401)
@@ -3067,18 +3067,22 @@ async def handle_doctor_audit(request):
     if not r:
         return web.json_response({"error": "no redis"}, status=503)
     result = {}
-    # fix_count и seen_error — не office: prefix
-    for pattern in ["fix_count:*", "seen_error:*", "seen_errors*", "office:seen*"]:
-        async for key in r.scan_iter(pattern):
-            val = await r.get(key)
-            result[key] = val
-    # Все ключи содержащие d949c4d2 (doctor service id)
-    for pattern in ["*d949c4d2*", "*doctor*", "*доктор*", "*dilly*"]:
-        async for key in r.scan_iter(pattern):
-            val = await r.get(key)
-            if val is None:
-                val = await r.hgetall(key)
-            result[key] = val
+    try:
+        # fix_count и seen_error — string ключи (INCR/SETEX)
+        for pattern in ["fix_count:*", "seen_error:*"]:
+            async for key in r.scan_iter(pattern):
+                try:
+                    val = await r.get(key)
+                    result[key] = val
+                except Exception as e:
+                    result[key] = f"ERROR: {e}"
+        # TTL для fix_count ключей
+        fc_keys = {k: v for k, v in result.items() if k.startswith("fix_count:")}
+        for k in fc_keys:
+            ttl = await r.ttl(k)
+            result[f"ttl:{k}"] = ttl
+    except Exception as e:
+        result["scan_error"] = str(e)
     return web.json_response(result,
         dumps=lambda x, **kw: __import__("json").dumps(x, ensure_ascii=False, **kw))
 
