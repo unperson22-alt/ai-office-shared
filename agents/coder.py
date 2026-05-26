@@ -3072,6 +3072,24 @@ async def handle_post_raw(request):
 
 
 
+
+async def handle_reset_fixcount(request):
+    """Temp: reset all fix_count keys in Redis."""
+    auth = request.headers.get("X-Auth-Token", "")
+    if not auth or auth != RAILWAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    r = await get_redis()
+    if not r:
+        return web.json_response({"error": "no redis"}, status=503)
+    deleted = []
+    async for key in r.scan_iter("fix_count:*"):
+        await r.delete(key)
+        deleted.append(key)
+    async for key in r.scan_iter("seen_error:*"):
+        await r.delete(key)
+        deleted.append(key)
+    return web.json_response({"deleted": len(deleted), "keys": deleted[:20]})
+
 async def main():
     # Загружаем office:decisions из Redis при старте
     await init_office_decisions()
@@ -3082,6 +3100,7 @@ async def main():
     app.router.add_post("/task", handle_cilly_task)
     app.router.add_get("/secrets", handle_secrets)
     app.router.add_post("/post_raw", handle_post_raw)
+    app.router.add_get("/reset_fixcount", handle_reset_fixcount)
     app.router.add_post("/promote_bots", handle_promote_bots)
     app.router.add_get("/health", handle_health)
     runner = web.AppRunner(app)
