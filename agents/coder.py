@@ -1066,6 +1066,26 @@ async def run_daily_audit() -> str:
 
     if deploy_fail:
         lines.append(f"❌ Деплои упали: {', '.join(deploy_fail)}")
+        # Auto-fix: пробуем передеплоить каждый упавший сервис
+        for entry in deploy_fail:
+            svc_name = entry.split(":")[0]  # repo name
+            # Ищем service_id по имени в SERVICES
+            svc_id = next(
+                (sid for sid, (repo_n, _) in SERVICES.items() if repo_n == svc_name),
+                None
+            )
+            if svc_id:
+                await notify_office(
+                    f"🔧 *{svc_name}* упал — пробую передеплоить..."
+                )
+                ok = await redeploy_service(svc_id)
+                if ok:
+                    await notify_office(f"✅ *{svc_name}* — редеплой запущен")
+                    logger.info(f"[audit] auto-redeploy triggered for {svc_name}")
+                else:
+                    await notify_office(
+                        f"⚠️ *{svc_name}* — редеплой не удался, нужен ручной разбор"
+                    )
     else:
         lines.append(f"✅ Деплои ({len(deploy_ok)}): все SUCCESS")
 
