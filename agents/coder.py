@@ -3057,6 +3057,31 @@ async def handle_post_raw(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+
+async def handle_doctor_audit(request):
+    """Temp: show all Redis keys for doctor-bot escalation."""
+    auth = request.headers.get("X-Auth-Token", "")
+    if not auth or auth != RAILWAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    r = await get_redis()
+    if not r:
+        return web.json_response({"error": "no redis"}, status=503)
+    result = {}
+    # fix_count и seen_error — не office: prefix
+    for pattern in ["fix_count:*", "seen_error:*", "seen_errors*", "office:seen*"]:
+        async for key in r.scan_iter(pattern):
+            val = await r.get(key)
+            result[key] = val
+    # Все ключи содержащие d949c4d2 (doctor service id)
+    for pattern in ["*d949c4d2*", "*doctor*", "*доктор*", "*dilly*"]:
+        async for key in r.scan_iter(pattern):
+            val = await r.get(key)
+            if val is None:
+                val = await r.hgetall(key)
+            result[key] = val
+    return web.json_response(result,
+        dumps=lambda x, **kw: __import__("json").dumps(x, ensure_ascii=False, **kw))
+
 async def main():
     # Загружаем office:decisions из Redis при старте
     await init_office_decisions()
@@ -3067,6 +3092,7 @@ async def main():
     app.router.add_post("/task", handle_cilly_task)
     app.router.add_get("/secrets", handle_secrets)
     app.router.add_post("/post_raw", handle_post_raw)
+    app.router.add_get("/doctor_audit", handle_doctor_audit)
     app.router.add_post("/promote_bots", handle_promote_bots)
     app.router.add_get("/health", handle_health)
     runner = web.AppRunner(app)
