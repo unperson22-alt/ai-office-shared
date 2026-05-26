@@ -213,3 +213,18 @@
 | TD-002: sync Anthropic в trading-dept | ✅ Уже использует asyncio.to_thread |
 
 **prophet-bot требует ручного действия:** Railway Dashboard → prophet-bot → Settings → переподключить GitHub repo (webhook не активен).
+-----
+
+## Рефакторинг Фаза 3 — 2026-05-26
+
+| Что сделано | Статус |
+|---|---|
+| Ф3.3а: shared lib + log_event в nelli, ray, copy, lex | ✅ Готово |
+| Ф3.3б: copy/lex SyntaxError (literal newline в строке) исправлен | ✅ Готово |
+| Ф3.3в: nelli/ray локальный log_event заменён на импорт из shared lib | ✅ Готово |
+| Ф3.3б: quality_keys_audit.py создан в scripts/ | ✅ Готово |
+| DATA-001: Доктор/Дилли рассинхрон задокументирован, аудит-скрипт готов | ⚠️ Требует запуска |
+| Villy/Gosling/Prophet — статус: активные официальные члены офиса | ✅ Подтверждено |
+
+**Shared lib v0.1.5** — текущая актуальная версия.  
+**Marketing-dept** теперь пишет в Redis через log_event (office:logs:нэлли, office:logs:рэй, office:logs:копи, office:logs:лекс).
