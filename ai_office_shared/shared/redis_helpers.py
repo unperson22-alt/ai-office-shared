@@ -122,13 +122,13 @@ async def redis_get_all_user_ids(redis_client, bot_name: str) -> list[int]:
     """
     Возвращает список всех user_id у которых есть история для данного бота.
     Используется weekly_review_loop.
+    Использует SCAN вместо KEYS — не блокирует Redis в продакшене.
     """
     try:
         disp = _display(bot_name) or bot_name
         pattern = f"history:{disp}:*"
-        keys = await redis_client.keys(pattern)
         user_ids = []
-        for key in keys:
+        async for key in redis_client.scan_iter(pattern, count=100):
             suffix = (key.decode() if isinstance(key, bytes) else key).split(":")[-1]
             if suffix.isdigit():
                 user_ids.append(int(suffix))
