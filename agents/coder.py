@@ -2971,6 +2971,34 @@ async def handle_post_raw(request):
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 
+
+async def handle_redis_audit(request):
+    """Temporary endpoint for quality keys audit. Auth: X-Auth-Token = RAILWAY_TOKEN."""
+    auth = request.headers.get("X-Auth-Token", "")
+    if not auth or auth != RAILWAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    r = await get_redis()
+    if not r:
+        return web.json_response({"error": "Redis unavailable"}, status=503)
+    quality, health = {}, {}
+    async for key in r.scan_iter("office:quality:*"):
+        data = await r.hgetall(key)
+        quality[key.split(":")[-1]] = {k: int(v) for k, v in data.items()}
+    async for key in r.scan_iter("office:health:*"):
+        health[key.split(":")[-1]] = await r.get(key)
+    dok = await r.hgetall("office:quality:доктор")
+    dil = await r.hgetall("office:quality:дилли")
+    return web.json_response({
+        "quality": quality,
+        "health": health,
+        "dok_vs_dil": {
+            "quality_доктор": {k: int(v) for k, v in dok.items()},
+            "quality_дилли":  {k: int(v) for k, v in dil.items()},
+            "health_ДИЛЛИ": await r.get("office:health:ДИЛЛИ"),
+            "health_ДОКТОР": await r.get("office:health:ДОКТОР"),
+        }
+    }, dumps=lambda x, **kw: __import__("json").dumps(x, ensure_ascii=False, **kw))
+
 async def main():
     # Загружаем office:decisions из Redis при старте
     await init_office_decisions()
@@ -2981,6 +3009,7 @@ async def main():
     app.router.add_post("/task", handle_cilly_task)
     app.router.add_get("/secrets", handle_secrets)
     app.router.add_post("/post_raw", handle_post_raw)
+    app.router.add_get("/redis_audit", handle_redis_audit)
     app.router.add_post("/promote_bots", handle_promote_bots)
     app.router.add_get("/health", handle_health)
     runner = web.AppRunner(app)
