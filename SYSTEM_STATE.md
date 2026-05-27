@@ -4,8 +4,8 @@
 > деплой нового бота, смена Redis-контракта, обновление shared lib, закрытие уязвимости.
 > Формат обновления — в конце файла.
 
-**Последнее обновление:** 2026-05-26  
-**Версия shared lib:** v0.1.5  
+**Последнее обновление:** 2026-05-27  
+**Версия shared lib:** v0.1.7  
 **Активных ботов:** 10 (+1 роутер)  
 **GitHub org:** unperson22-alt  
 **Платформа:** Railway + Cloudflare Workers
@@ -114,17 +114,18 @@
 |`shared.redis_helpers`|v0.1.2  |`redis_get_history`, `redis_save_history`, `redis_get_notes`, `redis_add_note`                                 |
 |`shared.tasks`        |v0.1.2  |`auto_extract_interests`, `weekly_review`                                                                      |
 |`shared.quality`      |v0.1.3  |`remember_my_message`, `reaction_owner`, `classify_reaction`, `record_reaction`, `REACTION_UP`, `REACTION_DOWN`|
+|`shared.url_check`    |v0.1.7  |`check_url`, `filter_live_urls`, `extract_urls`, `verify_text_urls`                                            |
 
 ### ⚡ MIGRATION RULE
 
 > При любом касании бота по любой причине — **обязательно**:
 > 
-> 1. Поднять в `requirements.txt`: `ai_office_shared @ ...@v0.1.5`
+> 1. Поднять в `requirements.txt`: `ai_office_shared @ ...@v0.1.7`
 > 1. Заменить локальные копии на импорты из `ai_office_shared.shared`:
 >    `redis_get_history`, `redis_save_history`, `redis_get_notes`, `redis_add_note`,
 >    `auto_extract_interests`, `weekly_review`
 
-**Текущий статус миграции ботов:** все боты мигрированы на `v0.1.5` (2026-05-26).
+**Текущий статус миграции ботов:** все боты мигрированы на `v0.1.7` (2026-05-27).
 Включает: quality, redis_helpers, tasks, ollama. Локальные копии удалены.
 
 -----
@@ -374,3 +375,21 @@ Internal URL `redis.railway.internal:6379` доступен только из aw
 - Nelli переехала из marketing-dept → family-dept
 - Ellice = глава family-dept, роутит на Filly
 - Старые сервисы удалены из awake-happiness и marketing-dept
+
+---
+
+## Аудит и рефакторинг 2026-05-27
+
+| Что сделано | Статус |
+|---|---|
+| Тег v0.1.7 создан (включает shared/url_check.py) | ✅ |
+| ray-bot: requirements → v0.1.7 | ✅ |
+| marty-bot: requirements SHA → тег v0.1.6 | ✅ |
+| prophet-bot: /reply зарегистрирован в router (был определён но не смонтирован) | ✅ |
+| prophet-bot: добавлен ai-office-shared v0.1.6 в requirements | ✅ |
+| gosling-bot: добавлены /health и /reply endpoints | ✅ |
+| mama-bot: добавлен /reply endpoint | ✅ |
+| kriss-bot: добавлен /reply endpoint | ✅ |
+| shared/url_check.py: HEAD/GET liveness check для всех ботов | ✅ |
+| DATA-001: Доктор/Дилли quality рассинхрон | ⚠️ Требует запуска quality_keys_audit.py |
+
