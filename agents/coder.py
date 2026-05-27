@@ -460,9 +460,10 @@ office:decisions в Redis — твои ограничения.
 
 ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА ВЫПОЛНЕНИЯ ЗАДАЧ:
 
-1. ПЛАН ПЕРЕД ДЕЙСТВИЕМ
-   Перед любым действием (пуш в GitHub, изменение файла, отправка сообщения)
-   явно напиши план в 2-3 шага. Только после плана — выполнение.
+1. ВЫПОЛНЯЙ БЕЗ ОБЪЯВЛЕНИЙ
+   Не пиши "план", "отправляю", промежуточные шаги или XML-теги в ответе.
+   Просто выполни задачу и коротко отчитайся о результате — 1-2 строки.
+   Формат: что сделано. Никакого внутреннего монолога в тексте ответа.
 
 2. ВЕРИФИКАЦИЯ ПОСЛЕ ДЕЙСТВИЯ
    После каждого GitHub push — перечитай файл через GET и убедись что содержимое записалось верно. Никогда не пиши "Готово" без проверки результата.
@@ -1643,7 +1644,8 @@ async def handle_task(request):
     await log("MSG_IN", f"[HTTP] {{message[:80]}}")
     response = await process(message, user_id)
     _cilly_source = data.get("source", "").upper()
-    if data.get("notify", False) or _cilly_source not in ("ФИЛЛИ", "FILLY", "DISPATCHER"):
+    _SILENT = {"ФИЛЛИ", "FILLY", "DISPATCHER", "CLAUDE"}
+    if data.get("notify", False) or _cilly_source not in _SILENT:
         await send_to_group(f"{bot_name}:\\n{{response}}")
     await log("MSG_OUT", f"{bot_name}: {{response[:80]}}")
     return web.json_response({{"status": "ok", "response": response}})
