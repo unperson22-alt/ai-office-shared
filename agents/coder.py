@@ -3135,16 +3135,17 @@ async def handle_cilly_task(request):
     """Filly routes natural language requests here from any bot."""
     data = await request.json()
     text    = data.get("message", "")
-    chat_id = data.get("chat_id", OFFICE_CHAT_ID)
+    chat_id = data.get("chat_id", "")   # нет дефолта — без chat_id шлём только JSON
     agent   = data.get("agent", "Unknown")
+    silent  = data.get("silent", False)  # явный флаг тишины
 
     responses = []
     async def collect(msg: str):
         responses.append(msg)
-        target = chat_id or OFFICE_CHAT_ID
-        if target:
+        # Шлём в чат ТОЛЬКО если chat_id явно передан И не silent
+        if chat_id and not silent:
             try:
-                await bot.send_message(chat_id=int(target), text=msg, parse_mode=None)
+                await bot.send_message(chat_id=int(chat_id), text=msg, parse_mode=None)
             except Exception as e:
                 logger.error(f"collect send_message failed: {e}")
 
