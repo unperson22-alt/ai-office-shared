@@ -2674,6 +2674,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
     elif intent == "post_lessons":
         """Читает lessons.json и постит все уроки в Bug Lessons группу."""
         import asyncio as _asyncio
+        _bot = bot  # избегаем конфликта с локальной переменной data
         BUG_GROUP = -5197140411
         try:
             raw = await read_file("ai-office-shared", "lessons/lessons.json")
@@ -2699,10 +2700,14 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                 f"{status_e} Статус: {lesson.get('status', '?')}"
             )
             try:
-                await bot.send_message(chat_id=BUG_GROUP, text=msg)
+                from aiogram.exceptions import TelegramAPIError
+                await _bot.send_message(chat_id=BUG_GROUP, text=msg)
                 await _asyncio.sleep(0.8)
             except Exception as e:
-                await bot.send_message(chat_id=BUG_GROUP, text=f"⚠️ Урок #{lesson.get('id')} — ошибка отправки: {e}")
+                try:
+                    await _bot.send_message(chat_id=BUG_GROUP, text=f"⚠️ Урок #{lesson.get('id')} — ошибка: {e}")
+                except Exception:
+                    pass
 
         await reply_func(f"✅ Все {len(lessons_list)} уроков опубликованы в Bug Lessons")
 
