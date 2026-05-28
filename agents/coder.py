@@ -1652,7 +1652,7 @@ async def process(message: str, user_id: int) -> str:
     conversation_history[user_id].append({{"role": "user", "content": message}})
     if len(conversation_history[user_id]) > 20:
         conversation_history[user_id] = conversation_history[user_id][-10:]
-    r = await client.messages.create(model="claude-sonnet-4-6", max_tokens=4096,
+    r = client.messages.create(model="claude-sonnet-4-6", max_tokens=4096,
         system=SYSTEM, messages=conversation_history[user_id])
     text = next((b.text for b in r.content if hasattr(b, "text")), "[нет текста]")
     conversation_history[user_id].append({{"role": "assistant", "content": text}})
