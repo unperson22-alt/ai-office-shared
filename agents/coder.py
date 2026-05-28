@@ -2685,6 +2685,20 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
 
         await reply_func("🧹 Чищу старые сообщения от ботов...")
 
+        # Паттерны служебных сообщений которые всегда удаляем
+        SERVICE_PATTERNS = [
+            "⏸", "▶️ Силли", "🤖 Запускаю agentic", "📚 Постю",
+            "✅ Завершено за", "⚠️ Достигнут лимит шагов",
+            "🧹 Чищу", "✅ Удалено", "✅ Все 28",
+        ]
+
+        # Определяем chat из task если указан явно
+        if "-5194783850" in task or "офис" in task.lower() or "office" in task.lower():
+            target_chat = -5194783850
+            cutoff_mode = "today_patterns"  # удаляем по паттернам за сегодня
+        else:
+            cutoff_mode = "old_bots"  # удаляем старые сообщения от ботов
+
         try:
             tg_cl = await get_telethon_client()
             messages = await tg_cl.get_messages(target_chat, limit=300)
@@ -2692,19 +2706,29 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             for msg in messages:
                 if not msg or not msg.date:
                     continue
-                if msg.date >= cutoff:
-                    continue
                 if not msg.from_id:
                     continue
-                sender_id = getattr(msg.from_id, 'user_id', None)
-                if not sender_id:
-                    continue
-                try:
-                    user = await tg_cl.get_entity(sender_id)
-                    if getattr(user, 'bot', False):
+
+                if cutoff_mode == "today_patterns":
+                    # Удаляем служебные сообщения за сегодня
+                    from datetime import date as _date
+                    if msg.date.date() < _date.today():
+                        continue
+                    if msg.text and any(p in msg.text for p in SERVICE_PATTERNS):
                         to_delete.append(msg.id)
-                except Exception:
-                    continue
+                else:
+                    # Старый режим: удаляем старые сообщения от ботов
+                    if msg.date >= cutoff:
+                        continue
+                    sender_id = getattr(msg.from_id, 'user_id', None)
+                    if not sender_id:
+                        continue
+                    try:
+                        user = await tg_cl.get_entity(sender_id)
+                        if getattr(user, 'bot', False):
+                            to_delete.append(msg.id)
+                    except Exception:
+                        continue
 
             if to_delete:
                 for i in range(0, len(to_delete), 100):
