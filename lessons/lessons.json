@@ -375,5 +375,18 @@
     "fix": "Переименовать: for bot in [...] → for bot_key in [...]. Коммит b603a91a1d",
     "status": "fixed",
     "prevention": "Зарезервированные имена глобальных объектов (bot, redis, claude) никогда не использовать как loop variables или локальные переменные внутри функций где используется глобальный объект"
+  },
+  {
+    "id": 30,
+    "date": "2026-05-28",
+    "bot": "cilly",
+    "layer": "telegram",
+    "title": "Бот не может удалять сообщения пользователя в личке через Bot API",
+    "symptom": "Сообщение с ключом/секретом осталось в личке после ответа бота",
+    "root_cause": "Bot API deleteMessage в личном чате работает только для сообщений самого бота. Удалить сообщение пользователя может только сам пользователь или Telethon userbot (MTProto)",
+    "why_architecture": "Боты офиса используют Bot API, а не MTProto. Для операций требующих прав пользователя нужен отдельный Telethon клиент через get_telethon_client()",
+    "fix": "Использовать Telethon userbot: tg_cl = await get_telethon_client() → get_messages(bot_entity) → delete_messages(). Бот ищет диалог с самим собой через entity бота",
+    "status": "fixed",
+    "prevention": "Любое удаление чужих сообщений — только через Telethon. Bot API deleteMessage работает только для собственных сообщений бота"
   }
 ]
