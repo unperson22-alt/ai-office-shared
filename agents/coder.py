@@ -2714,14 +2714,14 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         SENSITIVE = ["gsk_", "groq", "token", "api_key", "secret", "✅ groq"]
         try:
             tg_cl = await get_telethon_client()
-            vlad = await tg_cl.get_entity(391077101)
-            msgs = await tg_cl.get_messages(vlad, limit=20)
+            cilly = await tg_cl.get_entity(7779587562)
+            msgs = await tg_cl.get_messages(cilly, limit=20)
             to_delete = [
                 m.id for m in msgs
                 if m.text and any(s in m.text.lower() for s in SENSITIVE)
             ]
             if to_delete:
-                await tg_cl.delete_messages(vlad, to_delete)
+                await tg_cl.delete_messages(cilly, to_delete)
                 await tg_cl.disconnect()
                 await reply_func(f"✅ Удалено {len(to_delete)} сообщений с секретами из лички")
             else:
