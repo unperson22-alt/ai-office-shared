@@ -2714,7 +2714,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         SENSITIVE = ["gsk_", "groq", "token", "api_key", "secret", "✅ groq"]
         try:
             tg_cl = await get_telethon_client()
-            cilly = await tg_cl.get_entity(7779587562)
+            cilly = await tg_cl.get_entity("@silly_coder_bot")
             msgs = await tg_cl.get_messages(cilly, limit=20)
             to_delete = [
                 m.id for m in msgs
