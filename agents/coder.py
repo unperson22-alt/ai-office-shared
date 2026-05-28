@@ -546,7 +546,7 @@ INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
 Сигналы вопроса: как, какой, какие, что такое, зачем, почему, расскажи, объясни, с чего начать, какие шаги
 Сигналы команды: создай, сделай, залей, задеплой, исправь, добавь, зарегистрируй
 
-push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не вопрос!), add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), answer=ответить словами.
+push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не вопрос!), add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), agentic_task=многошаговая задача требующая последовательного чтения файлов/анализа/записи (рефакторинг, аудит, сравнение нескольких файлов), answer=ответить словами.
 ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis" → redis_query.
 ВАЖНО: "подключить бота", "добавить чужого бота" → add_external_bot, НЕ create_bot.
 Репо: billy-bot,tilly-bot,filly-bot,dilly-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard,mama-bot,gosling-bot,villy-bot,prophet-bot,kriss-bot,pilly-bot,doctor-bot,marketing-dept.
@@ -2670,6 +2670,107 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         files = await list_files(repo, path or "")
         lines = [("📁 " if f["type"] == "dir" else "📄 ") + f["name"] for f in files]
         await reply_func("\n".join(lines))
+
+    elif intent == "agentic_task":
+        """Agentic execution loop для многошаговых задач.
+        ReAct pattern: think → act → observe → repeat.
+        """
+        AGENTIC_SYSTEM = """Ты — Силли, исполнитель задач AI-офиса.
+Ты в agentic loop. На каждом шаге выбирай ОДНО действие и возвращай JSON.
+
+Доступные действия:
+- read_file: {"action":"read_file","repo":"...","path":"..."}
+- push_file: {"action":"push_file","repo":"...","path":"...","content":"...","message":"..."}
+- send_message: {"action":"send_message","chat_id":-5194783850,"text":"..."}
+- done: {"action":"done","result":"итог для пользователя"}
+
+Правила:
+- Один JSON на шаг, без лишнего текста
+- Если нужно прочитать несколько файлов — читай по одному
+- done — когда задача полностью выполнена
+- Максимум 15 шагов"""
+
+        steps_log = []
+        context = task
+        max_steps = 15
+
+        await reply_func(f"🤖 Запускаю agentic mode: {task[:80]}...")
+
+        for step_num in range(max_steps):
+            # Формируем prompt с историей шагов
+            history_text = ""
+            if steps_log:
+                history_text = "\n\nУже выполнено:\n" + "\n".join(
+                    f"  Шаг {i+1}: {s['action']} → {s['result'][:200]}"
+                    for i, s in enumerate(steps_log)
+                )
+
+            step_prompt = f"Задача: {context}{history_text}\n\nСледующее действие:"
+
+            raw_action = await ask_claude(step_prompt, system=AGENTIC_SYSTEM, model="claude-sonnet-4-6")
+            raw_action = raw_action.strip()
+
+            # Извлекаем JSON
+            start_j = raw_action.find("{")
+            end_j = raw_action.rfind("}") + 1
+            if start_j == -1:
+                await reply_func(f"❌ Шаг {step_num+1}: не получил JSON")
+                break
+
+            try:
+                action_data = json.loads(raw_action[start_j:end_j])
+            except Exception as e:
+                await reply_func(f"❌ Шаг {step_num+1}: ошибка парсинга: {e}")
+                break
+
+            action = action_data.get("action", "")
+
+            # Выполняем действие
+            if action == "done":
+                result_text = action_data.get("result", "✅ Готово")
+                await reply_func(f"✅ Завершено за {step_num+1} шагов:\n{result_text}")
+                break
+
+            elif action == "read_file":
+                a_repo = action_data.get("repo", "")
+                a_path = action_data.get("path", "")
+                try:
+                    file_content = await read_file(a_repo, a_path)
+                    result = file_content[:4000]
+                    steps_log.append({"action": f"read_file({a_repo}/{a_path})", "result": result})
+                    # Добавляем содержимое в контекст
+                    context += f"\n\n[Файл {a_repo}/{a_path}]:\n{result}"
+                except Exception as e:
+                    steps_log.append({"action": f"read_file({a_repo}/{a_path})", "result": f"ERROR: {e}"})
+
+            elif action == "push_file":
+                a_repo = action_data.get("repo", "")
+                a_path = action_data.get("path", "")
+                a_content = action_data.get("content", "")
+                a_message = action_data.get("message", "agentic update")
+                try:
+                    await push_file(a_repo, a_path, a_content, a_message)
+                    steps_log.append({"action": f"push_file({a_repo}/{a_path})", "result": "OK"})
+                except Exception as e:
+                    steps_log.append({"action": f"push_file({a_repo}/{a_path})", "result": f"ERROR: {e}"})
+
+            elif action == "send_message":
+                a_chat = action_data.get("chat_id", -5194783850)
+                a_text = action_data.get("text", "")
+                try:
+                    await bot.send_message(chat_id=int(a_chat), text=a_text)
+                    steps_log.append({"action": f"send_message({a_chat})", "result": "OK"})
+                except Exception as e:
+                    steps_log.append({"action": f"send_message({a_chat})", "result": f"ERROR: {e}"})
+
+            else:
+                steps_log.append({"action": action, "result": "UNKNOWN ACTION"})
+                await reply_func(f"⚠️ Неизвестное действие: {action}")
+                break
+
+        else:
+            await reply_func(f"⚠️ Достигнут лимит шагов ({max_steps}). Прогресс: {len(steps_log)} шагов")
+
 
 # ── Telegram handlers ──────────────────────────────────────────────────────────
 @dp.message(F.chat.type.in_({"group", "supergroup"}))
