@@ -2686,34 +2686,34 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         await reply_func("🧹 Чищу старые сообщения от ботов...")
 
         try:
-            messages = await client.get_messages(target_chat, limit=300)
+            tg_cl = await get_telethon_client()
+            messages = await tg_cl.get_messages(target_chat, limit=300)
             to_delete = []
             for msg in messages:
                 if not msg or not msg.date:
                     continue
-                # Только старые сообщения
                 if msg.date >= cutoff:
                     continue
-                # Только от ботов
                 if not msg.from_id:
                     continue
                 sender_id = getattr(msg.from_id, 'user_id', None)
                 if not sender_id:
                     continue
                 try:
-                    user = await client.get_entity(sender_id)
+                    user = await tg_cl.get_entity(sender_id)
                     if getattr(user, 'bot', False):
                         to_delete.append(msg.id)
                 except Exception:
                     continue
 
             if to_delete:
-                # Удаляем пачками по 100
                 for i in range(0, len(to_delete), 100):
-                    await client.delete_messages(target_chat, to_delete[i:i+100])
+                    await tg_cl.delete_messages(target_chat, to_delete[i:i+100])
                     await _asyncio.sleep(0.5)
+                await tg_cl.disconnect()
                 await reply_func(f"✅ Удалено {len(to_delete)} старых сообщений от ботов")
             else:
+                await tg_cl.disconnect()
                 await reply_func("✅ Старых сообщений от ботов не найдено")
         except Exception as e:
             await reply_func(f"❌ Ошибка: {e}")
