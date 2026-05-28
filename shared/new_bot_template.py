@@ -80,6 +80,8 @@ REACTION_UP   = {"👍", "❤️", "🔥", "🥰", "👏", "🎉", "🤩", "🙏
 REACTION_DOWN = {"👎", "💩", "🤬", "🤮", "😢"}
 
 redis_client = None
+_ptb_bot = None  # заполняется в main()
+
 
 
 # ── Системный промпт с заметками ─────────────────────────────────────────────
@@ -175,9 +177,28 @@ async def handle_task(request):
     return web.json_response({"status": "ok", "response": response})
 
 
+
+
+async def handle_send(request):
+    """Endpoint для отправки сообщения от имени этого бота.
+    POST /send  {chat_id: int, text: str}
+    Авторизация: X-Secret-Token (тот же HTTP_SECRET).
+    """
+    secret = request.headers.get("X-Secret-Token", "")
+    if HTTP_SECRET and secret != HTTP_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        chat_id = int(data["chat_id"])
+        text    = str(data["text"])
+    except (KeyError, ValueError) as e:
+        return web.json_response({"error": f"bad request: {e}"}, status=400)
+    await _ptb_bot.send_message(chat_id=chat_id, text=text)
+    return web.json_response({"ok": True})
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 async def main():
-    global redis_client
+    global redis_client, _ptb_bot
     redis_client = aioredis.from_url(REDIS_URL, decode_responses=False)
     logger.info("Redis connected")
 
@@ -187,6 +208,7 @@ async def main():
     ptb.add_handler(MessageReactionHandler(handle_reaction))
 
     async with ptb:
+        _ptb_bot = ptb.bot
         await ptb.start()
         await ptb.updater.start_polling(drop_pending_updates=True,
             allowed_updates=["message", "edited_message", "message_reaction"])
@@ -195,6 +217,7 @@ async def main():
         app_http.router.add_get("/health", handle_health)
         app_http.router.add_post("/health", handle_health)
         app_http.router.add_post("/task",   handle_task)
+        app_http.router.add_post("/send",   handle_send)
         runner = web.AppRunner(app_http)
         await runner.setup()
         await web.TCPSite(runner, "0.0.0.0", HTTP_PORT).start()
