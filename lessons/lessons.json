@@ -417,5 +417,23 @@
     "fix": "1) max_tokens 1024→4096. 2) text = next((b.text for b in r.content if hasattr(b, 'text')), '[нет текста]'). 3) try/except в handle_task. ВНИМАНИЕ: client = anthropic.Anthropic() — синхронный, await НЕ нужен.",
     "status": "fixed",
     "prevention": "Перед добавлением await проверить тип клиента: Anthropic() = sync, AsyncAnthropic() = async. Не менять await без проверки инициализации."
+  },
+  {
+    "id": "SHARED-001",
+    "date": "2026-05-28",
+    "symptom": "Все боты на ai-office-shared v0.1.9 падают с ImportError при запуске",
+    "cause": "В __init__.py добавлен auto-import impact_client который использует 'requests' — а requests нет в зависимостях пакета. При любом from ai_office_shared.shared import X весь пакет падает.",
+    "fix": "1) Убрать auto-import из __init__.py. 2) В impact_client.py заменить requests на httpx (httpx уже есть у всех ботов). 3) Bump до v0.1.10. 4) Обновить requirements.txt у всех ботов.",
+    "status": "fixed",
+    "prevention": "Перед добавлением импорта в __init__.py проверить: есть ли все зависимости нового модуля в pyproject.toml пакета. Никогда не делать eager import в __init__.py для модулей с внешними зависимостями."
+  },
+  {
+    "id": "BOT-REGISTRY-001",
+    "date": "2026-05-28",
+    "symptom": "Силли ищет репозитории с неправильными именами (ai-office, silly-bot, silly-office) когда нужны конкретные боты",
+    "cause": "Силли не знает маппинг бот → репозиторий",
+    "fix": "Реестр: billy→billy-bot, kriss→kriss-bot, milly→milly-bot, villy→villy-bot, gosling→gosling-bot, ellis/mama→mama-bot, prophet→prophet-bot, pilly→pilly-bot, dilly/doctor→dilly-bot, tilly→tilly-bot, filly→filly-bot, sillie→cilly-bot (с). Маркетинг: marketing-dept/ray/, marketing-dept/nelli/, marketing-dept/marty/ и тд. Trading: trading-dept/. Family: family-dept/.",
+    "status": "documented",
+    "prevention": "Перед поиском файла в репо — проверить этот реестр. Репо называется {bot}-bot, не {bot}-office или ai-{bot}."
   }
 ]
