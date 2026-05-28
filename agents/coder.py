@@ -3276,7 +3276,9 @@ async def handle_reaction(reaction: MessageReactionUpdated):
 
 
 async def handle_post_raw(request):
-    """Send a raw message to any chat. Auth: X-Auth-Token = Railway token."""
+    """Send a raw message to any chat. Auth: X-Auth-Token = Railway token.
+    Если передан bot_name — проксирует запрос на /send нужного бота.
+    """
     auth = request.headers.get("X-Auth-Token", "")
     if not auth or auth != RAILWAY_SECRET:
         return web.json_response({"error": "unauthorized"}, status=401)
@@ -3284,8 +3286,21 @@ async def handle_post_raw(request):
     chat_id = data.get("chat_id")
     text = data.get("text", "")
     parse_mode = data.get("parse_mode", "HTML")
+    bot_name = data.get("bot_name", "").upper()
     if not chat_id or not text:
         return web.json_response({"error": "chat_id and text required"}, status=400)
+    if bot_name and bot_name in BOT_URLS:
+        bot_url = BOT_URLS[bot_name].rstrip("/")
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.post(
+                    f"{bot_url}/send",
+                    json={"chat_id": int(chat_id), "text": text},
+                    headers={"X-Secret-Token": HTTP_SECRET_BOTS},
+                )
+                return web.json_response(r.json())
+        except Exception as e:
+            return web.json_response({"error": f"proxy error: {e}"}, status=500)
     try:
         await bot.send_message(chat_id=int(chat_id), text=text, parse_mode=parse_mode)
         return web.json_response({"ok": True})
