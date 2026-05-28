@@ -2129,7 +2129,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         else:
             # Fallback: just answer conversationally
             answer = await ask_claude(message_text, system=CHAT_PROMPT, model="claude-haiku-4-5-20251001")
-            await reply_func(answer)
+            await reply_funcnc(answer)
             return
 
     intent     = intent_data.get("intent", "answer")
