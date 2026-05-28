@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-office-shared"
-version = "0.1.6"
+version = "0.1.8"
 description = "Shared library for AI Office Telegram bots"
 requires-python = ">=3.10"
 dependencies = []
@@ -13,3 +13,4 @@ dependencies = []
 where = ["."]
 include = ["ai_office_shared*"]
 exclude = ["agents*", "tests*"]
+
