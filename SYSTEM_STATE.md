@@ -60,7 +60,7 @@
 |**Милли**  |`МИЛЛИ`             |`милли`                 |milly-bot  |`db277aff`|milly-bot-production.up.railway.app       |python-telegram-bot          |
 |**Доктор** |`ДИЛЛИ`             |`доктор` ⚠              |dilly-bot  |`d949c4d2`|dilly-bot-production.up.railway.app       |python-telegram-bot          |
 |**Вилли**  |`ВИЛЛИ`             |`вилли`                 |villy-bot  |`a5e37cc4`|villy-bot-production.up.railway.app       |python-telegram-bot          |
-|**Гослинг**|`ГОСЛИНГ`           |`гослинг`               |gosling-bot|`ed03c9d3`|gosling-bot.railway.internal:8080 ³       |python-telegram-bot          |
+|**Гослинг**|`ГОСЛИНГ`           |`гослинг`               |gosling-bot|`ed03c9d3`|gosling-bot-production.up.railway.app ³       |python-telegram-bot          |
 |**Силли**  |`СИЛЛИ`             |`силли`                 |cilly-bot  |`efa6bd21`|cilly-bot-production.up.railway.app       |aiogram 3.7 + Telethon       |
 |**Пророк** |`ПРОРОК`            |— ⁴                     |prophet-bot|—         |prophet-bot-production-df65.up.railway.app|python-telegram-bot          |
 
@@ -354,7 +354,7 @@ family-dept       — Семья          [создан 2026-05-26]
 ```python
 "БИЛЛИ":   "billy-bot-production.up.railway.app"
 "КРИС":    "kriss-bot-production.up.railway.app"
-"ГОСЛИНГ": "gosling-bot.railway.internal:8080"
+"ГОСЛИНГ": "gosling-bot-production.up.railway.app"
 "СИЛЛИ":   "cilly-bot-production.up.railway.app"
 "МИЛЛИ":   "milly-bot-production.up.railway.app"
 "ВИЛЛИ":   "villy-bot-production.up.railway.app"
