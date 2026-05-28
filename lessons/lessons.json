@@ -435,5 +435,23 @@
     "fix": "Реестр: billy→billy-bot, kriss→kriss-bot, milly→milly-bot, villy→villy-bot, gosling→gosling-bot, ellis/mama→mama-bot, prophet→prophet-bot, pilly→pilly-bot, dilly/doctor→dilly-bot, tilly→tilly-bot, filly→filly-bot, sillie→cilly-bot (с). Маркетинг: marketing-dept/ray/, marketing-dept/nelli/, marketing-dept/marty/ и тд. Trading: trading-dept/. Family: family-dept/.",
     "status": "documented",
     "prevention": "Перед поиском файла в репо — проверить этот реестр. Репо называется {bot}-bot, не {bot}-office или ai-{bot}."
+  },
+  {
+    "id": "CILLY-002",
+    "date": "2026-05-28",
+    "symptom": "Силли ищет RAILWAY_TOKEN в GitHub репозиториях (silli-config, silli-tools) и не находит",
+    "cause": "Силли не знает что Railway токен доступен как переменная окружения через os.getenv, а не хранится в GitHub",
+    "fix": "RAILWAY_TOKEN_VLAD доступен через os.getenv('RAILWAY_TOKEN_VLAD'). В coder.py уже есть RAILWAY_TOKEN = os.getenv('RAILWAY_TOKEN_VLAD') or os.getenv('RAILWAY_TOKEN'). Для Railway API использовать функцию railway_graphql(query).",
+    "status": "fixed",
+    "prevention": "Никогда не искать секреты/токены в GitHub репозиториях. Все токены — в env переменных Railway. Проверять через os.getenv()."
+  },
+  {
+    "id": "CILLY-003",
+    "date": "2026-05-28",
+    "symptom": "Силли пишет в офис каждый промежуточный шаг задачи — засоряет чат",
+    "cause": "Нет правила когда писать в офис",
+    "fix": "Писать в офис ТОЛЬКО финальный отчёт (успех или ошибка). Промежуточные шаги — только в логи.",
+    "status": "fixed",
+    "prevention": "Правило: send_to_group() вызывать максимум 1-2 раза за задачу — в начале (если задача длинная) и в конце."
   }
 ]
