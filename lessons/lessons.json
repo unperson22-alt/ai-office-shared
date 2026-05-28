@@ -408,5 +408,14 @@
     "fix": "GitHub API путь: /repos/{owner}/{repo}/contents/{path}. owner=unperson22-alt, repo=family-dept, path=README.md. Никогда не включать owner в repo или path.",
     "status": "fixed",
     "prevention": "Перед GitHub API вызовом проверять: repo содержит только имя репо (без org), path не начинается с org или repo."
+  },
+  {
+    "id": "CILLY-001",
+    "date": "2026-05-28",
+    "symptom": "HTTP /task возвращает 500 на сообщениях длиннее ~200 символов",
+    "cause": "1) max_tokens=1024 — Claude обрезает ответ на длинных задачах. 2) r.content[0].text — падает если Claude вернул tool_use block вместо text. 3) Нет try/except в handle_task",
+    "fix": "1) max_tokens 1024→4096. 2) text = next((b.text for b in r.content if hasattr(b, 'text')), '[нет текста]'). 3) Обернуть process() в try/except в handle_task.",
+    "status": "fixed",
+    "prevention": "Всегда итерировать r.content по типу блока, не брать [0].text напрямую. max_tokens ≥ 4096 для агентских задач."
   }
 ]
