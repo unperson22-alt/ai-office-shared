@@ -74,6 +74,7 @@ SERVICES = {
 }
 
 bot    = Bot(token=BOT_TOKEN)
+_GLOBAL_BOT = bot  # глобальная ссылка для использования в handlers
 dp     = Dispatcher()
 claude = AsyncAnthropic(api_key=ANTHROPIC_KEY)
 
@@ -2701,11 +2702,11 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             )
             try:
                 from aiogram.exceptions import TelegramAPIError
-                await _bot.send_message(chat_id=BUG_GROUP, text=msg)
+                await _GLOBAL_BOT.send_message(chat_id=BUG_GROUP, text=msg)
                 await _asyncio.sleep(0.8)
             except Exception as e:
                 try:
-                    await _bot.send_message(chat_id=BUG_GROUP, text=f"⚠️ Урок #{lesson.get('id')} — ошибка: {e}")
+                    await _GLOBAL_BOT.send_message(chat_id=BUG_GROUP, text=f"⚠️ Урок #{lesson.get('id')} — ошибка: {e}")
                 except Exception:
                     pass
 
@@ -2803,7 +2804,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                 import asyncio as _asyncio
                 for t in texts[:5]:
                     try:
-                        await bot.send_message(chat_id=int(a_chat), text=str(t))
+                        await _GLOBAL_BOT.send_message(chat_id=int(a_chat), text=str(t))
                         sent += 1
                         await _asyncio.sleep(0.5)
                     except Exception:
@@ -2814,7 +2815,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                 a_chat = action_data.get("chat_id", -5194783850)
                 a_text = action_data.get("text", "")
                 try:
-                    await bot.send_message(chat_id=int(a_chat), text=a_text)
+                    await _GLOBAL_BOT.send_message(chat_id=int(a_chat), text=a_text)
                     steps_log.append({"action": f"send_message({a_chat})", "result": "OK"})
                 except Exception as e:
                     steps_log.append({"action": f"send_message({a_chat})", "result": f"ERROR: {e}"})
