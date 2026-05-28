@@ -2148,8 +2148,8 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         if any(w in task_lower for w in ["quality", "реакци", "голос", "👍", "👎", "up", "down", "аудит"]):
             async for key in r.scan_iter("office:quality:*"):
                 data = await r.hgetall(key)
-                bot = key.split(":")[-1]
-                result[f"quality:{bot}"] = {
+                bot_name = key.split(":")[-1]
+                result[f"quality:{bot_name}"] = {
                     "up":   int(data.get("up",   0)),
                     "down": int(data.get("down", 0)),
                 }
