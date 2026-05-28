@@ -3763,6 +3763,7 @@ async def main():
     app.router.add_post("/post_raw", handle_post_raw)
     app.router.add_post("/promote_bots", handle_promote_bots)
     app.router.add_get("/health", handle_health)
+    app.router.add_post("/copy_railway_vars", handle_copy_railway_vars)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080)))
