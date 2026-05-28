@@ -3414,27 +3414,18 @@ async def handle_cilly_task(request):
             except Exception as e:
                 logger.error(f"collect send_message failed: {e}")
 
-    # Перехватываем GROQ API ключ — ставим всем сервисам
+    # Перехватываем GROQ API ключ — сохраняем в Redis
     if text.strip().startswith("gsk_") and len(text.strip()) > 20:
         groq_key = text.strip()
-        results = []
-        projects = [
-            ("271b40b7-199a-429a-88ef-ca417f26a638", "2efaaf60-3568-4462-8b77-f4a7e3c65b49"),
-            ("ed4c408f-29f4-481a-aff1-b5bdbe0fc62e", "e987a790-e2e5-47a7-89cb-b0e8a6e8c9b3"),
-            ("d538d675-e29a-4b5a-a1ae-39d36be06c1d", "f2498bbf-c5e0-4cb3-b4a9-8f3d2a1e9c7b"),
-        ]
-        for proj_id, env_id in projects:
-            try:
-                res = await railway_query(
-                    """mutation($projectId:String!,$environmentId:String!,$variables:[VariableInput!]!){
-                         variableCollectionUpsert(input:{projectId:$projectId,environmentId:$environmentId,variables:$variables})}""",
-                    {"projectId": proj_id, "environmentId": env_id,
-                     "variables": [{"name": "GROQ_API_KEY", "value": groq_key}]}
-                )
-                results.append(f"✅ {proj_id[:8]}")
-            except Exception as e:
-                results.append(f"❌ {proj_id[:8]}: {e}")
+        # Сохраняем в Redis
+        try:
+            r_client = await get_redis()
+            await r_client.set("office:config:GROQ_API_KEY", groq_key)
+            redis_ok = True
+        except Exception:
+            redis_ok = False
         # Удаляем сообщение с ключом через Telethon
+        deleted = False
         if chat_id:
             try:
                 tg_cl = await get_telethon_client()
@@ -3442,11 +3433,14 @@ async def handle_cilly_task(request):
                 for msg in msg_history:
                     if msg.text and groq_key in msg.text:
                         await tg_cl.delete_messages(int(chat_id), [msg.id])
+                        deleted = True
                         break
                 await tg_cl.disconnect()
-            except Exception: pass
-        collect("🔑 GROQ_API_KEY сохранён во все проекты:\n" + "\n".join(results))
-        responses.append("🔑 Ключ сохранён, сообщение удалено")
+            except Exception:
+                pass
+        status = f"🔑 GROQ_API_KEY {'сохранён в Redis ✅' if redis_ok else '❌ Redis недоступен'}. Сообщение {'удалено 🗑' if deleted else 'не найдено'}."
+        collect(status)
+        responses.append(status)
         return web.json_response({"status": "ok", "responses": responses})
 
     await handle_natural_language(f"[{agent}] {text}", int(chat_id) if chat_id else 0, collect)
