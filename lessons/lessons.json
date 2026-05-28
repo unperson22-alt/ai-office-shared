@@ -388,5 +388,15 @@
     "fix": "Использовать Telethon userbot: tg_cl = await get_telethon_client() → get_messages(bot_entity) → delete_messages(). Бот ищет диалог с самим собой через entity бота",
     "status": "fixed",
     "prevention": "Любое удаление чужих сообщений — только через Telethon. Bot API deleteMessage работает только для собственных сообщений бота"
+  },
+  {
+    "id": "REPO-001",
+    "date": "2026-05-28",
+    "symptom": "Силли не может найти репо bot-name при задачах с маркетинговыми или trading ботами",
+    "cause": "Боты в dept-монорепо живут в папках, а не в отдельных репозиториях",
+    "context": "ray-bot задача завершилась 404 — unperson22-alt/ray-bot не существует",
+    "fix": "Маркетинговые боты: unperson22-alt/marketing-dept/ray/, marty/, nelli/, copy/, lex/. Trading: unperson22-alt/trading-dept. Если бот не найден как репо — искать в dept-монорепо.",
+    "status": "fixed",
+    "prevention": "Перед 404 — проверить marketing-dept и trading-dept монорепо"
   }
 ]
