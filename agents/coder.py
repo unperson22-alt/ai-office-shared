@@ -2717,12 +2717,21 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                     continue
 
                 if cutoff_mode == "today_patterns":
-                    # Удаляем служебные сообщения за сегодня
-                    from datetime import date as _date
+                    # Удаляем ВСЕ сообщения от ботов за сегодня из офисной группы
+                    from datetime import date as _date, datetime as _dt, timezone as _tz
                     if msg.date.date() < _date.today():
                         continue
-                    if msg.text and any(p in msg.text for p in SERVICE_PATTERNS):
-                        to_delete.append(msg.id)
+                    sender_id = getattr(msg.from_id, 'user_id', None)
+                    if not sender_id:
+                        continue
+                    try:
+                        user = await tg_cl.get_entity(sender_id)
+                        if getattr(user, 'bot', False):
+                            to_delete.append(msg.id)
+                    except Exception:
+                        # Если не можем получить entity — проверяем по паттернам
+                        if msg.text and any(p in msg.text for p in SERVICE_PATTERNS):
+                            to_delete.append(msg.id)
                 else:
                     # Старый режим: удаляем старые сообщения от ботов
                     if msg.date >= cutoff:
