@@ -3387,11 +3387,20 @@ async def cmd_natural_language(message: Message):
         await message.reply("✅ GROQ_API_KEY сохранён")
         try:
             tg_cl = await get_telethon_client()
-            msgs = await tg_cl.get_messages(message.chat.id, limit=5)
-            for m in msgs:
-                if m.text and groq_key in m.text:
-                    await tg_cl.delete_messages(message.chat.id, [m.id])
-                    break
+            # Userbot (аккаунт Влада) может удалять свои сообщения в любом диалоге
+            # В личке с ботом — ищем диалог и удаляем сообщение с ключом
+            bot_entity = await tg_cl.get_entity(f"@{bot_name}")
+            msgs = await tg_cl.get_messages(bot_entity, limit=10)
+            to_delete = [m.id for m in msgs if m.text and groq_key in m.text]
+            if to_delete:
+                await tg_cl.delete_messages(bot_entity, to_delete)
+            # Также удаляем ответное сообщение бота "✅ GROQ_API_KEY сохранён"
+            bot_msgs = await tg_cl.get_messages(bot_entity, limit=5, from_user="me")
+            # from_user="me" не работает в личке — берём последние и фильтруем
+            all_msgs = await tg_cl.get_messages(bot_entity, limit=5)
+            bot_replies = [m.id for m in all_msgs if m.out and "GROQ" in (m.text or "")]
+            if bot_replies:
+                await tg_cl.delete_messages(bot_entity, bot_replies)
             await tg_cl.disconnect()
         except Exception:
             pass
