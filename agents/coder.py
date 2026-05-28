@@ -1677,6 +1677,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type in ["group", "supergroup"]:
         return
     msg = update.message.text
+    # Перехват GROQ API ключа
+    if msg and msg.strip().startswith("gsk_") and len(msg.strip()) > 20:
+        groq_key = msg.strip()
+        if redis_client:
+            await redis_client.set("office:secrets:groq_api_key", groq_key, ex=86400*365)
+        await update.message.reply_text("✅ GROQ_API_KEY сохранён")
+        try:
+            tg_cl = await get_telethon_client()
+            msgs = await tg_cl.get_messages(update.effective_chat.id, limit=5)
+            for m in msgs:
+                if m.text and groq_key in m.text:
+                    await tg_cl.delete_messages(update.effective_chat.id, [m.id])
+                    break
+            await tg_cl.disconnect()
+        except Exception: pass
+        return
     await log("MSG_IN", msg[:80])
     response = await process(msg, update.effective_user.id)
     await log("MSG_OUT", f"{bot_name}: {{response[:80]}}")
