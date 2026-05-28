@@ -2690,14 +2690,20 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             "⏸", "▶️ Силли", "🤖 Запускаю agentic", "📚 Постю",
             "✅ Завершено за", "⚠️ Достигнут лимит шагов",
             "🧹 Чищу", "✅ Удалено", "✅ Все 28",
+            "🔧 *", "упал — пробую", "редеплой запущен",
+            "передеплоить", "редеплой", "Запускаю agentic",
+            "agentic mode", "Постю уроков", "опубликованы в Bug",
         ]
 
-        # Определяем chat из task если указан явно
+        # Определяем chat из task
         if "-5194783850" in task or "офис" in task.lower() or "office" in task.lower():
             target_chat = -5194783850
-            cutoff_mode = "today_patterns"  # удаляем по паттернам за сегодня
+            cutoff_mode = "today_patterns"
+        elif "-5197140411" in task or "баг" in task.lower() or "bug" in task.lower() or "logs" in task.lower():
+            target_chat = -5197140411
+            cutoff_mode = "old_bots"
         else:
-            cutoff_mode = "old_bots"  # удаляем старые сообщения от ботов
+            cutoff_mode = "today_patterns"  # дефолт — паттерны за сегодня
 
         try:
             tg_cl = await get_telethon_client()
