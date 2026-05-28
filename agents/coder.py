@@ -1675,6 +1675,34 @@ async def process(message: str, user_id: int) -> str:
     conversation_history[user_id].append({{"role": "assistant", "content": text}})
     return text
 
+
+async def handle_copy_railway_vars(request):
+    data = await request.json()
+    src_p = data.get("src_project", "")
+    src_e = data.get("src_env", "")
+    dst_p = data.get("dst_project", "")
+    dst_e = data.get("dst_env", "")
+    keys = data.get("keys", [])
+    extra = data.get("extra", {})
+    src_r = await railway_graphql(
+        "{ variables(projectId: \"" + src_p + "\", environmentId: \"" + src_e + "\") }"
+    )
+    if "errors" in src_r:
+        return web.json_response({"ok": False, "error": src_r["errors"][0]["message"]})
+    all_vars = src_r.get("data", {}).get("variables", {})
+    copied, failed = [], []
+    for key in list(keys) + list(extra.keys()):
+        val = extra.get(key) or all_vars.get(key)
+        if val is None:
+            continue
+        r = await railway_graphql(
+            "mutation($i: VariableUpsertInput!) { variableUpsert(input: $i) }",
+            {"i": {"projectId": dst_p, "environmentId": dst_e, "name": key, "value": val}}
+        )
+        (failed if "errors" in r else copied).append(key)
+    await send_to_group(f"copy_vars: {len(copied)} OK, {len(failed)} fail")
+    return web.json_response({"ok": True, "copied": copied, "failed": failed})
+
 async def handle_task(request):
     data = await request.json()
     message = data.get("message", "")
