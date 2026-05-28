@@ -2722,8 +2722,9 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                     break
             if not cilly:
                 await tg_cl.disconnect()
-                await reply_fu
-            msgs = await tg_cl.get_messages(cilly, limit=20)
+                await reply_func("❌ Диалог с Силли не найден")
+                return
+            msgs = await tg_cl.get_messages(cilly, limit=50)
             to_delete = [
                 m.id for m in msgs
                 if m.text and any(s in m.text.lower() for s in SENSITIVE)
