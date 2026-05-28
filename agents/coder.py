@@ -1399,9 +1399,9 @@ async def _deep_diagnose_and_escalate(
         elif action == "redeploy":
             ok = await redeploy_service(service_id)
             if ok:
-                    logger.info(f"[diagnose] auto-redeploy ok for {repo}")
-                else:
-                    await notify_office(f"⚠️ *{repo}* — редеплой не удался")
+                logger.info(f"[diagnose] auto-redeploy ok for {repo}")
+            else:
+                await notify_office(f"⚠️ *{repo}* — редеплой не удался")
         # Сбрасываем счётчик после применения фикса
         if redis_client:
             await redis_client.delete(f"fix_count:{service_id}:{error_signature}")
