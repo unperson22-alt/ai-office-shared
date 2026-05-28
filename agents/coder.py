@@ -46,24 +46,7 @@ OFFICE_CHAT_ID  = os.getenv("OFFICE_CHAT_ID")
 OLLAMA_HOST     = os.getenv("OLLAMA_HOST", "").strip().rstrip("/\\")
 OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL", "qwen3:8b")
 OLLAMA_ENABLED  = os.getenv("OLLAMA_ENABLED", "").lower() in ("1", "true", "yes")
-RAILWAY_TOKEN   = os.getenv("RAILWAY_TOKEN_VLAD") or os.getenv("RAILWAY_TOKEN")
-
-async def railway_graphql(query: str, variables: dict = None) -> dict:
-    """Выполнить GraphQL запрос к Railway API используя RAILWAY_TOKEN из env."""
-    token = RAILWAY_TOKEN
-    if not token:
-        return {"errors": [{"message": "RAILWAY_TOKEN не найден в env (RAILWAY_TOKEN_VLAD или RAILWAY_TOKEN)"}]}
-    payload = {"query": query}
-    if variables:
-        payload["variables"] = variables
-    async with httpx.AsyncClient() as client:
-        r = await client.post(
-            "https://backboard.railway.app/graphql/v2",
-            json=payload,
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            timeout=30
-        )
-        return r.json()  # VLAD-token приоритет (audit fix)
+RAILWAY_TOKEN   = os.getenv("RAILWAY_TOKEN_VLAD") or os.getenv("RAILWAY_TOKEN")  # VLAD-token приоритет (audit fix)
 RAILWAY_PROJECT = "271b40b7-199a-429a-88ef-ca417f26a638"
 RAILWAY_ENV_ID  = "2efaaf60-ba39-492c-bf86-007fd505493f"  # BUILD:20260518-1803
 GITHUB_USER     = "unperson22-alt"
@@ -493,7 +476,7 @@ office:decisions в Redis — твои ограничения.
 == ПРАВИЛО ==
 НИКОГДА не спрашивай "какой репо" или "где конфиг" — ты знаешь структуру.
 Для ВНЕШНЕГО бота — только: username + URL + описание одной фразой.
-Отвечай кратко. Если задача — делай, не рассуждай долго. В офис пиши ТОЛЬКО финальный отчёт — не промежуточные шаги. RAILWAY_TOKEN доступен через os.getenv("RAILWAY_TOKEN_VLAD") — не ищи его в GitHub. Для Railway API используй функцию railway_graphql(query).
+Отвечай кратко. Если задача — делай, не рассуждай долго.
 
 ---
 
@@ -1674,34 +1657,6 @@ async def process(message: str, user_id: int) -> str:
     text = next((b.text for b in r.content if hasattr(b, "text")), "[нет текста]")
     conversation_history[user_id].append({{"role": "assistant", "content": text}})
     return text
-
-
-async def handle_copy_railway_vars(request):
-    data = await request.json()
-    src_p = data.get("src_project", "")
-    src_e = data.get("src_env", "")
-    dst_p = data.get("dst_project", "")
-    dst_e = data.get("dst_env", "")
-    keys = data.get("keys", [])
-    extra = data.get("extra", {})
-    src_r = await railway_graphql(
-        "{ variables(projectId: \"" + src_p + "\", environmentId: \"" + src_e + "\") }"
-    )
-    if "errors" in src_r:
-        return web.json_response({"ok": False, "error": src_r["errors"][0]["message"]})
-    all_vars = src_r.get("data", {}).get("variables", {})
-    copied, failed = [], []
-    for key in list(keys) + list(extra.keys()):
-        val = extra.get(key) or all_vars.get(key)
-        if val is None:
-            continue
-        r = await railway_graphql(
-            "mutation($i: VariableUpsertInput!) { variableUpsert(input: $i) }",
-            {"i": {"projectId": dst_p, "environmentId": dst_e, "name": key, "value": val}}
-        )
-        (failed if "errors" in r else copied).append(key)
-    await send_to_group(f"copy_vars: {len(copied)} OK, {len(failed)} fail")
-    return web.json_response({"ok": True, "copied": copied, "failed": failed})
 
 async def handle_task(request):
     data = await request.json()
@@ -3763,7 +3718,6 @@ async def main():
     app.router.add_post("/post_raw", handle_post_raw)
     app.router.add_post("/promote_bots", handle_promote_bots)
     app.router.add_get("/health", handle_health)
-    app.router.add_post("/copy_railway_vars", handle_copy_railway_vars)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080)))
