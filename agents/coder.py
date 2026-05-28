@@ -1652,9 +1652,9 @@ async def process(message: str, user_id: int) -> str:
     conversation_history[user_id].append({{"role": "user", "content": message}})
     if len(conversation_history[user_id]) > 20:
         conversation_history[user_id] = conversation_history[user_id][-10:]
-    r = client.messages.create(model="claude-sonnet-4-6", max_tokens=1024,
+    r = await client.messages.create(model="claude-sonnet-4-6", max_tokens=4096,
         system=SYSTEM, messages=conversation_history[user_id])
-    text = r.content[0].text
+    text = next((b.text for b in r.content if hasattr(b, "text")), "[нет текста]")
     conversation_history[user_id].append({{"role": "assistant", "content": text}})
     return text
 
@@ -1663,7 +1663,11 @@ async def handle_task(request):
     message = data.get("message", "")
     user_id = data.get("user_id", YOUR_TELEGRAM_ID)
     await log("MSG_IN", f"[HTTP] {{message[:80]}}")
-    response = await process(message, user_id)
+    try:
+        response = await process(message, user_id)
+    except Exception as e:
+        logger.error(f"process() error: {e}")
+        return web.json_response({"status": "error", "responses": [str(e)]}, status=500)
     _cilly_source = data.get("source", "").upper()
     _SILENT = {"ФИЛЛИ", "FILLY", "DISPATCHER", "CLAUDE"}
     if data.get("notify", False) or _cilly_source not in _SILENT:
