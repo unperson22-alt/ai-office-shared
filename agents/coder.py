@@ -2714,7 +2714,13 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         SENSITIVE = ["gsk_", "groq", "token", "api_key", "secret", "✅ groq"]
         try:
             tg_cl = await get_telethon_client()
-            fr
+            from telethon.tl.types import PeerUser
+            try:
+                cilly = await tg_cl.get_input_entity(PeerUser(7779587562))
+            except Exception:
+                await tg_cl.disconnect()
+                await reply_func('❌ Не могу найти диалог с Силли')
+                return
             msgs = await tg_cl.get_messages(cilly, limit=50)
             to_delete = [
                 m.id for m in msgs
