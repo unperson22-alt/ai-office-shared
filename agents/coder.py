@@ -2682,6 +2682,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
 - read_file: {"action":"read_file","repo":"...","path":"..."}
 - push_file: {"action":"push_file","repo":"...","path":"...","content":"...","message":"..."}
 - send_message: {"action":"send_message","chat_id":-5194783850,"text":"..."}
+- send_messages: {"action":"send_messages","chat_id":-5194783850,"texts":["msg1","msg2",...]} — батч до 5 сообщений за раз
 - done: {"action":"done","result":"итог для пользователя"}
 
 Правила:
@@ -2692,7 +2693,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
 
         steps_log = []
         context = task
-        max_steps = 15
+        max_steps = 30
 
         await reply_func(f"🤖 Запускаю agentic mode: {task[:80]}...")
 
@@ -2753,6 +2754,20 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                     steps_log.append({"action": f"push_file({a_repo}/{a_path})", "result": "OK"})
                 except Exception as e:
                     steps_log.append({"action": f"push_file({a_repo}/{a_path})", "result": f"ERROR: {e}"})
+
+            elif action == "send_messages":
+                a_chat = action_data.get("chat_id", -5194783850)
+                texts = action_data.get("texts", [])
+                sent = 0
+                import asyncio as _asyncio
+                for t in texts[:5]:
+                    try:
+                        await bot.send_message(chat_id=int(a_chat), text=str(t))
+                        sent += 1
+                        await _asyncio.sleep(0.5)
+                    except Exception:
+                        pass
+                steps_log.append({"action": f"send_messages({a_chat})", "result": f"sent {sent}/{len(texts)}"})
 
             elif action == "send_message":
                 a_chat = action_data.get("chat_id", -5194783850)
