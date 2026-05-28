@@ -1085,12 +1085,10 @@ async def run_daily_audit() -> str:
                 None
             )
             if svc_id:
-                await notify_office(
-                    f"🔧 *{svc_name}* упал — пробую передеплоить..."
-                )
+                logger.info(f"[audit] {svc_name} down — triggering redeploy")
                 ok = await redeploy_service(svc_id)
                 if ok:
-                    await notify_office(f"✅ *{svc_name}* — редеплой запущен")
+                    lines.append(f"🔄 *{svc_name}* — редеплой запущен автоматически")
                     logger.info(f"[audit] auto-redeploy triggered for {svc_name}")
                 else:
                     await notify_office(
@@ -1400,9 +1398,10 @@ async def _deep_diagnose_and_escalate(
                              fix_analysis)
         elif action == "redeploy":
             ok = await redeploy_service(service_id)
-            await notify_office(
-                f"{'✅' if ok else '⚠️'} *{repo}* — редеплой {'выполнен' if ok else 'не удался'}"
-            )
+            if ok:
+                    logger.info(f"[diagnose] auto-redeploy ok for {repo}")
+                else:
+                    await notify_office(f"⚠️ *{repo}* — редеплой не удался")
         # Сбрасываем счётчик после применения фикса
         if redis_client:
             await redis_client.delete(f"fix_count:{service_id}:{error_signature}")
