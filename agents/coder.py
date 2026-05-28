@@ -568,7 +568,7 @@ INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
 Сигналы вопроса: как, какой, какие, что такое, зачем, почему, расскажи, объясни, с чего начать, какие шаги
 Сигналы команды: создай, сделай, залей, задеплой, исправь, добавь, зарегистрируй
 
-push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не вопрос!), add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), agentic_task=многошаговая задача: читай файл И делай что-то с содержимым (рефакторинг, аудит, отправка сообщений по данным из файла, сравнение нескольких файлов). Сигналы: "прочитай X и отправь", "прочитай X и перепиши", "пройдись по всем", "для каждого", answer=ответить словами.
+push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не вопрос!), add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), edit_file=точечная замена строки в файле без чтения всего файла (сигналы: замени в файле, вставь после строки, patch, добавь в начало функции — когда указан repo+path+old+new), agentic_task=многошаговая задача: читай файл И делай что-то с содержимым (рефакторинг, аудит, отправка сообщений по данным из файла, сравнение нескольких файлов). Сигналы: "прочитай X и отправь", "прочитай X и перепиши", "пройдись по всем", "для каждого", answer=ответить словами.
 ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis" → redis_query.
 ВАЖНО: "подключить бота", "добавить чужого бота" → add_external_bot, НЕ create_bot.
 Репо: billy-bot,tilly-bot,filly-bot,dilly-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard,mama-bot,gosling-bot,villy-bot,prophet-bot,kriss-bot,pilly-bot,doctor-bot,marketing-dept.
@@ -2833,6 +2833,36 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                     pass
 
         await reply_func(f"✅ Все {len(lessons_list)} уроков опубликованы в Bug Lessons")
+
+
+    elif intent == "edit_file":
+        """Точечное редактирование файла: old → new, с ast.parse для .py"""
+        if not repo or not path:
+            await reply_func("❌ Укажи repo и path")
+            return
+        old_text = intent_data.get("old", "")
+        new_text = intent_data.get("new", "")
+        if not old_text:
+            await reply_func("❌ Укажи old (что заменить)")
+            return
+        try:
+            file_content = await read_file(repo, path)
+            if old_text not in file_content:
+                await reply_func(f"❌ Строка не найдена в {repo}/{path}")
+                return
+            updated = file_content.replace(old_text, new_text, 1)
+            if path.endswith(".py"):
+                import ast as _ast
+                try:
+                    _ast.parse(updated)
+                except SyntaxError as e:
+                    await reply_func(f"❌ SyntaxError после замены: {e}")
+                    return
+            commit_msg = intent_data.get("message", f"edit: patch {path}")
+            await push_file(repo, path, updated, commit_msg)
+            await reply_func(f"✅ {repo}/{path} обновлён")
+        except Exception as e:
+            await reply_func(f"❌ Ошибка: {e}")
 
 
     elif intent == "agentic_task":
