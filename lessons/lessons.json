@@ -398,5 +398,15 @@
     "fix": "Маркетинговые боты: unperson22-alt/marketing-dept/ray/, marty/, nelli/, copy/, lex/. Trading: unperson22-alt/trading-dept. Если бот не найден как репо — искать в dept-монорепо.",
     "status": "fixed",
     "prevention": "Перед 404 — проверить marketing-dept и trading-dept монорепо"
+  },
+  {
+    "id": "GITHUB-001",
+    "date": "2026-05-28",
+    "symptom": "GitHub API возвращает 404 при попытке создать файл — URL содержит дублированный org: unperson22-alt/unperson22-alt/...",
+    "cause": "Силли формирует путь как org + full_repo_path вместо просто repo_name/path",
+    "context": "Задача создать family-dept/README.md — Силли обратилась по URL /repos/unperson22-alt/unperson22-alt/contents/family-dept/README.md",
+    "fix": "GitHub API путь: /repos/{owner}/{repo}/contents/{path}. owner=unperson22-alt, repo=family-dept, path=README.md. Никогда не включать owner в repo или path.",
+    "status": "fixed",
+    "prevention": "Перед GitHub API вызовом проверять: repo содержит только имя репо (без org), path не начинается с org или repo."
   }
 ]
