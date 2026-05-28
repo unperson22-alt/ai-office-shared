@@ -2714,16 +2714,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         SENSITIVE = ["gsk_", "groq", "token", "api_key", "secret", "✅ groq"]
         try:
             tg_cl = await get_telethon_client()
-            cilly = None
-            async for dialog in tg_cl.iter_dialogs(limit=50):
-                ent = dialog.entity
-                if getattr(ent, "bot", False) and getattr(ent, "id", 0) == 7779587562:
-                    cilly = ent
-                    break
-            if not cilly:
-                await tg_cl.disconnect()
-                await reply_func("❌ Диалог с Силли не найден")
-                return
+            fr
             msgs = await tg_cl.get_messages(cilly, limit=50)
             to_delete = [
                 m.id for m in msgs
