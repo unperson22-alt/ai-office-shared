@@ -546,7 +546,7 @@ INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
 Сигналы вопроса: как, какой, какие, что такое, зачем, почему, расскажи, объясни, с чего начать, какие шаги
 Сигналы команды: создай, сделай, залей, задеплой, исправь, добавь, зарегистрируй
 
-push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не вопрос!), add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), agentic_task=многошаговая задача: читай файл И делай что-то с содержимым (рефакторинг, аудит, отправка сообщений по данным из файла, сравнение нескольких файлов). Сигналы: "прочитай X и отправь", "прочитай X и перепиши", "пройдись по всем", "для каждого", answer=ответить словами.
+push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не вопрос!), add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), agentic_task=многошаговая задача: читай файл И делай что-то с содержимым (рефакторинг, аудит, отправка сообщений по данным из файла, сравнение нескольких файлов). Сигналы: "прочитай X и отправь", "прочитай X и перепиши", "пройдись по всем", "для каждого", answer=ответить словами.
 ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis" → redis_query.
 ВАЖНО: "подключить бота", "добавить чужого бота" → add_external_bot, НЕ create_bot.
 Репо: billy-bot,tilly-bot,filly-bot,dilly-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard,mama-bot,gosling-bot,villy-bot,prophet-bot,kriss-bot,pilly-bot,doctor-bot,marketing-dept.
@@ -2670,6 +2670,42 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         files = await list_files(repo, path or "")
         lines = [("📁 " if f["type"] == "dir" else "📄 ") + f["name"] for f in files]
         await reply_func("\n".join(lines))
+
+    elif intent == "post_lessons":
+        """Читает lessons.json и постит все уроки в Bug Lessons группу."""
+        import asyncio as _asyncio
+        BUG_GROUP = -5197140411
+        try:
+            raw = await read_file("ai-office-shared", "lessons/lessons.json")
+            lessons_list = json.loads(raw)
+        except Exception as e:
+            await reply_func(f"❌ Не могу прочитать lessons.json: {e}")
+            return
+
+        await reply_func(f"📚 Постю {len(lessons_list)} уроков в Bug Lessons...")
+
+        STATUS_EMOJI = {"fixed": "✅", "still_relevant": "⚠️", "outdated": "🗄"}
+
+        for lesson in lessons_list:
+            status_e = STATUS_EMOJI.get(lesson.get("status", ""), "❓")
+            msg = (
+                f"🐛 Урок #{lesson.get('id')} — {lesson.get('title', '?')}\n\n"
+                f"📍 {lesson.get('bot', '?')} | {lesson.get('layer', '?')}\n\n"
+                f"👁 Симптом:\n{lesson.get('symptom', '?')}\n\n"
+                f"🔍 Причина:\n{lesson.get('root_cause', '?')}\n\n"
+                f"🏗 Архитектура:\n{lesson.get('why_architecture', '?')}\n\n"
+                f"✅ Фикс:\n{lesson.get('fix', '?')}\n\n"
+                f"🛡 Профилактика:\n{lesson.get('prevention', '?')}\n\n"
+                f"{status_e} Статус: {lesson.get('status', '?')}"
+            )
+            try:
+                await bot.send_message(chat_id=BUG_GROUP, text=msg)
+                await _asyncio.sleep(0.8)
+            except Exception as e:
+                await bot.send_message(chat_id=BUG_GROUP, text=f"⚠️ Урок #{lesson.get('id')} — ошибка отправки: {e}")
+
+        await reply_func(f"✅ Все {len(lessons_list)} уроков опубликованы в Bug Lessons")
+
 
     elif intent == "agentic_task":
         """Agentic execution loop для многошаговых задач.
