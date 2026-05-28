@@ -2163,9 +2163,9 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         # ── 3. logs ───────────────────────────────────────────────────────
         if any(w in task_lower for w in ["log", "лог", "событи", "ошибк"]):
             bot_hint = None
-            for bot in ["билли","тилли","милли","доктор","крисс","эллис","вилли","гослинг","силли","фили"]:
-                if bot in task_lower:
-                    bot_hint = bot
+            for bot_key in ["билли","тилли","милли","доктор","крисс","эллис","вилли","гослинг","силли","фили"]:
+                if bot_key in task_lower:
+                    bot_hint = bot_key
                     break
             import datetime as _dt
             today = _dt.date.today().isoformat()
