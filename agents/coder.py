@@ -2859,7 +2859,11 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         context = task
         max_steps = 30
 
-        await reply_func(f"🤖 Запускаю agentic mode: {task[:80]}...")
+        # agentic_task НЕ шлёт промежуточные шаги в чат — только финальный результат
+        # silent_collect накапливает шаги в лог без отправки в группу
+        agentic_log = []
+        async def silent_collect(msg: str):
+            agentic_log.append(msg)
 
         for step_num in range(max_steps):
             # Формируем prompt с историей шагов
@@ -2893,7 +2897,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             # Выполняем действие
             if action == "done":
                 result_text = action_data.get("result", "✅ Готово")
-                await reply_func(f"✅ Завершено за {step_num+1} шагов:\n{result_text}")
+                await reply_func(f"✅ {result_text}")  # только финал идёт в чат
                 break
 
             elif action == "read_file":
@@ -2948,7 +2952,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                 break
 
         else:
-            await reply_func(f"⚠️ Достигнут лимит шагов ({max_steps}). Прогресс: {len(steps_log)} шагов")
+            await reply_func(f"⚠️ Не смог завершить за {max_steps} шагов")
 
 
 # ── Telegram handlers ──────────────────────────────────────────────────────────
