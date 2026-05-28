@@ -2708,6 +2708,29 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         lines = [("📁 " if f["type"] == "dir" else "📄 ") + f["name"] for f in files]
         await reply_func("\n".join(lines))
 
+    elif intent == "cleanup_dm":
+        """Удалить сообщения с ключами/секретами в личке через Telethon userbot."""
+        import asyncio as _asyncio
+        SENSITIVE = ["gsk_", "groq", "token", "api_key", "secret", "✅ groq"]
+        try:
+            tg_cl = await get_telethon_client()
+            vlad = await tg_cl.get_entity(YOUR_TELEGRAM_ID)
+            msgs = await tg_cl.get_messages(vlad, limit=20)
+            to_delete = [
+                m.id for m in msgs
+                if m.text and any(s in m.text.lower() for s in SENSITIVE)
+            ]
+            if to_delete:
+                await tg_cl.delete_messages(vlad, to_delete)
+                await tg_cl.disconnect()
+                await reply_func(f"✅ Удалено {len(to_delete)} сообщений с секретами из лички")
+            else:
+                await tg_cl.disconnect()
+                await reply_func("✅ Секретных сообщений не найдено")
+        except Exception as e:
+            await reply_func(f"❌ {e}")
+
+
     elif intent == "cleanup_group":
         """Удаляет старые сообщения от ботов в указанной группе через Telethon."""
         import asyncio as _asyncio
