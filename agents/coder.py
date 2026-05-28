@@ -547,7 +547,7 @@ INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
 Сигналы вопроса: как, какой, какие, что такое, зачем, почему, расскажи, объясни, с чего начать, какие шаги
 Сигналы команды: создай, сделай, залей, задеплой, исправь, добавь, зарегистрируй
 
-push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не вопрос!), add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), agentic_task=многошаговая задача: читай файл И делай что-то с содержимым (рефакторинг, аудит, отправка сообщений по данным из файла, сравнение нескольких файлов). Сигналы: "прочитай X и отправь", "прочитай X и перепиши", "пройдись по всем", "для каждого", answer=ответить словами.
+push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не вопрос!), add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), agentic_task=многошаговая задача: читай файл И делай что-то с содержимым (рефакторинг, аудит, отправка сообщений по данным из файла, сравнение нескольких файлов). Сигналы: "прочитай X и отправь", "прочитай X и перепиши", "пройдись по всем", "для каждого", answer=ответить словами.
 ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis" → redis_query.
 ВАЖНО: "подключить бота", "добавить чужого бота" → add_external_bot, НЕ create_bot.
 Репо: billy-bot,tilly-bot,filly-bot,dilly-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard,mama-bot,gosling-bot,villy-bot,prophet-bot,kriss-bot,pilly-bot,doctor-bot,marketing-dept.
@@ -2671,6 +2671,53 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         files = await list_files(repo, path or "")
         lines = [("📁 " if f["type"] == "dir" else "📄 ") + f["name"] for f in files]
         await reply_func("\n".join(lines))
+
+    elif intent == "cleanup_group":
+        """Удаляет старые сообщения от ботов в указанной группе через Telethon."""
+        import asyncio as _asyncio
+        from datetime import datetime, timezone
+
+        # Параметры из task
+        # chat_id по умолчанию — Bug Lessons
+        target_chat = -5197140411
+        # Удаляем всё что старше сегодняшнего дня (до 13:30 UTC 28.05.2026)
+        cutoff = datetime(2026, 5, 28, 13, 30, tzinfo=timezone.utc)
+
+        await reply_func("🧹 Чищу старые сообщения от ботов...")
+
+        try:
+            messages = await client.get_messages(target_chat, limit=300)
+            to_delete = []
+            for msg in messages:
+                if not msg or not msg.date:
+                    continue
+                # Только старые сообщения
+                if msg.date >= cutoff:
+                    continue
+                # Только от ботов
+                if not msg.from_id:
+                    continue
+                sender_id = getattr(msg.from_id, 'user_id', None)
+                if not sender_id:
+                    continue
+                try:
+                    user = await client.get_entity(sender_id)
+                    if getattr(user, 'bot', False):
+                        to_delete.append(msg.id)
+                except Exception:
+                    continue
+
+            if to_delete:
+                # Удаляем пачками по 100
+                for i in range(0, len(to_delete), 100):
+                    await client.delete_messages(target_chat, to_delete[i:i+100])
+                    await _asyncio.sleep(0.5)
+                await reply_func(f"✅ Удалено {len(to_delete)} старых сообщений от ботов")
+            else:
+                await reply_func("✅ Старых сообщений от ботов не найдено")
+        except Exception as e:
+            await reply_func(f"❌ Ошибка: {e}")
+
 
     elif intent == "post_lessons":
         """Читает lessons.json и постит все уроки в Bug Lessons группу."""
