@@ -1690,7 +1690,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if m.text and groq_key in m.text:
                     await tg_cl.delete_messages(update.effective_chat.id, [m.id])
                     break
-            await tg_cl.disconnect()
+            await tg_cl.disconnect()ct()
         except Exception: pass
         return
     await log("MSG_IN", msg[:80])
