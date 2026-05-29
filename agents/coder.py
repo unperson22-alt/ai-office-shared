@@ -2894,7 +2894,8 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         ReAct pattern: think → act → observe → repeat.
         """
         AGENTIC_SYSTEM = """Ты — Силли, исполнитель задач AI-офиса.
-Ты в agentic loop. На каждом шаге выбирай ОДНО действие и возвращай JSON.
+Ты в agentic loop.
+АБСОЛЮТНЫЙ ЗАПРЕТ: не используй send_message/send_messages если это задача от Claude или через /task API. Для финального ответа — только done. На каждом шаге выбирай ОДНО действие и возвращай JSON.
 
 Доступные действия:
 - read_file: {"action":"read_file","repo":"...","path":"..."}
