@@ -2899,8 +2899,8 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
 Доступные действия:
 - read_file: {"action":"read_file","repo":"...","path":"..."}
 - push_file: {"action":"push_file","repo":"...","path":"...","content":"...","message":"..."}
-- send_message: {"action":"send_message","chat_id":-5194783850,"text":"..."}
-- send_messages: {"action":"send_messages","chat_id":-5194783850,"texts":["msg1","msg2",...]} — батч до 5 сообщений за раз
+- send_message: {"action":"send_message","chat_id":ЯВНЫЙ_ID,"text":"..."} — ТОЛЬКО когда задача явно требует отправить сообщение. НЕ использовать для промежуточных статусов и ошибок. chat_id ОБЯЗАТЕЛЕН явно.
+- send_messages: {"action":"send_messages","chat_id":ЯВНЫЙ_ID,"texts":["msg1","msg2",...]} — аналогично, chat_id обязателен
 - done: {"action":"done","result":"итог для пользователя"}
 
 Правила:
@@ -2978,7 +2978,10 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                     steps_log.append({"action": f"push_file({a_repo}/{a_path})", "result": f"ERROR: {e}"})
 
             elif action == "send_messages":
-                a_chat = action_data.get("chat_id", -5194783850)
+                a_chat = action_data.get("chat_id")
+                if not a_chat:
+                    steps_log.append({"action": "send_messages", "result": "BLOCKED: chat_id обязателен, нельзя писать в группу без явного указания"})
+                    continue
                 texts = action_data.get("texts", [])
                 sent = 0
                 import asyncio as _asyncio
@@ -2992,8 +2995,11 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                 steps_log.append({"action": f"send_messages({a_chat})", "result": f"sent {sent}/{len(texts)}"})
 
             elif action == "send_message":
-                a_chat = action_data.get("chat_id", -5194783850)
+                a_chat = action_data.get("chat_id")
                 a_text = action_data.get("text", "")
+                if not a_chat:
+                    steps_log.append({"action": "send_message", "result": "BLOCKED: chat_id обязателен"})
+                    continue
                 try:
                     await _GLOBAL_BOT.send_message(chat_id=int(a_chat), text=a_text)
                     steps_log.append({"action": f"send_message({a_chat})", "result": "OK"})
