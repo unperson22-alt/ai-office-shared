@@ -3489,6 +3489,32 @@ async def cmd_lesson(message: Message):
 
 
 
+
+@dp.message(F.text.startswith("/railway"))
+async def cmd_railway(message: Message):
+    """/railway <graphql query> — реальный запрос к Railway API без галлюцинаций.
+    Пример: /railway { workspace(workspaceId: "97bab36e...") { projects { edges { node { id name } } } } }
+    Пример: /railway mutation { serviceCreate(input: {projectId: "...", name: "test"}) { id name } }
+    """
+    raw = message.text[8:].strip()
+    if not raw:
+        await message.answer(
+            "Использование: /railway <graphql>\n\n"
+            "Примеры:\n"
+            "/railway { workspace(workspaceId: \"97bab36e-c344-4afa-b788-6a5a8257f3f3\") { projects { edges { node { id name } } } } }\n"
+            "/railway { project(id: \"30a933d1-...\") { services { edges { node { id name } } } } }"
+        )
+        return
+    try:
+        result = await railway_query(raw)
+        out = json.dumps(result.get("data") or result, ensure_ascii=False, indent=2)
+        if len(out) > 3500:
+            out = out[:3500] + "\n...(обрезано)"
+        await message.answer(f"```json\n{out}\n```", parse_mode="Markdown")
+    except Exception as e:
+        await message.answer(f"❌ Railway error: {e}")
+
+
 @dp.message(F.text & ~F.text.startswith("/"))
 async def cmd_natural_language(message: Message):
     """Handle any non-command message as a natural language request."""
