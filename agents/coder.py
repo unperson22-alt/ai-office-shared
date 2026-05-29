@@ -1637,6 +1637,39 @@ conversation_history = {{}}
 
 SYSTEM = \"\"\"{system_prompt}\"\"\"
 
+_context_cache = {"data": "", "ts": 0}
+
+async def preload_context() -> str:
+    """Читает SYSTEM_STATE.md + office:decisions — контекст для системного промпта."""
+    global _context_cache
+    import base64 as _b64
+    now = time.time()
+    if now - _context_cache["ts"] < 300:
+        return _context_cache["data"]
+    parts = []
+    try:
+        gh_token = os.getenv("GH_PAT", "")
+        url = "https://api.github.com/repos/unperson22-alt/ai-office-shared/contents/SYSTEM_STATE.md"
+        async with httpx.AsyncClient() as c:
+            r = await c.get(url, headers={"Authorization": f"token {gh_token}"}, timeout=10)
+            if r.status_code == 200:
+                raw = _b64.b64decode(r.json()["content"]).decode()
+                parts.append(f"## SYSTEM_STATE (auto-loaded)\n{raw[:4000]}")
+    except Exception:
+        pass
+    try:
+        if redis_client:
+            dec = await redis_client.get("office:decisions")
+            if dec:
+                val = dec.decode() if isinstance(dec, bytes) else dec
+                parts.append(f"## OFFICE DECISIONS\n{val}")
+    except Exception:
+        pass
+    result = "\n\n".join(parts)
+    _context_cache = {"data": result, "ts": now}
+    return result
+
+
 async def log(event: str, msg: str):
     if not LOG_BOT_URL:
         return
@@ -1662,8 +1695,10 @@ async def process(message: str, user_id: int) -> str:
     conversation_history[user_id].append({{"role": "user", "content": message}})
     if len(conversation_history[user_id]) > 20:
         conversation_history[user_id] = conversation_history[user_id][-10:]
+    ctx = await preload_context()
+    system_with_ctx = SYSTEM + ("\n\n" + ctx if ctx else "")
     r = client.messages.create(model="claude-sonnet-4-6", max_tokens=4096,
-        system=SYSTEM, messages=conversation_history[user_id])
+        system=system_with_ctx, messages=conversation_history[user_id])
     text = next((b.text for b in r.content if hasattr(b, "text")), "[нет текста]")
     conversation_history[user_id].append({{"role": "assistant", "content": text}})
     return text
