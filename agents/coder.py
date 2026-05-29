@@ -2910,6 +2910,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
 Доступные действия:
 - read_file: {"action":"read_file","repo":"...","path":"..."}
 - push_file: {"action":"push_file","repo":"...","path":"...","content":"...","message":"..."}
+- http_request: {"action":"http_request","method":"POST","url":"https://...","headers":{"Authorization":"Bearer TOKEN"},"body":{}} — реальный HTTP вызов. Для Railway GraphQL: url=https://backboard.railway.app/graphql/v2, header Authorization: Bearer {RAILWAY_TOKEN из env}. Результат попадает в context следующего шага.
 - send_message: {"action":"send_message","chat_id":ЯВНЫЙ_ID,"text":"..."} — ТОЛЬКО когда задача явно требует отправить сообщение. НЕ использовать для промежуточных статусов и ошибок. chat_id ОБЯЗАТЕЛЕН явно.
 - send_messages: {"action":"send_messages","chat_id":ЯВНЫЙ_ID,"texts":["msg1","msg2",...]} — аналогично, chat_id обязателен
 - done: {"action":"done","result":"итог для пользователя"}
@@ -3004,6 +3005,23 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                     except Exception:
                         pass
                 steps_log.append({"action": f"send_messages({a_chat})", "result": f"sent {sent}/{len(texts)}"})
+
+            elif action == "http_request":
+                _method = action_data.get("method", "GET").upper()
+                _url = action_data.get("url", "")
+                _headers = action_data.get("headers", {})
+                _body = action_data.get("body")
+                if not _url:
+                    steps_log.append({"action": "http_request", "result": "ERROR: url required"})
+                    continue
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as _hc:
+                        _r = await _hc.request(_method, _url, headers=_headers, json=_body)
+                        _res = _r.text[:2000]
+                        steps_log.append({"action": f"http_request({_method} {_url[:60]})", "result": f"status={_r.status_code} {_res}"})
+                        context += f"\n\n[HTTP {_method} {_url} -> {_r.status_code}]:\n{_res}"
+                except Exception as _e:
+                    steps_log.append({"action": f"http_request({_url[:60]})", "result": f"ERROR: {_e}"})
 
             elif action == "send_message":
                 a_chat = action_data.get("chat_id")
