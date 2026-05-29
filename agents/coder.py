@@ -3600,6 +3600,22 @@ async def handle_cilly_task(request):
             except Exception as e:
                 logger.error(f"collect send_message failed: {e}")
 
+    # /railway <gql> — прямой Railway GraphQL из /task без галлюцинаций
+    if text.strip().startswith("/railway"):
+        gql = text.strip()[8:].strip()
+        if not gql:
+            responses.append("Использование: /railway <graphql query>")
+            return web.json_response({"status": "ok", "responses": responses})
+        try:
+            rw_result = await railway_query(gql)
+            out = json.dumps(rw_result.get("data") or rw_result, ensure_ascii=False, indent=2)
+            if len(out) > 3000:
+                out = out[:3000] + "\n...(обрезано)"
+            responses.append(out)
+        except Exception as rw_e:
+            responses.append(f"❌ Railway error: {rw_e}")
+        return web.json_response({"status": "ok", "responses": responses})
+
     # Перехватываем GROQ API ключ — сохраняем в Redis
     if text.strip().startswith("gsk_") and len(text.strip()) > 20:
         groq_key = text.strip()
