@@ -2684,6 +2684,29 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             f"• Роутинг Филли: {bot_key} → {bot_url} ✅"
         )
 
+
+    elif intent == "railway_op":
+        """Реальный Railway GraphQL запрос — без галлюцинаций."""
+        query = intent_data.get("query", "")
+        variables = intent_data.get("variables")
+        mutation = intent_data.get("mutation", "")
+
+        # Если явный query не задан — строим из task
+        if not query and not mutation:
+            # Дефолт: список проектов воркспейса
+            query = """{ workspace(workspaceId: "97bab36e-c344-4afa-b788-6a5a8257f3f3") {
+                projects { edges { node { id name } } } } }"""
+
+        gql = mutation or query
+        try:
+            result = await railway_query(gql, variables)
+            out = json.dumps(result.get("data") or result, ensure_ascii=False, indent=2)
+            if len(out) > 3000:
+                out = out[:3000] + "\n...(обрезано)"
+            await reply_func(f"✅ Railway:\n```json\n{out}\n```")
+        except Exception as e:
+            await reply_func(f"❌ Railway error: {e}")
+
     elif intent == "deploy":
         if not repo:
             await reply_func("❓ Укажи какой сервис задеплоить")
