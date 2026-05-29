@@ -4,4 +4,5 @@ aiohttp>=3.9.0
 redis>=4.5.0
 telethon>=1.34.0
 httpx>=0.26.0
-ai-office-shared @ git+https://github.com/unperson22-alt/ai-office-shared.git@v0.1.0
+python-telegram-bot>=20.0
+requests>=2.31.0
