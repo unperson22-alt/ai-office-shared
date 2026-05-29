@@ -61,7 +61,7 @@
 |**Доктор** |`ДИЛЛИ`             |`доктор` ⚠              |dilly-bot  |`d949c4d2`|dilly-bot-production.up.railway.app       |python-telegram-bot          |
 |**Вилли**  |`ВИЛЛИ`             |`вилли`                 |villy-bot  |`a5e37cc4`|villy-bot-production.up.railway.app       |python-telegram-bot          |
 |**Гослинг**|`ГОСЛИНГ`           |`гослинг`               |gosling-bot|`ed03c9d3`|gosling-bot-production.up.railway.app ³       |python-telegram-bot          |
-|**Силли**  |`СИЛЛИ`             |`силли`                 |cilly-bot  |`efa6bd21`|cilly-bot-production.up.railway.app       |aiogram 3.7 + Telethon       |
+|**Силли**  |`СИЛЛИ`             |`силли`                 |ai-office-shared|`efa6bd21`|ai-office-shared-production.up.railway.app|aiogram 3.7 + Telethon       |
 |**Пророк** |`ПРОРОК`            |— ⁴                     |prophet-bot|—         |prophet-bot-production-df65.up.railway.app|python-telegram-bot          |
 
 **Примечания:**  
@@ -322,7 +322,8 @@
 ## Структура Railway проектов (2026-05-26)
 
 ```
-awake-happiness   — Офис
+dev-dept          — Отдел разработки (Силли — руководитель)
+awake-happiness   — Офис (Силли переехала в dev-dept)
 trading-dept      — Торговый отдел
 marketing-dept    — Маркетинг
 medical-dept      — Медотдел       [создан 2026-05-26]
@@ -335,7 +336,7 @@ family-dept       — Семья          [создан 2026-05-26]
 |---|---|---|---|
 | awake-happiness | filly-bot | filly-bot-production.up.railway.app | Диспетчер |
 | awake-happiness | billy-bot | billy-bot-production.up.railway.app | Дефолт |
-| awake-happiness | cilly-bot | cilly-bot-production.up.railway.app | Техотдел |
+| dev-dept | ai-office-shared | ai-office-shared-production.up.railway.app | Глава dev-dept |
 | awake-happiness | milly-bot | milly-bot-production.up.railway.app | Бизнес |
 | awake-happiness | villy-bot | villy-bot-production.up.railway.app | Дизайн |
 | awake-happiness | kriss-bot | kriss-bot-production.up.railway.app | Личный |
@@ -355,7 +356,7 @@ family-dept       — Семья          [создан 2026-05-26]
 "БИЛЛИ":   "billy-bot-production.up.railway.app"
 "КРИС":    "kriss-bot-production.up.railway.app"
 "ГОСЛИНГ": "gosling-bot-production.up.railway.app"
-"СИЛЛИ":   "cilly-bot-production.up.railway.app"
+"СИЛЛИ":   "ai-office-shared-production.up.railway.app"
 "МИЛЛИ":   "milly-bot-production.up.railway.app"
 "ВИЛЛИ":   "villy-bot-production.up.railway.app"
 "ПРОРОК":  "prophet-bot-production-df65.up.railway.app"
@@ -393,3 +394,11 @@ Internal URL `redis.railway.internal:6379` доступен только из aw
 | shared/url_check.py: HEAD/GET liveness check для всех ботов | ✅ |
 | DATA-001: Доктор/Дилли quality рассинхрон | ✅ Закрыт 2026-05-27 — рассинхрона нет, :дилли пустой |
 
+
+## Инциденты 2026-05-29
+
+| Что | Причина | Фикс |
+|---|---|---|
+| Ellice-bot IndentationError строка 871 | Строка `/reply` выпала из блока `async with ptb:` — 4 пробела вместо 8 | Восстановлен правильный отступ, запушено ef910bb78e |
+| Силли галлюцинирует выполнение Railway API | При agentic_task без явного http_request инструмента — генерирует псевдокод вместо реального вызова | Добавить source=CLAUDE в запросах; использовать явный http_request интент |
+| Силли флудит в офис-группу при делегировании | Запросы без source=CLAUDE → _cilly_source не в _SILENT → send_to_group | Всегда передавать source=CLAUDE в /task запросах от Claude |
