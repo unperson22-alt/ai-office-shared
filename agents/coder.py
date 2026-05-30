@@ -3605,11 +3605,10 @@ async def handle_cilly_task(request):
             except Exception:
                 pass
         status = f"🔑 GROQ_API_KEY {'сохранён в Redis ✅' if redis_ok else '❌ Redis недоступен'}. Сообщение {'удалено 🗑' if deleted else 'не найдено'}."
-        collect(status)
-        responses.append(status)
+        await collect(status)
         return web.json_response({"status": "ok", "responses": responses})
 
-    await handle_natural_language(f"[{agent}] {text}", int(chat_id) if chat_id else 0, collect)
+    await handle_natural_language(f"[{agent}] {text}", int(chat_id) if chat_id and str(chat_id).lstrip("-").isdigit() else 0, collect)
     return web.json_response({"status": "ok", "responses": responses})
 
 
