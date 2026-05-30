@@ -37,7 +37,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ── Config ───────────────────────────────────────────────────────────────────
-BOT_TOKEN       = os.getenv("CODER_BOT_TOKEN")
+BOT_TOKEN       = os.environ.get("CODER_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN", "")
 ANTHROPIC_KEY   = os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_KEY") or ""
 LESSONS_CHAT_ID = os.getenv("LESSONS_CHAT_ID")
 OFFICE_CHAT_ID  = os.getenv("OFFICE_CHAT_ID")
@@ -73,7 +73,7 @@ SERVICES = {
     "ed03c9d3-e83f-4675-9f0a-a4d4fc622365": ("gosling-bot",       "bot.py"),  # был пропущен
 }
 
-bot    = Bot(token=BOT_TOKEN)
+bot    = Bot(token=BOT_TOKEN) if BOT_TOKEN else None
 _GLOBAL_BOT = bot  # глобальная ссылка для использования в handlers
 dp     = Dispatcher()
 # Lazy init — создаём при первом вызове чтобы не падать при старте без ключа
