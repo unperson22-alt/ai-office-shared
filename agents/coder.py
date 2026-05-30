@@ -498,18 +498,7 @@ office:decisions в Redis — твои ограничения.
 
 5. НЕ ПИШИ В ОФИС-ГРУППУ ИЗ /task ОБРАБОТЧИКОВ
    Если задача пришла через /task endpoint — статусы и ответы возвращаются ТОЛЬКО в JSON-ответе.
-   НЕ вызывай notify_office() или send_to_group() из handle_task/process. Никогда.
-6. НЕ ГАЛЛЮЦИНИРУЙ РЕЗУЛЬТАТЫ
-   ЗАПРЕЩЕНО говорить "выполнено"/"создано"/"закоммичено" без реального действия.
-   Если не умеешь — скажи честно. Не придумывай service_id, sha, имена файлов.
-   Каждый результат верифицируй: перечитай файл или получи реальный HTTP ответ.
-
-== RAILWAY IDs ==
-WORKSPACE_ID: 97bab36e-c344-4afa-b788-6a5a8257f3f3
-CILLY URL: ai-office-shared-production.up.railway.app
-dev-dept project: 30a933d1, cilly service: e37ad7aa
-Поиск проектов: /railway { workspace(workspaceId: "97bab36e-c344-4afa-b788-6a5a8257f3f3") { projects { edges { node { id name } } } } }
-"""
+   НЕ вызывай notify_office() или send_to_group() из handle_task/process. Никогда."""
 
 ANALYZER_PROMPT = """Анализатор багов Python/Telegram/Railway. JSON без markdown:
 {"is_bug":bool,"confidence":"high|low","bug_type":"crash|logic|config|network|unknown","description":"1-2 предл","affected_file":"path|null","fix_description":"конкретно","lesson_title":"","lesson_symptom":"","lesson_cause":"","lesson_fix":"","lesson_avoid":""}
@@ -583,7 +572,7 @@ INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
 Сигналы вопроса: как, какой, какие, что такое, зачем, почему, расскажи, объясни, с чего начать, какие шаги
 Сигналы команды: создай, сделай, залей, задеплой, исправь, добавь, зарегистрируй
 
-push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не вопрос!), add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon, cleanup_dm=удалить сообщения с ключами/секретами в личке (gsk_, GROQ, токен) через Telethon — ищет в диалоге с user_id=int(BOT_TOKEN.split(':')[0]) (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), edit_file=точечная замена строки в файле без чтения всего файла (сигналы: замени в файле, вставь после строки, patch, добавь в начало функции — когда указан repo+path+old+new), agentic_task=многошаговая задача: читай файл И делай что-то с содержимым (рефакторинг, аудит, отправка сообщений по данным из файла, сравнение нескольких файлов). Сигналы: "прочитай X и отправь", "прочитай X и перепиши", "пройдись по всем", "для каждого", ИЛИ нужен реальный HTTP/GraphQL вызов к API. Сигналы доп: "выполни graphql", "сделай http запрос", "создай сервис на railway", "найди project id". answer=ответить словами.
+push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не вопрос!), add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon, cleanup_dm=удалить сообщения с ключами/секретами в личке (gsk_, GROQ, токен) через Telethon — ищет в диалоге с user_id=int(BOT_TOKEN.split(':')[0]) (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), edit_file=точечная замена строки в файле без чтения всего файла (сигналы: замени в файле, вставь после строки, patch, добавь в начало функции — когда указан repo+path+old+new), agentic_task=многошаговая задача: читай файл И делай что-то с содержимым (рефакторинг, аудит, отправка сообщений по данным из файла, сравнение нескольких файлов). Сигналы: "прочитай X и отправь", "прочитай X и перепиши", "пройдись по всем", "для каждого", answer=ответить словами.
 ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis" → redis_query.
 ВАЖНО: "подключить бота", "добавить чужого бота" → add_external_bot, НЕ create_bot.
 Репо: billy-bot,tilly-bot,filly-bot,dilly-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard,mama-bot,gosling-bot,villy-bot,prophet-bot,kriss-bot,pilly-bot,doctor-bot,marketing-dept.
@@ -1476,7 +1465,7 @@ async def monitor_loop():
         railway_ok = await _railway_is_available()
 
         if not railway_ok:
-            if not _railway_down_notified and not MONITOR_PAUSED():
+            if not _railway_down_notified:
                 await notify_office(
                     "⚠️ *Railway API недоступен* — переключаюсь на Redis-мониторинг.\n"
                     "Фиксы через GitHub работают, Railway автодеплоит сам."
@@ -2689,19 +2678,6 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             f"• Роутинг Филли: {bot_key} → {bot_url} ✅"
         )
 
-    elif intent == "railway_op":
-        gql_body = intent_data.get("query") or intent_data.get("mutation") or ""
-        if not gql_body:
-            gql_body = '{ workspace(workspaceId: "97bab36e-c344-4afa-b788-6a5a8257f3f3") { projects { edges { node { id name } } } } }'
-        try:
-            result = await railway_query(gql_body)
-            out = json.dumps(result.get("data") or result, ensure_ascii=False, indent=2)
-            if len(out) > 3000:
-                out = out[:3000] + "\n...(обрезано)"
-            await reply_func(f"✅ Railway:\n```json\n{out}\n```")
-        except Exception as e:
-            await reply_func(f"❌ Railway error: {e}")
-
     elif intent == "deploy":
         if not repo:
             await reply_func("❓ Укажи какой сервис задеплоить")
@@ -3019,29 +2995,9 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                         pass
                 steps_log.append({"action": f"send_messages({a_chat})", "result": f"sent {sent}/{len(texts)}"})
 
-            elif action == "http_request":
-                _method = action_data.get("method", "GET").upper()
-                _url = action_data.get("url", "")
-                _headers = action_data.get("headers", {})
-                _body = action_data.get("body")
-                if not _url:
-                    steps_log.append({"action": "http_request", "result": "ERROR: url required"})
-                    continue
-                try:
-                    async with httpx.AsyncClient(timeout=15.0) as _hc:
-                        _r = await _hc.request(_method, _url, headers=_headers, json=_body)
-                        _res = _r.text[:2000]
-                        steps_log.append({"action": f"http_request({_method} {_url[:60]})", "result": f"status={_r.status_code} {_res}"})
-                        context += f"\n\n[HTTP {_method} {_url} -> {_r.status_code}]:\n{_res}"
-                except Exception as _e:
-                    steps_log.append({"action": f"http_request({_url[:60]})", "result": f"ERROR: {_e}"})
-
             elif action == "send_message":
-                a_chat = action_data.get("chat_id")
+                a_chat = action_data.get("chat_id", -5194783850)
                 a_text = action_data.get("text", "")
-                if not a_chat:
-                    steps_log.append({"action": "send_message", "result": "BLOCKED: chat_id required"})
-                    continue
                 try:
                     await _GLOBAL_BOT.send_message(chat_id=int(a_chat), text=a_text)
                     steps_log.append({"action": f"send_message({a_chat})", "result": "OK"})
@@ -3564,22 +3520,6 @@ async def handle_cilly_task(request):
             except Exception as e:
                 logger.error(f"collect send_message failed: {e}")
 
-    # /railway <gql> — прямой Railway GraphQL из /task
-    if text.strip().startswith("/railway"):
-        gql_q = text.strip()[8:].strip()
-        if not gql_q:
-            responses.append("Использование: /railway <graphql query>")
-            return web.json_response({"status": "ok", "responses": responses})
-        try:
-            rw_result = await railway_query(gql_q)
-            out = json.dumps(rw_result.get("data") or rw_result, ensure_ascii=False, indent=2)
-            if len(out) > 3000:
-                out = out[:3000] + "\n...(обрезано)"
-            responses.append(out)
-        except Exception as rw_e:
-            responses.append(f"❌ Railway error: {rw_e}")
-        return web.json_response({"status": "ok", "responses": responses})
-
     # Перехватываем GROQ API ключ — сохраняем в Redis
     if text.strip().startswith("gsk_") and len(text.strip()) > 20:
         groq_key = text.strip()
@@ -3605,10 +3545,11 @@ async def handle_cilly_task(request):
             except Exception:
                 pass
         status = f"🔑 GROQ_API_KEY {'сохранён в Redis ✅' if redis_ok else '❌ Redis недоступен'}. Сообщение {'удалено 🗑' if deleted else 'не найдено'}."
-        await collect(status)
+        collect(status)
+        responses.append(status)
         return web.json_response({"status": "ok", "responses": responses})
 
-    await handle_natural_language(f"[{agent}] {text}", int(chat_id) if chat_id and str(chat_id).lstrip("-").isdigit() else 0, collect)
+    await handle_natural_language(f"[{agent}] {text}", int(chat_id) if chat_id else 0, collect)
     return web.json_response({"status": "ok", "responses": responses})
 
 
