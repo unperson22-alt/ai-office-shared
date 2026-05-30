@@ -453,5 +453,21 @@
     "fix": "Писать в офис ТОЛЬКО финальный отчёт (успех или ошибка). Промежуточные шаги — только в логи.",
     "status": "fixed",
     "prevention": "Правило: send_to_group() вызывать максимум 1-2 раза за задачу — в начале (если задача длинная) и в конце."
+  },
+  {
+    "id": 38,
+    "date": "2026-05-30",
+    "title": "confidence как строка вместо числа",
+    "bug": "float(intent_data.get(\"confidence\", 1.0)) падает с ValueError если Claude вернул \"low\"/\"medium\"/\"high\" вместо числа",
+    "fix": "isinstance check + маппинг: {\"high\":0.9,\"medium\":0.6,\"low\":0.3}.get(str(v).lower(),0.5)",
+    "why_architecture": "Claude не гарантирует тип поля в JSON-ответе — всегда защищать парсинг через fallback"
+  },
+  {
+    "id": 39,
+    "date": "2026-05-30",
+    "title": "web_search обрывает ответ при stop_reason=tool_use",
+    "bug": "process() делал один вызов к Claude. Если Claude использовал web_search — stop_reason=tool_use, text пустой или обрезанный",
+    "fix": "Multi-turn цикл: после tool_use собирать tool_result блоки и делать повторный вызов до stop_reason=end_turn",
+    "why_architecture": "Любой инструментный вызов (tools=[...]) требует multi-turn — одиночный вызов работает только для простых ответов без tool_use"
   }
 ]
