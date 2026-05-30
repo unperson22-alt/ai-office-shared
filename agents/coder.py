@@ -3074,7 +3074,10 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                         "source": "СИЛЛИ"
                     }
                     resp = await client.post(f"{url}/task", json=payload)
-                    result = resp.json().get("response", "нет ответа")
+                    try:
+                        result = resp.json().get("response", "нет ответа")
+                    except Exception:
+                        result = resp.text[:500] or "нет ответа"
                     results[name] = result[:500]
                     # Следующий получает результат предыдущего как контекст
                     current_task = f"{task}\n\n[{name}]: {result[:300]}"
