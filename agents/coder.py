@@ -3533,6 +3533,20 @@ async def _handle_cilly_task_inner(data):
     silent  = data.get("silent", False)  # явный флаг тишины
 
     responses = []
+
+    # /railway <gql> — ПЕРВЫЙ перехват, до LLM, не требует ANTHROPIC_API_KEY
+    if text.strip().startswith("/railway"):
+        gql_q = text.strip()[8:].strip()
+        if not gql_q:
+            return web.json_response({"status": "ok", "responses": ["Использование: /railway <graphql query>"]})
+        try:
+            rw_result = await railway_query(gql_q)
+            out = json.dumps(rw_result.get("data") or rw_result, ensure_ascii=False, indent=2)
+            if len(out) > 3000:
+                out = out[:3000] + "\n...(обрезано)"
+            return web.json_response({"status": "ok", "responses": [out]})
+        except Exception as rw_e:
+            return web.json_response({"status": "ok", "responses": [f"❌ Railway error: {rw_e}"]})
     async def collect(msg: str):
         responses.append(msg)
         # Шлём в чат ТОЛЬКО если chat_id явно передан И не silent
