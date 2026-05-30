@@ -1698,7 +1698,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response)
 
 
-async def main():
+async def _legacy_main_unused():  # дублировал main() — сломан
     app_http = web.Application()
     app_http.router.add_post("/task", handle_task)
     runner = web.AppRunner(app_http)
