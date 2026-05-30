@@ -2784,7 +2784,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
 
         try:
             tg_cl = await get_telethon_client()
-            messages = await tg_cl.get_messages(target_chat, limit=300)
+            messages = await tg_cl.get_messages(target_chat, limit=3000)
             to_delete = []
             for msg in messages:
                 if not msg or not msg.date:
