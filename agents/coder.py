@@ -336,7 +336,7 @@ async def multi_file_refactor(
 
     # Шаг 3: вызов Sonnet
     try:
-        response = await claude.messages.create(
+        response = await get_claude().messages.create(
             model="claude-sonnet-4-6",
             max_tokens=8000,
             system=system_prompt,
@@ -874,7 +874,7 @@ async def ask_claude(prompt: str, system: str = CODER_PROMPT, model: str = "clau
         result = await _try_ollama(prompt, system)
         if result is not None:
             return result
-    response = await claude.messages.create(
+    response = await get_claude().messages.create(
         model=model,
         max_tokens=4096,
         system=system,
@@ -2169,7 +2169,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                 f"\n\nПоследние действия в офисе (ops.md, последние записи):\n{ops_context}"
             )
         if history and len(history) > 1:
-            answer_resp = await claude.messages.create(
+            answer_resp = await get_claude().messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=2048,
                 system=answer_system,
@@ -3121,7 +3121,7 @@ async def monitor_group_responses(message: Message):
         # Немедленно отвечаем от имени бота с web search
         # Redis-контекст добавляем в system если есть — помогает понять причину gap
         enriched_system = bot_system + gap_log_context if gap_log_context else bot_system
-        response = await claude.messages.create(
+        response = await get_claude().messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1024,
             system=enriched_system,
