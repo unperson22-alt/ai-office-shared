@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 # ── Config ───────────────────────────────────────────────────────────────────
 BOT_TOKEN       = os.getenv("CODER_BOT_TOKEN")
-ANTHROPIC_KEY   = os.getenv("ANTHROPIC_API_KEY")
+ANTHROPIC_KEY   = os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_KEY") or ""
 LESSONS_CHAT_ID = os.getenv("LESSONS_CHAT_ID")
 OFFICE_CHAT_ID  = os.getenv("OFFICE_CHAT_ID")
 
@@ -76,7 +76,19 @@ SERVICES = {
 bot    = Bot(token=BOT_TOKEN)
 _GLOBAL_BOT = bot  # глобальная ссылка для использования в handlers
 dp     = Dispatcher()
-claude = AsyncAnthropic(api_key=ANTHROPIC_KEY)
+# Lazy init — создаём при первом вызове чтобы не падать при старте без ключа
+_claude_client = None
+def get_claude():
+    global _claude_client, ANTHROPIC_KEY
+    if not ANTHROPIC_KEY:
+        # Пробуем прочитать из переменных окружения ещё раз
+        ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_KEY") or ""
+    if _claude_client is None and ANTHROPIC_KEY:
+        _claude_client = AsyncAnthropic(api_key=ANTHROPIC_KEY)
+    if not _claude_client:
+        raise ValueError("ANTHROPIC_API_KEY не задан. Добавь в Railway Variables.")
+    return _claude_client
+claude = None  # будет инициализирован через get_claude()
 
 # Буфер последних сообщений группы — чтобы найти оригинальный вопрос
 from collections import deque
