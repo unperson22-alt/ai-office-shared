@@ -79,16 +79,16 @@ dp     = Dispatcher()
 # Lazy init — создаём при первом вызове чтобы не падать при старте без ключа
 _claude_client = None
 def get_claude():
-    global _claude_client, ANTHROPIC_KEY
-    if not ANTHROPIC_KEY:
-        # Пробуем прочитать из переменных окружения ещё раз
-        ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_KEY") or ""
-    if _claude_client is None and ANTHROPIC_KEY:
-        _claude_client = AsyncAnthropic(api_key=ANTHROPIC_KEY)
-    if not _claude_client:
+    global _claude_client
+    # Всегда читаем свежо — ключ мог появиться после старта
+    key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_KEY") or ""
+    if not key:
         raise ValueError("ANTHROPIC_API_KEY не задан. Добавь в Railway Variables.")
+    # Пересоздаём клиент если ключ изменился
+    if _claude_client is None:
+        _claude_client = AsyncAnthropic(api_key=key)
     return _claude_client
-claude = None  # будет инициализирован через get_claude()
+claude = None  # инициализируется через get_claude()
 
 # Буфер последних сообщений группы — чтобы найти оригинальный вопрос
 from collections import deque
