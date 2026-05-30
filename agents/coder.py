@@ -3504,7 +3504,17 @@ async def cmd_natural_language(message: Message):
 # ── HTTP endpoint for Filly routing (family bots → Cilly) ────────────────────
 async def handle_cilly_task(request):
     """Filly routes natural language requests here from any bot."""
-    data = await request.json()
+    try:
+        data = await request.json()
+    except Exception as parse_err:
+        return web.json_response({"status": "error", "detail": f"json parse: {parse_err}"}, status=400)
+    try:
+        return await _handle_cilly_task_inner(data)
+    except Exception as e:
+        import traceback
+        return web.json_response({"status": "error", "detail": str(e), "trace": traceback.format_exc()[-1000:]}, status=200)
+
+async def _handle_cilly_task_inner(data):
     text    = data.get("message", "")
     chat_id = data.get("chat_id", "")   # нет дефолта — без chat_id шлём только JSON
     agent   = data.get("agent", "Unknown")
