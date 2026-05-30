@@ -2147,7 +2147,8 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
     repo       = intent_data.get("repo")
     path       = intent_data.get("path")
     task       = intent_data.get("task", message_text)
-    confidence = float(intent_data.get("confidence", 1.0))
+    _conf_raw = intent_data.get("confidence", 1.0)
+    confidence = float(_conf_raw) if isinstance(_conf_raw, (int, float)) else {"high": 0.9, "medium": 0.6, "low": 0.3}.get(str(_conf_raw).lower(), 0.5)
 
     logger.info(f"[nl] intent={intent} confidence={confidence:.2f} repo={repo}")
 
