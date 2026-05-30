@@ -583,7 +583,7 @@ INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
 Сигналы вопроса: как, какой, какие, что такое, зачем, почему, расскажи, объясни, с чего начать, какие шаги
 Сигналы команды: создай, сделай, залей, задеплой, исправь, добавь, зарегистрируй
 
-push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не вопрос!), add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon, cleanup_dm=удалить сообщения с ключами/секретами в личке (gsk_, GROQ, токен) через Telethon — ищет в диалоге с user_id=int(BOT_TOKEN.split(':')[0]) (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), edit_file=точечная замена строки в файле без чтения всего файла (сигналы: замени в файле, вставь после строки, patch, добавь в начало функции — когда указан repo+path+old+new), agentic_task=многошаговая задача: читай файл И делай что-то с содержимым (рефакторинг, аудит, отправка сообщений по данным из файла, сравнение нескольких файлов). Сигналы: "прочитай X и отправь", "прочитай X и перепиши", "пройдись по всем", "для каждого", answer=ответить словами.
+push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не вопрос!), add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon, cleanup_dm=удалить сообщения с ключами/секретами в личке (gsk_, GROQ, токен) через Telethon — ищет в диалоге с user_id=int(BOT_TOKEN.split(':')[0]) (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), edit_file=точечная замена строки в файле без чтения всего файла (сигналы: замени в файле, вставь после строки, patch, добавь в начало функции — когда указан repo+path+old+new), agentic_task=многошаговая задача: читай файл И делай что-то с содержимым (рефакторинг, аудит, отправка сообщений по данным из файла, сравнение нескольких файлов). Сигналы: "прочитай X и отправь", "прочитай X и перепиши", "пройдись по всем", "для каждого", ИЛИ нужен реальный HTTP/GraphQL вызов к API. Сигналы доп: "выполни graphql", "сделай http запрос", "создай сервис на railway", "найди project id". answer=ответить словами.
 ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis" → redis_query.
 ВАЖНО: "подключить бота", "добавить чужого бота" → add_external_bot, НЕ create_bot.
 Репо: billy-bot,tilly-bot,filly-bot,dilly-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard,mama-bot,gosling-bot,villy-bot,prophet-bot,kriss-bot,pilly-bot,doctor-bot,marketing-dept.
@@ -3019,9 +3019,29 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                         pass
                 steps_log.append({"action": f"send_messages({a_chat})", "result": f"sent {sent}/{len(texts)}"})
 
+            elif action == "http_request":
+                _method = action_data.get("method", "GET").upper()
+                _url = action_data.get("url", "")
+                _headers = action_data.get("headers", {})
+                _body = action_data.get("body")
+                if not _url:
+                    steps_log.append({"action": "http_request", "result": "ERROR: url required"})
+                    continue
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as _hc:
+                        _r = await _hc.request(_method, _url, headers=_headers, json=_body)
+                        _res = _r.text[:2000]
+                        steps_log.append({"action": f"http_request({_method} {_url[:60]})", "result": f"status={_r.status_code} {_res}"})
+                        context += f"\n\n[HTTP {_method} {_url} -> {_r.status_code}]:\n{_res}"
+                except Exception as _e:
+                    steps_log.append({"action": f"http_request({_url[:60]})", "result": f"ERROR: {_e}"})
+
             elif action == "send_message":
-                a_chat = action_data.get("chat_id", -5194783850)
+                a_chat = action_data.get("chat_id")
                 a_text = action_data.get("text", "")
+                if not a_chat:
+                    steps_log.append({"action": "send_message", "result": "BLOCKED: chat_id required"})
+                    continue
                 try:
                     await _GLOBAL_BOT.send_message(chat_id=int(a_chat), text=a_text)
                     steps_log.append({"action": f"send_message({a_chat})", "result": "OK"})
