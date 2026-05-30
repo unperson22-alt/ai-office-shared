@@ -2775,7 +2775,15 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         # Определяем chat из task
         if "-5194783850" in task or "офис" in task.lower() or "office" in task.lower():
             target_chat = -5194783850
-            cutoff_mode = "today_patterns"
+            # Проверяем указана ли дата начала ("с 29 мая", "начиная с", "from_date")
+            import re as _re
+            date_match = _re.search(r"(\d{4}-\d{2}-\d{2}|29.?мая|29 мая)", task)
+            if date_match or "29" in task or "начиная с" in task:
+                from datetime import datetime, timezone
+                cutoff_mode = "from_date"
+                cutoff = datetime(2026, 5, 29, 0, 0, tzinfo=timezone.utc)
+            else:
+                cutoff_mode = "today_patterns"
         elif "-5197140411" in task or "баг" in task.lower() or "bug" in task.lower() or "logs" in task.lower():
             target_chat = -5197140411
             cutoff_mode = "old_bots"
@@ -2806,6 +2814,20 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                             to_delete.append(msg.id)
                     except Exception:
                         # Если не можем получить entity — проверяем по паттернам
+                        if msg.text and any(p in msg.text for p in SERVICE_PATTERNS):
+                            to_delete.append(msg.id)
+                elif cutoff_mode == "from_date":
+                    # Удаляем всё от ботов начиная с cutoff даты
+                    if msg.date < cutoff:
+                        continue
+                    sender_id = getattr(msg.from_id, 'user_id', None)
+                    if not sender_id:
+                        continue
+                    try:
+                        user = await tg_cl.get_entity(sender_id)
+                        if getattr(user, 'bot', False):
+                            to_delete.append(msg.id)
+                    except Exception:
                         if msg.text and any(p in msg.text for p in SERVICE_PATTERNS):
                             to_delete.append(msg.id)
                 else:
