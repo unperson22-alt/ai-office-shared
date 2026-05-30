@@ -3746,6 +3746,20 @@ async def handle_post_raw(request):
 
 
 
+async def handle_envcheck(request):
+    """Диагностика: показывает какие env vars заданы (без значений)."""
+    import os
+    vars_set = []
+    vars_missing = []
+    for v in ["CODER_BOT_TOKEN","ANTHROPIC_API_KEY","REDIS_URL","OFFICE_CHAT_ID",
+              "LESSONS_CHAT_ID","GH_PAT","RAILWAY_TOKEN_VLAD","YOUR_TELEGRAM_ID",
+              "TELEGRAM_API_ID","TELEGRAM_API_HASH","TELETHON_SESSION","OLLAMA_ENABLED"]:
+        if os.environ.get(v):
+            vars_set.append(v)
+        else:
+            vars_missing.append(v)
+    return web.json_response({"set": vars_set, "missing": vars_missing})
+
 async def main():
     # Загружаем office:decisions из Redis при старте
     await init_office_decisions()
