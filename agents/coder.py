@@ -1465,7 +1465,7 @@ async def monitor_loop():
         railway_ok = await _railway_is_available()
 
         if not railway_ok:
-            if not _railway_down_notified:
+            if not _railway_down_notified and not MONITOR_PAUSED():
                 await notify_office(
                     "⚠️ *Railway API недоступен* — переключаюсь на Redis-мониторинг.\n"
                     "Фиксы через GitHub работают, Railway автодеплоит сам."
