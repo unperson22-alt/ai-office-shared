@@ -498,7 +498,18 @@ office:decisions в Redis — твои ограничения.
 
 5. НЕ ПИШИ В ОФИС-ГРУППУ ИЗ /task ОБРАБОТЧИКОВ
    Если задача пришла через /task endpoint — статусы и ответы возвращаются ТОЛЬКО в JSON-ответе.
-   НЕ вызывай notify_office() или send_to_group() из handle_task/process. Никогда."""
+   НЕ вызывай notify_office() или send_to_group() из handle_task/process. Никогда.
+6. НЕ ГАЛЛЮЦИНИРУЙ РЕЗУЛЬТАТЫ
+   ЗАПРЕЩЕНО говорить "выполнено"/"создано"/"закоммичено" без реального действия.
+   Если не умеешь — скажи честно. Не придумывай service_id, sha, имена файлов.
+   Каждый результат верифицируй: перечитай файл или получи реальный HTTP ответ.
+
+== RAILWAY IDs ==
+WORKSPACE_ID: 97bab36e-c344-4afa-b788-6a5a8257f3f3
+CILLY URL: ai-office-shared-production.up.railway.app
+dev-dept project: 30a933d1, cilly service: e37ad7aa
+Поиск проектов: /railway { workspace(workspaceId: "97bab36e-c344-4afa-b788-6a5a8257f3f3") { projects { edges { node { id name } } } } }
+"""
 
 ANALYZER_PROMPT = """Анализатор багов Python/Telegram/Railway. JSON без markdown:
 {"is_bug":bool,"confidence":"high|low","bug_type":"crash|logic|config|network|unknown","description":"1-2 предл","affected_file":"path|null","fix_description":"конкретно","lesson_title":"","lesson_symptom":"","lesson_cause":"","lesson_fix":"","lesson_avoid":""}
@@ -2678,6 +2689,19 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             f"• Роутинг Филли: {bot_key} → {bot_url} ✅"
         )
 
+    elif intent == "railway_op":
+        gql_body = intent_data.get("query") or intent_data.get("mutation") or ""
+        if not gql_body:
+            gql_body = '{ workspace(workspaceId: "97bab36e-c344-4afa-b788-6a5a8257f3f3") { projects { edges { node { id name } } } } }'
+        try:
+            result = await railway_query(gql_body)
+            out = json.dumps(result.get("data") or result, ensure_ascii=False, indent=2)
+            if len(out) > 3000:
+                out = out[:3000] + "\n...(обрезано)"
+            await reply_func(f"✅ Railway:\n```json\n{out}\n```")
+        except Exception as e:
+            await reply_func(f"❌ Railway error: {e}")
+
     elif intent == "deploy":
         if not repo:
             await reply_func("❓ Укажи какой сервис задеплоить")
@@ -3519,6 +3543,22 @@ async def handle_cilly_task(request):
                 await bot.send_message(chat_id=int(chat_id), text=msg, parse_mode=None)
             except Exception as e:
                 logger.error(f"collect send_message failed: {e}")
+
+    # /railway <gql> — прямой Railway GraphQL из /task
+    if text.strip().startswith("/railway"):
+        gql_q = text.strip()[8:].strip()
+        if not gql_q:
+            responses.append("Использование: /railway <graphql query>")
+            return web.json_response({"status": "ok", "responses": responses})
+        try:
+            rw_result = await railway_query(gql_q)
+            out = json.dumps(rw_result.get("data") or rw_result, ensure_ascii=False, indent=2)
+            if len(out) > 3000:
+                out = out[:3000] + "\n...(обрезано)"
+            responses.append(out)
+        except Exception as rw_e:
+            responses.append(f"❌ Railway error: {rw_e}")
+        return web.json_response({"status": "ok", "responses": responses})
 
     # Перехватываем GROQ API ключ — сохраняем в Redis
     if text.strip().startswith("gsk_") and len(text.strip()) > 20:
