@@ -402,3 +402,19 @@ Internal URL `redis.railway.internal:6379` доступен только из aw
 | Ellice-bot IndentationError строка 871 | Строка `/reply` выпала из блока `async with ptb:` — 4 пробела вместо 8 | Восстановлен правильный отступ, запушено ef910bb78e |
 | Силли галлюцинирует выполнение Railway API | При agentic_task без явного http_request инструмента — генерирует псевдокод вместо реального вызова | Добавить source=CLAUDE в запросах; использовать явный http_request интент |
 | Силли флудит в офис-группу при делегировании | Запросы без source=CLAUDE → _cilly_source не в _SILENT → send_to_group | Всегда передавать source=CLAUDE в /task запросах от Claude |
+
+
+---
+
+## dev-dept команда (2026-05-30)
+
+| Бот | Railway ID | URL | Роль |
+|---|---|---|---|
+| Тести | 6a7af02c | testi-bot-production-9cab.up.railway.app | QA/тестирование |
+| Девви | 0fd57999 | devvy-bot-production-9a4f.up.railway.app | Junior dev |
+| Рикки | 7fd4059c | ricky-bot-production-ab47.up.railway.app | Code review |
+| Секки | 664563e2 | sekky-bot-production-9718.up.railway.app | Security audit |
+| Скрибби | 618ca12f | scribbi-bot-production-9aa7.up.railway.app | Документация |
+
+Цепочка: Силли -> Девви -> Рикки -> Тести -> Секки -> Скрибби -> Силли
+Framework: ptb 21.3 + aiohttp + claude-haiku-4-5. Задеплоены 2026-05-30.
