@@ -2773,7 +2773,7 @@ schedule — cron строка в UTC (Дананг UTC+7, Мюнхен UTC+2 л
             return responses
 
         bot_name_cron = params.get("bot", "kriss")
-        chat_id_cron  = params.get("chat_id", YOUR_TELEGRAM_ID)
+        chat_id_cron  = params.get("chat_id", 391077101)
         schedule      = params.get("schedule", "0 9 * * *")
         msg_cron      = params.get("message", "Напоминание")
         generate      = params.get("generate", False)
