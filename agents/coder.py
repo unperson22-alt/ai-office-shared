@@ -2811,7 +2811,8 @@ schedule — cron строка в UTC (Дананг UTC+7, Мюнхен UTC+2 л
             # Настраиваем: image + cronSchedule + startCommand
             _rql(f'mutation {{ serviceInstanceUpdate(serviceId: "{svc_id}", environmentId: "{ENV_ID}", input: {{ source: {{ image: "curlimages/curl:latest" }} }}) }}')
             _rql(f'mutation {{ serviceInstanceUpdate(serviceId: "{svc_id}", environmentId: "{ENV_ID}", input: {{ cronSchedule: "{schedule}" }}) }}')
-            _rql(f"""mutation {{ serviceInstanceUpdate(serviceId: "{svc_id}", environmentId: "{ENV_ID}", input: {{ startCommand: "{start_cmd.replace('"', '\"')}" }}) }}""")
+            _escaped_cmd = start_cmd.replace('"', '\"')
+            _rql(f"""mutation {{ serviceInstanceUpdate(serviceId: "{svc_id}", environmentId: "{ENV_ID}", input: {{ startCommand: "{_escaped_cmd}" }}) }}""")
 
             await reply_func(f"✅ Cron создан!\n*{cron_name}*\nСервис ID: `{svc_id}`\nРасписание: `{schedule}` (UTC)\nБот: {bot_name_cron} → chat {chat_id_cron}")
         except Exception as e:
