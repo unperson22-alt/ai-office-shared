@@ -509,6 +509,11 @@ office:decisions в Redis — твои ограничения.
 Для ВНЕШНЕГО бота — только: username + URL + описание одной фразой.
 Отвечай кратко. Если задача — делай, не рассуждай долго.
 
+ТИХИЙ РЕЖИМ (обязательно):
+— Когда выполняешь задачу от Влада — никаких промежуточных статусов. Только финальный результат.
+— Когда задача пришла через HTTP /task (от Клода или автоматики) — вообще не пиши Владу ничего. Ни статусов, ни результатов. Молчи.
+— В группу пишешь только финальные результаты которые реально нужны команде. Не «🧹 Чищу...», не «📚 Постю...».
+
 ---
 
 ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА ВЫПОЛНЕНИЯ ЗАДАЧ:
@@ -3725,12 +3730,19 @@ async def cmd_natural_language(message: Message):
     if len(dm_history[user_id]) > DM_HISTORY_MAX:
         dm_history[user_id] = dm_history[user_id][-DM_HISTORY_MAX:]
 
+    _reply_buffer = []
+
     async def reply(msg: str):
-        # Сохраняем ответ в историю
-        dm_history[user_id].append({"role": "assistant", "content": msg})
-        await message.answer(msg, parse_mode=None)
+        # Буферизуем — шлём только финальный ответ, не промежуточные статусы
+        _reply_buffer.append(msg)
 
     await handle_natural_language(text, message.chat.id, reply, history=dm_history[user_id])
+
+    # Шлём только последний (финальный) ответ
+    if _reply_buffer:
+        final = _reply_buffer[-1]
+        dm_history[user_id].append({"role": "assistant", "content": final})
+        await message.answer(final, parse_mode=None)
 
 
 # ── HTTP endpoint for Filly routing (family bots → Cilly) ────────────────────
