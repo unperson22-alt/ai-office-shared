@@ -1685,10 +1685,10 @@ async def handle_task(request):
     except Exception as e:
         logger.error(f"process() error: {e}")
         return web.json_response({"status": "error", "responses": [str(e)]}, status=500)
-    _cilly_source = data.get("source", "").upper()
-    _SILENT = {"ФИЛЛИ", "FILLY", "DISPATCHER", "CLAUDE"}
-    if data.get("notify", False) or _cilly_source not in _SILENT:
-        await send_to_group(f"{bot_name}:\\n{{response}}")
+    # В группу ТОЛЬКО если явно передан notify=True
+    # По умолчанию ответ идёт только в HTTP response (личка или вызывающий)
+    if data.get("notify", False):
+        await send_to_group(f"{bot_name}:\n{response}")
     await log("MSG_OUT", f"{bot_name}: {{response[:80]}}")
     return web.json_response({{"status": "ok", "response": response}})
 
