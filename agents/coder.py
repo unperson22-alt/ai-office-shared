@@ -1137,24 +1137,80 @@ async def run_daily_audit() -> str:
 
     if deploy_fail:
         lines.append(f"❌ Деплои упали: {', '.join(deploy_fail)}")
-        # Auto-fix: пробуем передеплоить каждый упавший сервис
+        # Auto-fix: читаем логи → анализируем причину → редеплоим или чиним
         for entry in deploy_fail:
-            svc_name = entry.split(":")[0]  # repo name
-            # Ищем service_id по имени в SERVICES
+            svc_name = entry.split(":")[0]
+            svc_status = entry.split(":", 1)[1] if ":" in entry else "UNKNOWN"
             svc_id = next(
                 (sid for sid, (repo_n, _) in SERVICES.items() if repo_n == svc_name),
                 None
             )
-            if svc_id:
-                logger.info(f"[audit] {svc_name} down — triggering redeploy")
+            if not svc_id:
+                continue
+
+            # 1. Читаем логи упавшего деплоя
+            crash_logs = []
+            crash_reason = "неизвестна"
+            fix_action = "redeploy"
+            fix_description = "редеплой"
+            try:
+                crash_logs = await get_service_logs(svc_id, limit=30)
+                crash_text = "\n".join(crash_logs[:20])
+
+                # 2. Анализируем причину через Claude Haiku
+                analysis_raw = await ask_claude(
+                    f"Бот {svc_name} упал со статусом {svc_status}. Логи:\n{crash_text}\n\n"
+                    f"Определи: 1) точную причину падения, 2) можно ли починить автоматически (да/нет), "
+                    f"3) что именно исправить. Ответь JSON без markdown:\n"
+                    f'{{"reason": "...", "can_autofix": true/false, "fix": "...", "prevention": "..."}}',
+                    system="Ты senior DevOps. Анализируй логи и давай конкретный диагноз. JSON только.",
+                    model="claude-haiku-4-5-20251001"
+                )
+                try:
+                    s, e = analysis_raw.find("{"), analysis_raw.rfind("}") + 1
+                    analysis = json.loads(analysis_raw[s:e]) if s != -1 else {}
+                    crash_reason = analysis.get("reason", "неизвестна")
+                    can_autofix = analysis.get("can_autofix", False)
+                    fix_description = analysis.get("fix", "редеплой")
+                    prevention = analysis.get("prevention", "")
+
+                    if can_autofix and "import" in crash_reason.lower():
+                        fix_action = "fix_import"
+                    elif can_autofix:
+                        fix_action = "redeploy"
+                    else:
+                        fix_action = "escalate"
+                except Exception:
+                    pass
+            except Exception as ex:
+                logger.warning(f"[audit] log analysis failed for {svc_name}: {ex}")
+
+            # 3. Применяем фикс
+            if fix_action == "fix_import" or fix_action == "redeploy":
+                logger.info(f"[audit] {svc_name} — {fix_action}, reason: {crash_reason[:60]}")
                 ok = await redeploy_service(svc_id)
-                if ok:
-                    lines.append(f"🔄 *{svc_name}* — редеплой запущен автоматически")
-                    logger.info(f"[audit] auto-redeploy triggered for {svc_name}")
-                else:
-                    await notify_office(
-                        f"⚠️ *{svc_name}* — редеплой не удался, нужен ручной разбор"
-                    )
+                action_taken = f"редеплой запущен ({fix_description[:80]})" if ok else "редеплой не удался"
+                lines.append(
+                    f"🔄 *{svc_name}* — редеплой запущен автоматически\n"
+                    f"   📍 Причина: {crash_reason[:120]}\n"
+                    f"   🛠 Действие: {action_taken}\n"
+                    f"   🛡 Предотвращение: {prevention[:120]}" if prevention else
+                    f"🔄 *{svc_name}* — редеплой запущен\n"
+                    f"   📍 Причина: {crash_reason[:120]}"
+                )
+                if not ok:
+                    await notify_office(f"⚠️ *{svc_name}* — редеплой не удался, нужен ручной разбор")
+            else:
+                lines.append(
+                    f"⚠️ *{svc_name}* — требует ручного вмешательства\n"
+                    f"   📍 Причина: {crash_reason[:120]}\n"
+                    f"   🛠 Рекомендация: {fix_description[:120]}"
+                )
+                await notify_office(
+                    f"⚠️ *{svc_name}* упал, не смогла починить автоматически\n"
+                    f"Причина: {crash_reason}\n"
+                    f"Нужно: {fix_description}"
+                )
     else:
         lines.append(f"✅ Деплои ({len(deploy_ok)}): все SUCCESS")
 
