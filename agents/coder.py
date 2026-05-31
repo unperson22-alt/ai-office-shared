@@ -2817,7 +2817,6 @@ schedule — cron строка в UTC (Дананг UTC+7, Мюнхен UTC+2 л
             await reply_func(f"✅ Cron создан!\n*{cron_name}*\nСервис ID: `{svc_id}`\nРасписание: `{schedule}` (UTC)\nБот: {bot_name_cron} → chat {chat_id_cron}")
         except Exception as e:
             await reply_func(f"❌ Ошибка Railway: {e}")
-        return responses
 
     elif intent == "cleanup_group":
         """Удаляет старые сообщения от ботов в указанной группе через Telethon."""
