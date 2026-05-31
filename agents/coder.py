@@ -2806,6 +2806,10 @@ schedule — cron строка в UTC (Дананг UTC+7, Мюнхен UTC+2 л
 
             # Создаём сервис
             d1 = _rql(f'mutation {{ serviceCreate(input: {{ projectId: "{PROJECT_ID}", name: "{cron_name}" }}) {{ id name }} }}')
+            if not d1.get("data") or not d1["data"].get("serviceCreate"):
+                err = d1.get("errors", [{}])[0].get("message", str(d1))
+                await reply_func(f"❌ Railway serviceCreate failed: {err}")
+                return
             svc_id = d1["data"]["serviceCreate"]["id"]
 
             # Настраиваем: image + cronSchedule + startCommand
