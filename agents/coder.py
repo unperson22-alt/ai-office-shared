@@ -510,7 +510,8 @@ office:decisions в Redis — твои ограничения.
 
 5. НЕ ПИШИ В ОФИС-ГРУППУ ИЗ /task ОБРАБОТЧИКОВ
    Если задача пришла через /task endpoint — статусы и ответы возвращаются ТОЛЬКО в JSON-ответе.
-   НЕ вызывай notify_office() или send_to_group() из handle_task/process. Никогда."""
+   
+ПРАВИЛО ВЫВОДА: технические результаты (аудиты, таблицы, диагностика, списки) — отправляй ТОЛЬКО в личку user_id=391077101. В офисную группу (-5194783850) ТОЛЬКО: алерты о падениях, краткий ежедневный аудит, еженедельный отчёт."""
 
 ANALYZER_PROMPT = """Анализатор багов Python/Telegram/Railway. JSON без markdown:
 {"is_bug":bool,"confidence":"high|low","bug_type":"crash|logic|config|network|unknown","description":"1-2 предл","affected_file":"path|null","fix_description":"конкретно","lesson_title":"","lesson_symptom":"","lesson_cause":"","lesson_fix":"","lesson_avoid":""}
@@ -2938,8 +2939,8 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
 Доступные действия:
 - read_file: {"action":"read_file","repo":"...","path":"..."}
 - push_file: {"action":"push_file","repo":"...","path":"...","content":"...","message":"..."}
-- send_message: {"action":"send_message","chat_id":-5194783850,"text":"..."}
-- send_messages: {"action":"send_messages","chat_id":-5194783850,"texts":["msg1","msg2",...]} — батч до 5 сообщений за раз
+- send_message: {"action":"send_message","chat_id":391077101,"text":"..."} — по умолчанию в личку Владу (391077101), НЕ в группу
+- send_messages: {"action":"send_messages","chat_id":391077101,"texts":["msg1","msg2",...]} — батч, по умолчанию в личку Владу до 5 сообщений за раз
 - done: {"action":"done","result":"итог для пользователя"}
 
 Правила:
