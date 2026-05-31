@@ -2777,7 +2777,8 @@ schedule — cron строка в UTC (Дананг UTC+7, Мюнхен UTC+2 л
         schedule      = params.get("schedule", "0 9 * * *")
         msg_cron      = params.get("message", "Напоминание")
         generate      = params.get("generate", False)
-        cron_name     = params.get("name", f"{bot_name_cron}-cron-{int(__import__('time').time())}")
+        _ts = int(__import__('time').time()) % 10000
+        cron_name     = params.get("name", f"{bot_name_cron}-cron-{_ts}")
         description   = params.get("description", "cron")
 
         bot_url = f"https://{bot_name_cron}-bot-production.up.railway.app"
