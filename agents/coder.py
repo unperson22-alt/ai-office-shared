@@ -2964,13 +2964,14 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                     if len(msg_ids) > 1:
                         msg_ids.sort()
                         to_delete.extend(msg_ids[:-1])
-                await tg_cl.disconnect()
                 if to_delete:
                     for i in range(0, len(to_delete), 100):
                         await tg_cl.delete_messages(target_chat, to_delete[i:i+100])
                         await _asyncio.sleep(0.5)
+                    await tg_cl.disconnect()
                     await reply_func(f"✅ Удалено {len(to_delete)} дублей уроков")
                 else:
+                    await tg_cl.disconnect()
                     await reply_func("✅ Дублей уроков не найдено")
             elif to_delete:
                 for i in range(0, len(to_delete), 100):
