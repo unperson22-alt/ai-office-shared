@@ -2888,7 +2888,10 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                 cutoff_mode = "today_patterns"
         elif "-5197140411" in task or "баг" in task.lower() or "bug" in task.lower() or "logs" in task.lower():
             target_chat = -5197140411
-            cutoff_mode = "old_bots"
+            if any(w in task.lower() for w in ["дубл", "dedup", "дублир", "повтор"]):
+                cutoff_mode = "dedup_lessons"
+            else:
+                cutoff_mode = "old_bots"
         else:
             cutoff_mode = "today_patterns"  # дефолт — паттерны за сегодня
 
@@ -2896,6 +2899,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             tg_cl = await get_telethon_client()
             messages = await tg_cl.get_messages(target_chat, limit=3000)
             to_delete = []
+            _lesson_map = {}  # для dedup_lessons: lesson_key -> [msg_ids]
             for msg in messages:
                 if not msg or not msg.date:
                     continue
@@ -2932,6 +2936,15 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                     except Exception:
                         if msg.text and any(p in msg.text for p in SERVICE_PATTERNS):
                             to_delete.append(msg.id)
+                elif cutoff_mode == "dedup_lessons":
+                    import re as _re
+                    if msg.text:
+                        _m = _re.search(r'Урок #(\S+)', msg.text)
+                        if _m:
+                            lesson_key = _m.group(1)
+                            if lesson_key not in _lesson_map:
+                                _lesson_map[lesson_key] = []
+                            _lesson_map[lesson_key].append(msg.id)
                 else:
                     # Старый режим: удаляем старые сообщения от ботов
                     if msg.date >= cutoff:
@@ -2946,7 +2959,20 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                     except Exception:
                         continue
 
-            if to_delete:
+            if cutoff_mode == "dedup_lessons":
+                for lesson_key, msg_ids in _lesson_map.items():
+                    if len(msg_ids) > 1:
+                        msg_ids.sort()
+                        to_delete.extend(msg_ids[:-1])
+                await tg_cl.disconnect()
+                if to_delete:
+                    for i in range(0, len(to_delete), 100):
+                        await tg_cl.delete_messages(target_chat, to_delete[i:i+100])
+                        await _asyncio.sleep(0.5)
+                    await reply_func(f"✅ Удалено {len(to_delete)} дублей уроков")
+                else:
+                    await reply_func("✅ Дублей уроков не найдено")
+            elif to_delete:
                 for i in range(0, len(to_delete), 100):
                     await tg_cl.delete_messages(target_chat, to_delete[i:i+100])
                     await _asyncio.sleep(0.5)
@@ -2960,10 +2986,12 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
 
 
     elif intent == "post_lessons":
-        """Читает lessons.json и постит все уроки в Bug Lessons группу."""
+        """Читает lessons.json и постит только новые уроки в Bug Lessons группу (защита от дублей через Redis)."""
         import asyncio as _asyncio
         _bot = bot  # избегаем конфликта с локальной переменной data
         BUG_GROUP = -5197140411
+        REDIS_KEY = "office:lessons:posted_ids"
+        force = "force" in task.lower() or "все" in task.lower() or "all" in task.lower()
         try:
             raw = await read_file("ai-office-shared", "lessons/lessons.json")
             lessons_list = json.loads(raw)
@@ -2971,18 +2999,34 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             await reply_func(f"❌ Не могу прочитать lessons.json: {e}")
             return
 
-        await reply_func(f"📚 Постю {len(lessons_list)} уроков в Bug Lessons...")
+        # Получаем уже запощенные ID из Redis
+        posted_ids = set()
+        if not force:
+            try:
+                r = await get_redis()
+                if r:
+                    raw_ids = await r.smembers(REDIS_KEY)
+                    posted_ids = {v.decode() if isinstance(v, bytes) else str(v) for v in raw_ids}
+            except Exception:
+                pass
+
+        to_post = [l for l in lessons_list if str(l.get("id")) not in posted_ids]
+        if not to_post:
+            await reply_func(f"✅ Все {len(lessons_list)} уроков уже опубликованы в Bug Lessons")
+            return
+
+        await reply_func(f"📚 Постю {len(to_post)} новых уроков (из {len(lessons_list)}) в Bug Lessons...")
 
         STATUS_EMOJI = {"fixed": "✅", "still_relevant": "⚠️", "outdated": "🗄"}
 
-        for lesson in lessons_list:
+        for lesson in to_post:
+            lesson_id = str(lesson.get("id"))
             status_e = STATUS_EMOJI.get(lesson.get("status", ""), "❓")
             msg = (
                 f"🐛 Урок #{lesson.get('id')} — {lesson.get('title', '?')}\n\n"
                 f"📍 {lesson.get('bot', '?')} | {lesson.get('layer', '?')}\n\n"
                 f"👁 Симптом:\n{lesson.get('symptom', '?')}\n\n"
-                f"🔍 Причина:\n{lesson.get('root_cause', '?')}\n\n"
-                f"🏗 Архитектура:\n{lesson.get('why_architecture', '?')}\n\n"
+                f"🔍 Причина:\n{lesson.get('root_cause', lesson.get('cause', '?'))}\n\n"
                 f"✅ Фикс:\n{lesson.get('fix', '?')}\n\n"
                 f"🛡 Профилактика:\n{lesson.get('prevention', '?')}\n\n"
                 f"{status_e} Статус: {lesson.get('status', '?')}"
@@ -2990,6 +3034,13 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             try:
                 from aiogram.exceptions import TelegramAPIError
                 await _GLOBAL_BOT.send_message(chat_id=BUG_GROUP, text=msg)
+                # Помечаем как запощенный
+                try:
+                    r = await get_redis()
+                    if r:
+                        await r.sadd(REDIS_KEY, lesson_id)
+                except Exception:
+                    pass
                 await _asyncio.sleep(0.8)
             except Exception as e:
                 try:
@@ -2997,7 +3048,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                 except Exception:
                     pass
 
-        await reply_func(f"✅ Все {len(lessons_list)} уроков опубликованы в Bug Lessons")
+        await reply_func(f"✅ Опубликовано {len(to_post)} уроков в Bug Lessons")
 
 
     elif intent == "edit_file":
