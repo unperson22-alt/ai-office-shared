@@ -2751,52 +2751,44 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
 
 
     elif intent == "create_cron":
-        # Извлекаем параметры через Claude
-        extract_prompt = f"""Из этого запроса извлеки параметры для cron. Верни JSON без markdown:
-{{
-  "bot": "kriss",
-  "chat_id": 391077101,
-  "schedule": "0 2 * * *",
-  "message": "текст сообщения",
-  "generate": false,
-  "name": "kriss-daily-reminder",
-  "description": "краткое описание"
-}}
-schedule — cron строка в UTC (Дананг UTC+7, Мюнхен UTC+2 летом).
-Запрос: {message_text}"""
+        extract_prompt = f"""Из запроса извлеки параметры cron. JSON без markdown:
+{{"bot":"kriss","chat_id":391077101,"schedule":"0 1 * * *","message":"текст","generate":false,"name":"kriss-daily-reminder"}}
+schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
         raw = await ask_claude(extract_prompt, system="Верни только валидный JSON без markdown.", model="claude-haiku-4-5-20251001")
         try:
             raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
             params = json.loads(raw)
         except Exception as e:
-            await reply_func(f"❌ Не смог разобрать параметры: {e}\nОтвет Claude: {raw[:200]}")
-            return responses
+            await reply_func(f"❌ Не смог разобрать параметры: {e}")
+            return
 
         bot_name_cron = params.get("bot", "kriss")
-        chat_id_cron  = params.get("chat_id", 391077101)
+        chat_id_cron  = int(params.get("chat_id", 391077101))
         schedule      = params.get("schedule", "0 9 * * *")
         msg_cron      = params.get("message", "Напоминание")
         generate      = params.get("generate", False)
-        _ts = int(__import__('time').time()) % 10000
+        _ts           = int(__import__('time').time()) % 100000
         cron_name     = params.get("name", f"{bot_name_cron}-cron-{_ts}")
-        description   = params.get("description", "cron")
 
-        bot_url = f"https://{bot_name_cron}-bot-production.up.railway.app"
-        body = json.dumps({"chat_id": chat_id_cron, "message": msg_cron, "generate": generate})
-        start_cmd = f"curl -sf -X POST {bot_url}/send_scheduled -H 'Content-Type: application/json' -d '{body}'"
+        bot_url = f"https://{bot_name_cron}-bot-production.up.railway.app/send_scheduled"
+        payload_data  = json.dumps({"chat_id": chat_id_cron, "message": msg_cron, "generate": generate})
 
-        await reply_func(f"⏰ Создаю cron *{cron_name}*...\nРасписание: `{schedule}`\nСообщение: {msg_cron}")
+        await reply_func(f"\u23f0 Создаю cron *{cron_name}*...\nРасписание: `{schedule}`\nСообщение: {msg_cron}")
 
         try:
             import urllib.request as _ur
+
             RAILWAY_TOKEN = "5245769f-c5db-4d2b-9256-4ce456d4218b"
             PROJECT_ID    = "271b40b7-199a-429a-88ef-ca417f26a638"
             ENV_ID        = "2efaaf60-ba39-492c-bf86-007fd505493f"
 
-            def _rql(query):
+            def _rql(q, variables=None):
+                body = {"query": q}
+                if variables:
+                    body["variables"] = variables
                 req = _ur.Request(
                     "https://backboard.railway.app/graphql/v2",
-                    data=json.dumps({"query": query}).encode(),
+                    data=json.dumps(body).encode(),
                     method="POST",
                     headers={"Authorization": f"Bearer {RAILWAY_TOKEN}",
                              "Content-Type": "application/json",
@@ -2805,23 +2797,40 @@ schedule — cron строка в UTC (Дананг UTC+7, Мюнхен UTC+2 л
                 with _ur.urlopen(req) as r:
                     return json.loads(r.read())
 
-            # Создаём сервис
+            # 1. Создаём сервис
             d1 = _rql(f'mutation {{ serviceCreate(input: {{ projectId: "{PROJECT_ID}", name: "{cron_name}" }}) {{ id name }} }}')
             if not d1.get("data") or not d1["data"].get("serviceCreate"):
                 err = d1.get("errors", [{}])[0].get("message", str(d1))
-                await reply_func(f"❌ Railway serviceCreate failed: {err}")
+                await reply_func(f"\u274c Railway serviceCreate failed: {err}")
                 return
             svc_id = d1["data"]["serviceCreate"]["id"]
 
-            # Настраиваем: image + cronSchedule + startCommand
+            # 2. Image
             _rql(f'mutation {{ serviceInstanceUpdate(serviceId: "{svc_id}", environmentId: "{ENV_ID}", input: {{ source: {{ image: "curlimages/curl:latest" }} }}) }}')
-            _rql(f'mutation {{ serviceInstanceUpdate(serviceId: "{svc_id}", environmentId: "{ENV_ID}", input: {{ cronSchedule: "{schedule}" }}) }}')
-            _escaped_cmd = start_cmd.replace('"', '\"')
-            _rql(f"""mutation {{ serviceInstanceUpdate(serviceId: "{svc_id}", environmentId: "{ENV_ID}", input: {{ startCommand: "{_escaped_cmd}" }}) }}""")
 
-            await reply_func(f"✅ Cron создан!\n*{cron_name}*\nСервис ID: `{svc_id}`\nРасписание: `{schedule}` (UTC)\nБот: {bot_name_cron} → chat {chat_id_cron}")
+            # 3. Cron schedule
+            _rql(f'mutation {{ serviceInstanceUpdate(serviceId: "{svc_id}", environmentId: "{ENV_ID}", input: {{ cronSchedule: "{schedule}" }}) }}')
+
+            # 4. startCommand без кавычек внутри — payload через env var $P
+            start_cmd = f"curl -sf -X POST {bot_url} -H Content-Type:application/json -d $P"
+            _rql(f'mutation {{ serviceInstanceUpdate(serviceId: "{svc_id}", environmentId: "{ENV_ID}", input: {{ startCommand: "{start_cmd}" }}) }}')
+
+            # 5. Env var P = payload JSON
+            _rql(
+                'mutation Upsert($input: VariableUpsertInput!) { variableUpsert(input: $input) }',
+                variables={"input": {
+                    "projectId": PROJECT_ID,
+                    "environmentId": ENV_ID,
+                    "serviceId": svc_id,
+                    "name": "P",
+                    "value": payload_data
+                }}
+            )
+
+            await reply_func(f"\u2705 Cron создан!\n*{cron_name}*\n`{svc_id}`\nРасписание: `{schedule}` UTC\n{bot_name_cron} \u2192 {chat_id_cron}")
         except Exception as e:
-            await reply_func(f"❌ Ошибка Railway: {e}")
+            await reply_func(f"\u274c Ошибка Railway: {e}")
+
 
     elif intent == "cleanup_group":
         """Удаляет старые сообщения от ботов в указанной группе через Telethon."""
