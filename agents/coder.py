@@ -585,7 +585,7 @@ INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
 Сигналы вопроса: как, какой, какие, что такое, зачем, почему, расскажи, объясни, с чего начать, какие шаги
 Сигналы команды: создай, сделай, залей, задеплой, исправь, добавь, зарегистрируй
 
-push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не вопрос!), add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon, cleanup_dm=удалить сообщения с ключами/секретами в личке (gsk_, GROQ, токен) через Telethon — ищет в диалоге с user_id=int(BOT_TOKEN.split(':')[0]) (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), edit_file=точечная замена строки в файле без чтения всего файла (сигналы: замени в файле, вставь после строки, patch, добавь в начало функции — когда указан repo+path+old+new), agentic_task=многошаговая задача из 2+ шагов: читай+делай, исправь+задеплой, залей+проверь, прочитай+перепиши. Сигналы: исправь и задеплой, залей код и задеплой, прочитай X и отправь, прочитай X и перепиши, пройдись по всем, для каждого, рефакторинг, аудит. ВАЖНО: если задача содержит И (исправить код И задеплоить) — это agentic_task. При чтении большого файла (bot.py 800+ строк) — не читать целиком в цикле, читать один раз и искать нужную функцию по имени, dev_task=делегировать задачу КОМАНДЕ разработки (Девви→Рикки→Тести→Секки→Скрибби). ТОЛЬКО когда речь о новой фиче/модуле/компоненте для продукта — НЕ о правке одного файла. Требует ВЫСОКОЙ уверенности (confidence>=0.85). Чёткие сигналы: "реализуй фичу", "разработай модуль", "напиши новый компонент", "сделай PR для", "задача для команды", "отдай команде", "dev-dept", "через цепочку". НЕЯСНЫЙ запрос ("сделай что-нибудь", "напиши функцию" без контекста) → confidence<0.85 → Силли переспрашивает. Если задача про правку существующего файла/бота — это push_code или agentic_task, НЕ dev_task. answer=ответить словами.
+push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (create_cron=создать расписание/напоминание/cron для пользователя ("напоминай каждый день", "отправляй в X время", "каждое утро"), не вопрос!), add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon, cleanup_dm=удалить сообщения с ключами/секретами в личке (gsk_, GROQ, токен) через Telethon — ищет в диалоге с user_id=int(BOT_TOKEN.split(':')[0]) (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), edit_file=точечная замена строки в файле без чтения всего файла (сигналы: замени в файле, вставь после строки, patch, добавь в начало функции — когда указан repo+path+old+new), agentic_task=многошаговая задача из 2+ шагов: читай+делай, исправь+задеплой, залей+проверь, прочитай+перепиши. Сигналы: исправь и задеплой, залей код и задеплой, прочитай X и отправь, прочитай X и перепиши, пройдись по всем, для каждого, рефакторинг, аудит. ВАЖНО: если задача содержит И (исправить код И задеплоить) — это agentic_task. При чтении большого файла (bot.py 800+ строк) — не читать целиком в цикле, читать один раз и искать нужную функцию по имени, dev_task=делегировать задачу КОМАНДЕ разработки (Девви→Рикки→Тести→Секки→Скрибби). ТОЛЬКО когда речь о новой фиче/модуле/компоненте для продукта — НЕ о правке одного файла. Требует ВЫСОКОЙ уверенности (confidence>=0.85). Чёткие сигналы: "реализуй фичу", "разработай модуль", "напиши новый компонент", "сделай PR для", "задача для команды", "отдай команде", "dev-dept", "через цепочку". НЕЯСНЫЙ запрос ("сделай что-нибудь", "напиши функцию" без контекста) → confidence<0.85 → Силли переспрашивает. Если задача про правку существующего файла/бота — это push_code или agentic_task, НЕ dev_task. answer=ответить словами.
 ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis" → redis_query.
 ВАЖНО: "подключить бота", "добавить чужого бота" → add_external_bot, НЕ create_bot.
 Репо: billy-bot,tilly-bot,filly-bot,dilly-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard,mama-bot,gosling-bot,villy-bot,prophet-bot,kriss-bot,pilly-bot,doctor-bot,marketing-dept.
@@ -2749,6 +2749,74 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         except Exception as e:
             await reply_func(f"❌ {e}")
 
+
+    elif intent == "create_cron":
+        # Извлекаем параметры через Claude
+        extract_prompt = f"""Из этого запроса извлеки параметры для cron. Верни JSON без markdown:
+{{
+  "bot": "kriss",
+  "chat_id": 391077101,
+  "schedule": "0 2 * * *",
+  "message": "текст сообщения",
+  "generate": false,
+  "name": "kriss-daily-reminder",
+  "description": "краткое описание"
+}}
+schedule — cron строка в UTC (Дананг UTC+7, Мюнхен UTC+2 летом).
+Запрос: {message_text}"""
+        raw = await ask_claude(extract_prompt, system="Верни только валидный JSON без markdown.", model="claude-haiku-4-5-20251001")
+        try:
+            raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+            params = json.loads(raw)
+        except Exception as e:
+            await reply_func(f"❌ Не смог разобрать параметры: {e}\nОтвет Claude: {raw[:200]}")
+            return responses
+
+        bot_name_cron = params.get("bot", "kriss")
+        chat_id_cron  = params.get("chat_id", YOUR_TELEGRAM_ID)
+        schedule      = params.get("schedule", "0 9 * * *")
+        msg_cron      = params.get("message", "Напоминание")
+        generate      = params.get("generate", False)
+        cron_name     = params.get("name", f"{bot_name_cron}-cron-{int(__import__('time').time())}")
+        description   = params.get("description", "cron")
+
+        bot_url = f"https://{bot_name_cron}-bot-production.up.railway.app"
+        body = json.dumps({"chat_id": chat_id_cron, "message": msg_cron, "generate": generate})
+        start_cmd = f"curl -sf -X POST {bot_url}/send_scheduled -H 'Content-Type: application/json' -d '{body}'"
+
+        await reply_func(f"⏰ Создаю cron *{cron_name}*...\nРасписание: `{schedule}`\nСообщение: {msg_cron}")
+
+        try:
+            import urllib.request as _ur
+            RAILWAY_TOKEN = "5245769f-c5db-4d2b-9256-4ce456d4218b"
+            PROJECT_ID    = "271b40b7-199a-429a-88ef-ca417f26a638"
+            ENV_ID        = "2efaaf60-ba39-492c-bf86-007fd505493f"
+
+            def _rql(query):
+                req = _ur.Request(
+                    "https://backboard.railway.app/graphql/v2",
+                    data=json.dumps({"query": query}).encode(),
+                    method="POST",
+                    headers={"Authorization": f"Bearer {RAILWAY_TOKEN}",
+                             "Content-Type": "application/json",
+                             "User-Agent": "Mozilla/5.0 (compatible; railway-cli/3.0)"}
+                )
+                with _ur.urlopen(req) as r:
+                    return json.loads(r.read())
+
+            # Создаём сервис
+            d1 = _rql(f'mutation {{ serviceCreate(input: {{ projectId: "{PROJECT_ID}", name: "{cron_name}" }}) {{ id name }} }}')
+            svc_id = d1["data"]["serviceCreate"]["id"]
+
+            # Настраиваем: image + cronSchedule + startCommand
+            _rql(f'mutation {{ serviceInstanceUpdate(serviceId: "{svc_id}", environmentId: "{ENV_ID}", input: {{ source: {{ image: "curlimages/curl:latest" }} }}) }}')
+            _rql(f'mutation {{ serviceInstanceUpdate(serviceId: "{svc_id}", environmentId: "{ENV_ID}", input: {{ cronSchedule: "{schedule}" }}) }}')
+            _rql(f"""mutation {{ serviceInstanceUpdate(serviceId: "{svc_id}", environmentId: "{ENV_ID}", input: {{ startCommand: "{start_cmd.replace('"', '\"')}" }}) }}""")
+
+            await reply_func(f"✅ Cron создан!\n*{cron_name}*\nСервис ID: `{svc_id}`\nРасписание: `{schedule}` (UTC)\nБот: {bot_name_cron} → chat {chat_id_cron}")
+        except Exception as e:
+            await reply_func(f"❌ Ошибка Railway: {e}")
+        return responses
 
     elif intent == "cleanup_group":
         """Удаляет старые сообщения от ботов в указанной группе через Telethon."""
