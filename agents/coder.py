@@ -1201,16 +1201,37 @@ async def run_daily_audit() -> str:
                 if not ok:
                     await notify_office(f"⚠️ *{svc_name}* — редеплой не удался, нужен ручной разбор")
             else:
-                lines.append(
-                    f"⚠️ *{svc_name}* — требует ручного вмешательства\n"
-                    f"   📍 Причина: {crash_reason[:120]}\n"
-                    f"   🛠 Рекомендация: {fix_description[:120]}"
-                )
-                await notify_office(
-                    f"⚠️ *{svc_name}* упал, не смогла починить автоматически\n"
-                    f"Причина: {crash_reason}\n"
-                    f"Нужно: {fix_description}"
-                )
+                # Пробуем делегировать команде если это код-проблема
+                code_keywords = ["import", "syntax", "error", "exception", "attribute", "module"]
+                is_code_issue = any(kw in crash_reason.lower() for kw in code_keywords)
+                if is_code_issue:
+                    try:
+                        await handle_natural_language(
+                            f"[audit_autofix] fix_bot {svc_name}: {crash_reason}. "
+                            f"Logs: {crash_text[:500]}. Fix needed: {fix_description}",
+                            0, lambda x: None
+                        )
+                        lines.append(
+                            f"🤖 *{svc_name}* — делегировала фикс команде\n"
+                            f"   📍 Причина: {crash_reason[:120]}\n"
+                            f"   🛠 Задача: {fix_description[:120]}"
+                        )
+                    except Exception as ex:
+                        lines.append(f"⚠️ *{svc_name}* — не смогла делегировать: {ex}")
+                        await notify_office(
+                            f"⚠️ *{svc_name}* упал, нужна помощь\n"
+                            f"Причина: {crash_reason}\nНужно: {fix_description}"
+                        )
+                else:
+                    lines.append(
+                        f"⚠️ *{svc_name}* — требует ручного вмешательства\n"
+                        f"   📍 Причина: {crash_reason[:120]}\n"
+                        f"   🛠 Рекомендация: {fix_description[:120]}"
+                    )
+                    await notify_office(
+                        f"⚠️ *{svc_name}* упал, не смогла починить автоматически\n"
+                        f"Причина: {crash_reason}\nНужно: {fix_description}"
+                    )
     else:
         lines.append(f"✅ Деплои ({len(deploy_ok)}): все SUCCESS")
 
