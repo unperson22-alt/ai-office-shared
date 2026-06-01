@@ -4081,9 +4081,12 @@ async def handle_redis(request):
         args = body.get("args", [])
         if not cmd:
             return web.json_response({"error": "cmd required"})
-        result = await redis_client.execute_command(cmd, *args)
+        r = await get_redis()
+        if not r:
+            return web.json_response({"error": "redis unavailable"})
+        result = await r.execute_command(cmd, *args)
         if isinstance(result, list):
-            result = [r.decode() if isinstance(r, bytes) else r for r in result]
+            result = [v.decode() if isinstance(v, bytes) else v for v in result]
         elif isinstance(result, bytes):
             result = result.decode()
         return web.json_response({"result": result})
