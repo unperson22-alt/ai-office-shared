@@ -1153,6 +1153,10 @@ async def run_daily_audit() -> str:
             crash_reason = "неизвестна"
             fix_action = "redeploy"
             fix_description = "редеплой"
+            crash_reason = "неизвестна"
+            can_autofix = False
+            prevention = ""
+            fix_action = "escalate"
             try:
                 crash_logs = await get_service_logs(svc_id, limit=30)
                 crash_text = "\n".join(crash_logs[:20])
