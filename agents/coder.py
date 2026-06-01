@@ -4069,6 +4069,27 @@ async def handle_envcheck(request):
             vars_missing.append(v)
     return web.json_response({"set": vars_set, "missing": vars_missing})
 
+
+async def handle_redis(request):
+    """Proxy Redis commands for Claude diagnostics. Auth required."""
+    auth = request.headers.get("X-Auth-Token", "")
+    if not auth or auth != RAILWAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        body = await request.json()
+        cmd = body.get("cmd", "")
+        args = body.get("args", [])
+        if not cmd:
+            return web.json_response({"error": "cmd required"})
+        result = await redis_client.execute_command(cmd, *args)
+        if isinstance(result, list):
+            result = [r.decode() if isinstance(r, bytes) else r for r in result]
+        elif isinstance(result, bytes):
+            result = result.decode()
+        return web.json_response({"result": result})
+    except Exception as e:
+        return web.json_response({"error": str(e)})
+
 async def main():
     # Загружаем office:decisions из Redis при старте
     await init_office_decisions()
@@ -4082,6 +4103,7 @@ async def main():
     app.router.add_post("/promote_bots", handle_promote_bots)
     app.router.add_get("/health", handle_health)
     app.router.add_get("/envcheck", handle_envcheck)
+    app.router.add_post("/redis", handle_redis)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080)))
