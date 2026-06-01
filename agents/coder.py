@@ -3286,45 +3286,139 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
 
     elif intent == "dev_task":
         """Делегирование задачи команде dev-dept по цепочке:
-        Силли → Девви → Рикки → Тести → Секки → Скрибби → итог."""
+        Силли составляет план → Девви пишет код → Рикки review →
+        Тести QA → Секки security → Скрибби docs → Силли деплоит.
+        Каждый бот читает GitHub сам, получает артефакт предыдущего."""
         import httpx as _httpx
+
+        # ── 1. Силли составляет план ───────────────────────────────────────
+        plan_prompt = (
+            f"Задача: {task}\n\n"
+            "Составь краткий план реализации для команды разработки.\n"
+            "Определи:\n"
+            "1. repo — имя GitHub репозитория (только имя, без org), или null если не нужен\n"
+            "2. file_path — путь к файлу для изменения (обычно bot.py), или null\n"
+            "3. devvy_task — конкретное ТЗ для Девви (что именно написать/изменить)\n\n"
+            "Ответь ТОЛЬКО JSON: {\"repo\": \"...\", \"file_path\": \"...\", \"devvy_task\": \"...\"}"
+        )
+        plan_raw = await ask_claude(plan_prompt, system=CODER_PROMPT, model="claude-haiku-4-5-20251001")
+        try:
+            ps, pe = plan_raw.find("{"), plan_raw.rfind("}") + 1
+            plan = json.loads(plan_raw[ps:pe]) if ps != -1 and pe > ps else {}
+        except Exception:
+            plan = {}
+
+        dev_repo      = plan.get("repo") or repo or ""
+        dev_file_path = plan.get("file_path") or "bot.py"
+        devvy_task    = plan.get("devvy_task") or task
+
+        await reply_func(
+            f"🧠 План готов\n"
+            f"📦 Репо: {dev_repo or 'не указано'}\n"
+            f"📄 Файл: {dev_file_path}\n"
+            f"📋 ТЗ: {devvy_task[:200]}"
+        )
+
+        # ── 2. Цепочка ────────────────────────────────────────────────────
         DEV_CHAIN = [
-            (os.getenv("DEVVY_URL", ""), "девви", "напиши код"),
-            (os.getenv("RICKY_URL", ""), "рикки", "сделай code review"),
-            (os.getenv("TESTI_URL", ""), "тести", "протестируй"),
-            (os.getenv("SEKKY_URL", ""), "секки", "проведи security audit"),
-            (os.getenv("SCRIBBI_URL", ""), "скрибби", "задокументируй"),
+            (os.getenv("DEVVY_URL",  ""), "Девви",   "Напиши код по ТЗ"),
+            (os.getenv("RICKY_URL",  ""), "Рикки",   "Сделай code review"),
+            (os.getenv("TESTI_URL",  ""), "Тести",   "Протестируй и проверь"),
+            (os.getenv("SEKKY_URL",  ""), "Секки",   "Проведи security audit"),
+            (os.getenv("SCRIBBI_URL",""), "Скрибби", "Задокументируй изменения"),
         ]
-        results = {}
-        current_task = task
-        await reply_func(f"🔁 Запускаю цепочку dev-dept...\n📋 Задача: {task[:200]}")
-        async with _httpx.AsyncClient(timeout=60) as client:
+
+        artifact  = ""   # артефакт (код/результат) передаётся по цепочке
+        results   = {}
+        uid       = int(os.getenv("YOUR_TELEGRAM_ID", "391077101"))
+
+        async with _httpx.AsyncClient(timeout=90) as _hx:
             for url, name, prefix in DEV_CHAIN:
                 if not url:
                     results[name] = "⚠️ URL не задан"
                     continue
                 try:
                     payload = {
-                        "message": f"{prefix}: {current_task}",
-                        "user_id": int(os.getenv("YOUR_TELEGRAM_ID", "391077101")),
-                        "source": "СИЛЛИ"
+                        "message":   f"{prefix}: {devvy_task}",
+                        "user_id":   uid,
+                        "repo":      dev_repo,
+                        "file_path": dev_file_path,
+                        "artifact":  artifact,   # результат предыдущего
+                        "source":    "СИЛЛИ",
                     }
-                    resp = await client.post(f"{url}/task", json=payload)
-                    try:
-                        result = resp.json().get("response", "нет ответа")
-                    except Exception:
-                        result = resp.text[:500] or "нет ответа"
-                    results[name] = result[:500]
-                    # Следующий получает результат предыдущего как контекст
-                    current_task = f"{task}\n\n[{name}]: {result[:300]}"
+                    resp = await _hx.post(f"{url}/task", json=payload)
+                    result = resp.json().get("response", "нет ответа") if resp.status_code == 200 else f"HTTP {resp.status_code}"
+                    results[name] = result
+                    artifact = result   # передаём следующему
+                    await reply_func(f"✅ {name} готов")
                 except Exception as e:
                     results[name] = f"❌ {e}"
-                    current_task = task  # продолжаем без результата
+                    logger.warning(f"[dev_task] {name} failed: {e}")
+                    # продолжаем цепочку — Рикки может работать без Девви если артефакт пустой
 
-        summary = f"✅ Цепочка dev-dept завершена:\n\n"
+        # ── 3. Силли извлекает финальный код и деплоит ───────────────────
+        # Финальный код — из ответа Рикки (FINAL_CODE блок)
+        ricky_result = results.get("Рикки", "")
+        final_code   = ""
+        if "```python" in ricky_result:
+            cs = ricky_result.find("```python") + 9
+            ce = ricky_result.find("```", cs)
+            if ce > cs:
+                final_code = ricky_result[cs:ce].strip()
+
+        deploy_status = ""
+        if final_code and dev_repo and dev_file_path:
+            try:
+                # Читаем sha текущего файла
+                import urllib.request as _ur
+                _ghurl = f"https://api.github.com/repos/{GITHUB_USER}/{dev_repo}/contents/{dev_file_path}"
+                _req = _ur.Request(_ghurl, headers={
+                    "Authorization": f"token {os.getenv('GH_PAT', '')}",
+                    "User-Agent": "cilly-deploy"
+                })
+                with _ur.urlopen(_req, timeout=15) as _r:
+                    _d = json.load(_r)
+                _sha = _d["sha"]
+
+                # Пушим
+                _body = json.dumps({
+                    "message": results.get("Скрибби", "")[:100] or f"feat: {devvy_task[:80]}",
+                    "content": __import__("base64").b64encode(final_code.encode()).decode(),
+                    "sha": _sha
+                }).encode()
+                _preq = _ur.Request(_ghurl, data=_body, method="PUT", headers={
+                    "Authorization": f"token {os.getenv('GH_PAT', '')}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "cilly-deploy"
+                })
+                with _ur.urlopen(_preq, timeout=15) as _r:
+                    _pr = json.load(_r)
+                _commit = _pr.get("commit", {}).get("sha", "")[:8]
+                deploy_status = f"✅ Запушено (commit {_commit}) — Railway задеплоит автоматически"
+            except Exception as e:
+                deploy_status = f"⚠️ Автодеплой не удался: {e}\nКод готов — задеплой вручную"
+        elif not final_code:
+            deploy_status = "ℹ️ Финальный код не найден в ответе Рикки — задеплой вручную"
+        else:
+            deploy_status = "ℹ️ Репо/файл не определены — задеплой вручную"
+
+        # ── 4. Итоговый отчёт ─────────────────────────────────────────────
+        scribbi = results.get("Скрибби", "")
+        commit_msg = ""
+        for line in scribbi.splitlines():
+            if line.startswith("COMMIT_MSG:"):
+                commit_msg = line.replace("COMMIT_MSG:", "").strip()
+                break
+
+        summary_parts = [f"🏁 Цепочка dev-dept завершена\n"]
         for name, res in results.items():
-            summary += f"**{name}:** {res[:200]}\n\n"
-        await reply_func(summary)
+            short = res[:150].replace("\n", " ")
+            summary_parts.append(f"• {name}: {short}")
+        summary_parts.append(f"\n{deploy_status}")
+        if commit_msg:
+            summary_parts.append(f"📝 {commit_msg}")
+
+        await reply_func("\n".join(summary_parts))
 
 
 # ── Telegram handlers ──────────────────────────────────────────────────────────
