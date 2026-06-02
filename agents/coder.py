@@ -3296,14 +3296,19 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
         import httpx as _httpx
 
         # ── 1. Силли составляет план ───────────────────────────────────────
+        # Канонический список репо из SERVICES
+        known_repos = sorted(set(repo_name for _, (repo_name, _) in SERVICES.items()))
+        known_repos_str = ", ".join(known_repos)
+
         plan_prompt = (
             f"Задача: {task}\n\n"
             "Составь краткий план реализации для команды разработки.\n"
+            f"Доступные репозитории (выбирай ТОЛЬКО из этого списка): {known_repos_str}\n\n"
             "Определи:\n"
-            "1. repo — имя GitHub репозитория (только имя, без org), или null если не нужен\n"
-            "2. file_path — путь к файлу для изменения (обычно bot.py), или null\n"
-            "3. devvy_task — конкретное ТЗ для Девви (что именно написать/изменить)\n\n"
-            "Ответь ТОЛЬКО JSON: {\"repo\": \"...\", \"file_path\": \"...\", \"devvy_task\": \"...\"}"
+            "1. repo — ТОЧНОЕ имя репо из списка выше (только имя, без org), или null\n"
+            "2. file_path — путь к файлу (обычно bot.py)\n"
+            "3. devvy_task — конкретное ТЗ для разработчика (что именно написать/изменить)\n\n"
+            "Ответь ТОЛЬКО JSON без пояснений: {\"repo\": \"...\", \"file_path\": \"bot.py\", \"devvy_task\": \"...\"}"
         )
         plan_raw = await ask_claude(plan_prompt, system=CODER_PROMPT, model="claude-haiku-4-5-20251001")
         try:
@@ -3315,6 +3320,23 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
         dev_repo      = plan.get("repo") or repo or ""
         dev_file_path = plan.get("file_path") or "bot.py"
         devvy_task    = plan.get("devvy_task") or task
+
+        # Силли сама читает файл и передаёт контекст команде — надёжнее чем доверять Девви
+        file_context = ""
+        if dev_repo:
+            try:
+                gh_pat = os.getenv("GH_PAT", "")
+                _url = f"https://api.github.com/repos/{GITHUB_USER}/{dev_repo}/contents/{dev_file_path}"
+                _req = __import__("urllib.request", fromlist=["Request"]).Request(
+                    _url, headers={"Authorization": f"token {gh_pat}", "User-Agent": "cilly-planner"}
+                )
+                import urllib.request as _ur
+                with _ur.urlopen(_req, timeout=15) as _r:
+                    _d = json.load(_r)
+                file_context = __import__("base64").b64decode(_d["content"]).decode()
+                logger.info(f"[dev_task] read {dev_repo}/{dev_file_path}: {len(file_context)} chars")
+            except Exception as e:
+                logger.warning(f"[dev_task] failed to read {dev_repo}/{dev_file_path}: {e}")
 
         await reply_func(
             f"🧠 План готов\n"
@@ -3348,6 +3370,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                         "repo":      dev_repo,
                         "file_path": dev_file_path,
                         "artifact":  artifact,   # результат предыдущего
+                        "context":   file_context,  # Силли передаёт код напрямую
                         "source":    "СИЛЛИ",
                     }
                     resp = await _hx.post(f"{url}/task", json=payload)
