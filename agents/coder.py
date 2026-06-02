@@ -60,17 +60,17 @@ SERVICES = {
     "3319eabd-5bcb-4e59-839e-4813f1e7ef33": ("logger-bot",       "bot.py"),
     "367e25d7-8410-419d-896d-2cc86cd44efd": ("tilly-bot",        "bot.py"),
     "5d61d403-feee-455e-9c0d-523f0e7c79d5": ("filly-bot",        "bot.py"),
-    "d949c4d2-59fa-4cbe-8bb8-a0589a476607": ("doctor-bot",       "bot.py"),
+    "53551d10-478f-41e8-8d6c-a3102d6cbeb5": ("dilly-bot",        "bot.py"),  # doctor/Доктор — исправлен 2026-06-02
     "db277aff-6638-4b4a-970e-b016bd753608": ("milly-bot",        "bot.py"),
     "3dfc7336-2e91-4ade-950a-4f3d566baced": ("office-dashboard", "main.py"),
     "b441ce93-9736-49b3-9b5d-d0c82e715b28": ("billy-bot",        "bot.py"),
     "9db4108e-19f1-4c1f-a21c-3909442e137c": ("prophet-bot",      "bot.py"),
     "9f868f0c-9c94-4776-a2dc-86a30d812b92": ("tilly-trader",     "bot.py"),
-    "fa7c87cf-454c-4946-ab25-6a5091f0ac47": ("mama-bot",          "bot.py"),
-    "5533bc5f-24aa-4079-903b-50bcde4cdd01": ("pilly-bot",         "bot.py"),
+    "2f647984-c08e-405c-aaa3-a2bffc7fdd14": ("mama-bot",         "bot.py"),  # Эллис — исправлен 2026-06-02
+    "5533bc5f-24aa-4079-903b-50bcde4cdd01": ("pilly-bot",        "bot.py"),
     "92f70bbb-70ea-474c-be0d-5cc1c9bd8f4e": ("kriss-bot",        "bot.py"),
-    "a5e37cc4-0a9f-4700-b6d3-d39b958ce0cb": ("villy-bot",         "bot.py"),
-    "ed03c9d3-e83f-4675-9f0a-a4d4fc622365": ("gosling-bot",       "bot.py"),  # был пропущен
+    "a5e37cc4-0a9f-4700-b6d3-d39b958ce0cb": ("villy-bot",        "bot.py"),
+    "ed03c9d3-e83f-4675-9f0a-a4d4fc622365": ("gosling-bot",      "bot.py"),
 }
 
 bot    = Bot(token=BOT_TOKEN) if BOT_TOKEN else None
@@ -1076,7 +1076,9 @@ BOT_REPOS = {
     "тилли":  ("tilly-bot",  "bot.py"),
     "билли":  ("billy-bot",  "bot.py"),
     "милли":  ("milly-bot",  "bot.py"),
-    "доктор": ("doctor-bot", "bot.py"),
+    "доктор": ("dilly-bot",  "bot.py"),  # репо dilly-bot, не doctor-bot
+    "эллис":  ("mama-bot",   "bot.py"),  # репо mama-bot (ellice-bot в Railway)
+    "мама":   ("mama-bot",   "bot.py"),
 }
 
 WEB_SEARCH_FIX_PROMPT = """Добавь web search tool в этот Python код Telegram бота.
@@ -1098,9 +1100,17 @@ WEB_SEARCH_FIX_PROMPT = """Добавь web search tool в этот Python ко�
 # ── Daily audit ───────────────────────────────────────────────────────────────
 
 HEALTH_URLS = {
-    "pilly-bot":      "https://pilly-bot-production.up.railway.app/health",
-    "logger-bot":     "https://logger-bot-production.up.railway.app/health",
+    "pilly-bot":        "https://pilly-bot-production.up.railway.app/health",
+    "logger-bot":       "https://logger-bot-production.up.railway.app/health",
     "office-dashboard": "https://office-dashboard-production-b571.up.railway.app/health",
+    "mama-bot":         "https://ellice-bot-production.up.railway.app/health",    # Эллис
+    "dilly-bot":        "https://dilly-bot-production-4a9b.up.railway.app/health", # Доктор
+    "kriss-bot":        "https://kriss-bot-production.up.railway.app/health",
+    "filly-bot":        "https://filly-bot-production.up.railway.app/health",
+    "gosling-bot":      "https://gosling-bot-production.up.railway.app/health",
+    "villy-bot":        "https://villy-bot-production.up.railway.app/health",
+    "milly-bot":        "https://milly-bot-production.up.railway.app/health",
+    "tilly-bot":        "https://tilly-bot-production.up.railway.app/health",
 }
 
 async def run_daily_audit() -> str:
