@@ -4191,11 +4191,40 @@ async def handle_redis(request):
     except Exception as e:
         return web.json_response({"error": str(e)})
 
+
+async def vietnam_cron_loop():
+    """Триггерит vietnam-bot каждый день в 01:00 UTC."""
+    import datetime
+    logger.info("[vietnam_cron] loop started (01:00 UTC daily)")
+    while True:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        target = now.replace(hour=1, minute=0, second=0, microsecond=0)
+        if target <= now:
+            target += datetime.timedelta(days=1)
+        wait = (target - now).total_seconds()
+        logger.info(f"[vietnam_cron] следующий запуск через {wait/3600:.1f}ч ({target.strftime('%d.%m %H:%M UTC')})")
+        await asyncio.sleep(wait)
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                r = await c.post(
+                    "https://vietnam-bot-production.up.railway.app/generate",
+                    json={"send": True}
+                )
+            result = r.json()
+            count = result.get("count", 0)
+            logger.info(f"[vietnam_cron] ✅ отправлено {count} идей")
+        except Exception as e:
+            logger.error(f"[vietnam_cron] ❌ ошибка: {e}")
+            await notify_office(f"⚠️ Vietnam-bot cron упал: {e}")
+        await asyncio.sleep(60)
+
+
 async def main():
     # Загружаем office:decisions из Redis при старте
     await init_office_decisions()
     asyncio.create_task(monitor_loop())
     asyncio.create_task(daily_audit_loop())
+    asyncio.create_task(vietnam_cron_loop())
     # HTTP server for Filly routing
     app = web.Application()
     app.router.add_post("/task", handle_cilly_task)
