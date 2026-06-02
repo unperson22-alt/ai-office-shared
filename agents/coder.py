@@ -960,6 +960,12 @@ async def post_lesson(title: str, symptom: str, cause: str, context: str, fix: s
     if r:
         await log_event(r, BOT_NAME_LOWER, "lesson_saved",
                         title=title[:100])
+        # Помечаем урок как уже опубликованный — дедупликация для post_lessons batch
+        try:
+            lesson_hash = str(abs(hash(f"{title}{symptom}")))
+            await r.sadd("office:lessons:posted_ids", lesson_hash)
+        except Exception:
+            pass
 
 
 async def notify_office(text: str):
