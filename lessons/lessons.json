@@ -469,5 +469,13 @@
     "bug": "process() делал один вызов к Claude. Если Claude использовал web_search — stop_reason=tool_use, text пустой или обрезанный",
     "fix": "Multi-turn цикл: после tool_use собирать tool_result блоки и делать повторный вызов до stop_reason=end_turn",
     "why_architecture": "Любой инструментный вызов (tools=[...]) требует multi-turn — одиночный вызов работает только для простых ответов без tool_use"
+  },
+  {
+    "title": "HTTP сервер не стартовал — недостижимый код после return",
+    "symptom": "bot:TIMEOUT на health check. SSL handshake проходит, HTTP ответ не приходит вообще.",
+    "cause": "HTTP-старт (app_http, runner, TCPSite, ptb) находился внутри handler-функции ПОСЛЕ return — недостижимый код. main() завершалась сразу после Redis connected не запустив HTTP-сервер.",
+    "context": "kriss-bot. При рефакторинге handle_reply() вставили перед HTTP-стартом. Railway деплой показывает SUCCESS даже если порт не слушается.",
+    "fix": "Перенести app_http/runner/TCPSite/ptb в main(). Handler-функции должны быть чистыми — только обработка запроса. Commit 61a3deb2.",
+    "how_to_avoid": "После любого рефакторинга bot.py — проверять что весь HTTP-старт и PTB инициализация всегда внутри main(). SSL connect без HTTP ответа = HTTP сервер не запущен (не Railway outage). Railway SUCCESS не гарантирует что порт слушается."
   }
 ]
