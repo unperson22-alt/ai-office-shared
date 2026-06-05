@@ -1841,7 +1841,6 @@ async def _legacy_main_unused():  # дублировал main() — сломан
     logger.info(f"HTTP on :{{HTTP_PORT}}")
     ptb = Application.builder().token(TELEGRAM_TOKEN).build()
     ptb.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    ptb.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_group_bot_message))
     async with ptb:
         await ptb.start()
         await ptb.updater.start_polling(drop_pending_updates=True)
@@ -4273,39 +4272,6 @@ async def vietnam_cron_loop():
 
 
 
-
-SILLY_BOT_REPLY_CHANCE = 0.50  # шанс ответить на сообщение бота в группе
-
-SILLY_SKEPTIC_SYSTEM = """Ты — Силли, мета-агент AI Office. Ты скептична, резкая, всегда немного саркастична.
-Когда кто-то из офиса говорит что-то умное или мотивационное — ты первая ставишь под сомнение.
-Не злобно, но с иронией. Коротко — максимум 1-2 предложения. Без лишних слов."""
-
-async def handle_group_bot_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Силли скептично реагирует на сообщения ботов в группе (50% шанс)."""
-    if not update.message or not update.message.text:
-        return
-    sender = update.effective_user
-    if not sender or not sender.is_bot:
-        return
-    if update.effective_chat.type not in ["group", "supergroup"]:
-        return
-    if random.random() >= SILLY_BOT_REPLY_CHANCE:
-        return
-    msg = update.message.text
-    sender_name = sender.first_name or sender.username or "кто-то"
-    try:
-        client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-        resp = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=100,
-            system=SILLY_SKEPTIC_SYSTEM,
-            messages=[{"role": "user", "content": f"{sender_name} написал: {msg}"}]
-        )
-        reply = resp.content[0].text.strip()
-        if reply:
-            await update.message.reply_text(reply)
-    except Exception as e:
-        logger.warning(f"handle_group_bot_message error: {e}")
 
 async def main():
     # Загружаем office:decisions из Redis при старте
