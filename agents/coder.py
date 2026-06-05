@@ -2368,6 +2368,15 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                     val = await r.get(key)
                     result[key] = val or await r.hgetall(key)
 
+        # ── 5.5 DEL ключа ────────────────────────────────────────────────
+        if any(w in task_lower for w in ["del ", "delete ", "удали ключ"]):
+            import re as _re_del
+            del_match = _re_del.search(r'(office:[a-z:_0-9]+)', task_lower)
+            if del_match:
+                del_key = del_match.group(1)
+                deleted = await r.delete(del_key)
+                result[f"del:{del_key}"] = "OK (deleted)" if deleted else "KEY_NOT_FOUND"
+
         # ── 6. если ничего не нашли — показываем ВСЁ ─────────────────────
         if not result:
             for ns in ["office:quality:*", "office:health:*", "office:routing:misses"]:
