@@ -3195,8 +3195,8 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
 Доступные действия:
 - read_file: {"action":"read_file","repo":"...","path":"..."}
 - push_file: {"action":"push_file","repo":"...","path":"...","content":"...","message":"..."}
-- send_message: {"action":"send_message","chat_id":391077101,"text":"..."} — по умолчанию в личку Владу (391077101), НЕ в группу
-- send_messages: {"action":"send_messages","chat_id":391077101,"texts":["msg1","msg2",...]} — батч, по умолчанию в личку Владу до 5 сообщений за раз
+- send_message: {"action":"send_message","chat_id":-5194783850,"text":"..."} — по умолчанию в ОФИС ГРУППУ (-5194783850), НЕ в личку
+- send_messages: {"action":"send_messages","chat_id":-5194783850,"texts":["msg1","msg2",...]} — батч, по умолчанию в офис группу до 5 сообщений за раз
 - done: {"action":"done","result":"итог для пользователя"}
 
 Правила:
@@ -3208,6 +3208,8 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
         steps_log = []
         context = task
         max_steps = 30
+        consecutive_failures = 0
+        last_error = None
 
         # agentic_task НЕ шлёт промежуточные шаги в чат — только финальный результат
         # silent_collect накапливает шаги в лог без отправки в группу
@@ -3259,8 +3261,19 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                     steps_log.append({"action": f"read_file({a_repo}/{a_path})", "result": result})
                     # Добавляем содержимое в контекст
                     context += f"\n\n[Файл {a_repo}/{a_path}]:\n{result}"
+                    consecutive_failures = 0
+                    last_error = None
                 except Exception as e:
-                    steps_log.append({"action": f"read_file({a_repo}/{a_path})", "result": f"ERROR: {e}"})
+                    err_str = str(e)
+                    steps_log.append({"action": f"read_file({a_repo}/{a_path})", "result": f"ERROR: {err_str}"})
+                    if err_str == last_error:
+                        consecutive_failures += 1
+                    else:
+                        consecutive_failures = 1
+                        last_error = err_str
+                    if consecutive_failures >= 3:
+                        await reply_func(f"❌ Задача остановлена: повторяющаяся ошибка — {err_str}")
+                        break
 
             elif action == "push_file":
                 a_repo = action_data.get("repo", "")
