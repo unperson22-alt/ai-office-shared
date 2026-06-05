@@ -2314,6 +2314,17 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         task_lower = task.lower()
         result: dict = {}
 
+        # ── 0. DEL — обрабатывается первым и возвращает сразу ────────────
+        if any(w in task_lower for w in ["del ", "delete ", "удали ключ"]):
+            import re as _re_del
+            del_match = _re_del.search(r'(office:[a-z:_0-9]+)', task_lower)
+            if del_match:
+                del_key = del_match.group(1)
+                deleted = await r.delete(del_key)
+                msg = f"✅ DEL {del_key}: {'удалён' if deleted else 'не найден'}"
+                await reply_func(msg)
+                return
+
         # ── 1. quality audit ──────────────────────────────────────────────
         if any(w in task_lower for w in ["quality", "реакци", "голос", "👍", "👎", "up", "down", "аудит"]):
             async for key in r.scan_iter("office:quality:*"):
@@ -2367,15 +2378,6 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                 async for key in r.scan_iter(pattern_str):
                     val = await r.get(key)
                     result[key] = val or await r.hgetall(key)
-
-        # ── 5.5 DEL ключа ────────────────────────────────────────────────
-        if any(w in task_lower for w in ["del ", "delete ", "удали ключ"]):
-            import re as _re_del
-            del_match = _re_del.search(r'(office:[a-z:_0-9]+)', task_lower)
-            if del_match:
-                del_key = del_match.group(1)
-                deleted = await r.delete(del_key)
-                result[f"del:{del_key}"] = "OK (deleted)" if deleted else "KEY_NOT_FOUND"
 
         # ── 6. если ничего не нашли — показываем ВСЁ ─────────────────────
         if not result:
