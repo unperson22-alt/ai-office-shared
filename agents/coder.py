@@ -1476,7 +1476,11 @@ async def _deep_diagnose_and_escalate(
     # 2c. Предыдущие попытки починки (ops.md)
     ops_ctx = ""
     try:
-        raw_ops = await read_file("ai-office-shared", OPS_LOG_FILE)
+        r_ops = await get_redis()
+        raw_ops = ""
+        if r_ops:
+            ops_entries = await r_ops.lrange("office:ops_log", 0, 19)
+            raw_ops = "\n".join(reversed(ops_entries)) if ops_entries else ""
         if raw_ops:
             # Ищем записи про этот репо
             relevant = [l for l in raw_ops.split("\n") if repo in l or error_signature[:8] in l]
@@ -2227,7 +2231,11 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
     # Это даёт Силли контекст о том что уже было сделано
     ops_context = ""
     try:
-        raw_ops = await read_file("ai-office-shared", OPS_LOG_FILE)
+        r_ops = await get_redis()
+        raw_ops = ""
+        if r_ops:
+            ops_entries = await r_ops.lrange("office:ops_log", 0, 19)
+            raw_ops = "\n".join(reversed(ops_entries)) if ops_entries else ""
         if raw_ops:
             # Берём последние 3000 символов — самые свежие записи
             ops_context = raw_ops[-3000:]
