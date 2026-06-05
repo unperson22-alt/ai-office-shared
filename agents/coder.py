@@ -683,10 +683,13 @@ async def append_ops_log(action: str, service: str, details: str = ""):
             entry += f"\n> {details}"
         entry += "\n"
 
-        raw = await read_file("ai-office-shared", OPS_LOG_FILE)
-        updated = raw + entry
-        await push_file("ai-office-shared", OPS_LOG_FILE, updated,
-                        f"log(cilly): {action[:50]} @ {service}")
+        # Пишем в Redis (не GitHub) — каждый push в GitHub = деплой Силли = 90 сек даунтайм
+        r_ops = await get_redis()
+        if r_ops:
+            await r_ops.lpush("office:ops_log", entry)
+            await r_ops.ltrim("office:ops_log", 0, 499)  # хранить последние 500 записей
+        else:
+            logger.warning("[ops_log] Redis недоступен, лог потерян")
     except Exception as e:
         logger.debug(f"append_ops_log failed: {e}")
 
