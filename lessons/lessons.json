@@ -10,7 +10,9 @@
     "why_architecture": "Силли — единственный слой мониторинга. Если SERVICES содержит неверные ID, весь офис слепой. Нет валидации при старте → баг живёт неделями незамеченным",
     "fix": "Заменить захардкоженные UUID на fetch из Railway GraphQL API: project→services→edges→node→id",
     "status": "fixed",
-    "prevention": "При добавлении нового бота: UUID брать только из Railway API, никогда не копировать вручную. Добавить проверку живости SERVICES при старте Силли"
+    "prevention": "При добавлении нового бота: UUID брать только из Railway API, никогда не копировать вручную. Добавить проверку живости SERVICES при старте Силли",
+    "cause": "UUID сервисов в SERVICES были захардкожены вручную и устарели после рестарта Railway",
+    "tag": "system"
   },
   {
     "id": 2,
@@ -23,7 +25,9 @@
     "why_architecture": "Railway различает имя окружения и его UUID. Имя может измениться, UUID — нет. Использование имён вместо ID делает код хрупким",
     "fix": "Заменить строку 'production' на UUID: 2efaaf60-3568-4462-8b77-f4a7e3c65b49",
     "status": "fixed",
-    "prevention": "Все Railway операции: всегда использовать UUID (projectId, environmentId, serviceId). Хранить их в константах, не в строках"
+    "prevention": "Все Railway операции: всегда использовать UUID (projectId, environmentId, serviceId). Хранить их в константах, не в строках",
+    "cause": "Railway GraphQL API требует environmentId как UUID, не строковый алиас",
+    "tag": "system"
   },
   {
     "id": 3,
@@ -36,7 +40,9 @@
     "why_architecture": "Архитектура требует ручной регистрации каждого нового сервиса. Это точка забывания — при создании бота думают о коде, не о мониторинге",
     "fix": "Добавить service_id в SERVICES: {uuid: (repo_name, main_file)}",
     "status": "still_relevant",
-    "prevention": "Чеклист создания бота: 1) BotFather 2) Railway сервис 3) GitHub репо 4) SERVICES в coder.py 5) BOT_URLS в filly-bot. Без пункта 4 — мониторинг слепой"
+    "prevention": "Чеклист создания бота: 1) BotFather 2) Railway сервис 3) GitHub репо 4) SERVICES в coder.py 5) BOT_URLS в filly-bot. Без пункта 4 — мониторинг слепой",
+    "cause": "Чеклист создания бота не включал обязательный шаг добавления service_id в SERVICES",
+    "tag": "system"
   },
   {
     "id": 4,
@@ -49,7 +55,9 @@
     "why_architecture": "Силли генерирует технический контент (пути, код, стектрейсы) и отправляет его напрямую в Telegram. Эти два домена несовместимы без промежуточной обработки",
     "fix": "Убрать parse_mode или переключиться на HTML-теги (<code>, <b>). HTML экранирование безопаснее для технического контента",
     "status": "fixed",
-    "prevention": "Для технического контента: всегда HTML parse_mode или plain text. Markdown — только для контролируемого контента без спецсимволов"
+    "prevention": "Для технического контента: всегда HTML parse_mode или plain text. Markdown — только для контролируемого контента без спецсимволов",
+    "cause": "Telegram Bot API parse_mode=MarkdownV2 требует экранирования спецсимволов, LLM-сгенерированный код их не экранирует",
+    "tag": "system"
   },
   {
     "id": 5,
@@ -62,7 +70,9 @@
     "why_architecture": "Railway устанавливает переменные окружения до запуска процесса, но если код читает их при импорте в тестах или при деплое — порядок может нарушиться",
     "fix": "Перенести инициализацию конфига в main(). Обернуть в try/except/finally для graceful shutdown",
     "status": "fixed",
-    "prevention": "Правило: никаких side effects на уровне модуля. Всё что читает env или открывает соединения — только внутри функций"
+    "prevention": "Правило: никаких side effects на уровне модуля. Всё что читает env или открывает соединения — только внутри функций",
+    "cause": "Вызов os.getenv() или валидации на уровне модуля выполняется при импорте, до загрузки env vars",
+    "tag": "system"
   },
   {
     "id": 6,
@@ -75,7 +85,9 @@
     "why_architecture": "async boilerplate шаблона использует глобальные переменные (redis_client, ptb_bot) для передачи состояния между main() и handlers. Это хрупко — порядок инициализации неочевиден",
     "fix": "Использовать context.bot_data или передавать зависимости через параметры. Либо явный global + присвоение в main()",
     "status": "still_relevant",
-    "prevention": "В шаблоне бота: все глобальные переменные объявлять в начале файла как None, инициализировать в main() с явным global. Или переходить на dependency injection"
+    "prevention": "В шаблоне бота: все глобальные переменные объявлять в начале файла как None, инициализировать в main() с явным global. Или переходить на dependency injection",
+    "cause": "Python: если переменная используется с global внутри функции, она становится локальной во всём scope функции",
+    "tag": "system"
   },
   {
     "id": 7,
@@ -88,7 +100,9 @@
     "why_architecture": "Railway перезапускает контейнер при краше, но без трейсбека невозможно понять причину. Мониторинг Силли видит CRASHED но не знает почему",
     "fix": "Обернуть app.run_polling() в try/except с logging.exception()",
     "status": "still_relevant",
-    "prevention": "В шаблоне бота: весь main() в try/except. Логировать все необработанные исключения перед выходом"
+    "prevention": "В шаблоне бота: весь main() в try/except. Логировать все необработанные исключения перед выходом",
+    "cause": "PTB app.run_polling() не оборачивался в try/except, необработанное исключение убивало main thread без traceback",
+    "tag": "system"
   },
   {
     "id": 8,
@@ -101,7 +115,9 @@
     "why_architecture": "Боты работают на Railway где сеть может прерываться при деплоях соседних сервисов. Без retry — любой временный сбой = краш",
     "fix": "Увеличить таймауты: read/write/connect по 30 сек. Добавить exponential backoff для retry",
     "status": "still_relevant",
-    "prevention": "В шаблоне: Application.builder().read_timeout(30).write_timeout(30). Все HTTP клиенты — с retry логикой"
+    "prevention": "В шаблоне: Application.builder().read_timeout(30).write_timeout(30). Все HTTP клиенты — с retry логикой",
+    "cause": "httpx.AsyncClient создавался с таймаутом по умолчанию (5 сек), недостаточным для медленных Railway endpoints",
+    "tag": "system"
   },
   {
     "id": 9,
@@ -114,7 +130,9 @@
     "why_architecture": "Силли использует Telethon для операций с папками/группами. Telethon API менялся и не всегда обратно совместим",
     "fix": "Использовать (f.title.text if hasattr(f.title, 'text') else str(f.title)).strip().lower()",
     "status": "fixed",
-    "prevention": "При работе с Telethon объектами: всегда hasattr проверка перед вызовом строковых методов"
+    "prevention": "При работе с Telethon объектами: всегда hasattr проверка перед вызовом строковых методов",
+    "cause": "Telethon возвращает TextWithEntities объекты вместо str для полей типа title",
+    "tag": "system"
   },
   {
     "id": 10,
@@ -127,7 +145,9 @@
     "why_architecture": "Telegram различает Chat (legacy) и Channel/Supergroup. Office group (-5194783850) — обычный Chat. Силли должна знать тип группы",
     "fix": "isinstance check: Channel → InviteToChannelRequest, Chat → AddChatUserRequest(chat_id, user, fwd_limit=0)",
     "status": "fixed",
-    "prevention": "Перед Telegram группвыми операциями: проверить тип через isinstance(entity, Channel)"
+    "prevention": "Перед Telegram группвыми операциями: проверить тип через isinstance(entity, Channel)",
+    "cause": "Telegram API разделяет Channel и Chat — для обычных групп (Chat) нужен AddChatUserRequest, не InviteToChannelRequest",
+    "tag": "system"
   },
   {
     "id": 11,
@@ -140,7 +160,9 @@
     "why_architecture": "Силли генерирует код и пушит его без синтаксической проверки. Ошибка обнаруживается только при деплое",
     "fix": "Использовать одинарные кавычки для SYSTEM строки в шаблоне. Добавить ast.parse() валидацию перед пушем",
     "status": "fixed",
-    "prevention": "push_file() для .py файлов: всегда ast.parse() перед отправкой. Уже реализовано в shared/github_tools.py"
+    "prevention": "push_file() для .py файлов: всегда ast.parse() перед отправкой. Уже реализовано в shared/github_tools.py",
+    "cause": "Шаблон бота генерировался через f-string с двойными кавычками — кавычки в SYSTEM_PROMPT ломали Python синтаксис",
+    "tag": "system"
   },
   {
     "id": 12,
@@ -153,7 +175,9 @@
     "why_architecture": "Два пространства имён: Telegram usernames и Railway service names — не связаны и могут расходиться",
     "fix": "URL брать только из Railway GraphQL API (query services → domain) или из захардкоженного BOT_URLS в filly-bot",
     "status": "fixed",
-    "prevention": "Никогда не выводить Railway URL из Telegram username. Источник истины — BOT_URLS в filly-bot/bot.py"
+    "prevention": "Никогда не выводить Railway URL из Telegram username. Источник истины — BOT_URLS в filly-bot/bot.py",
+    "cause": "Railway internal URL строился из bot.username (Telegram handle) вместо serviceId из Railway API",
+    "tag": "system"
   },
   {
     "id": 13,
@@ -166,7 +190,9 @@
     "why_architecture": "Силли — оперативный агент офиса. Без карты инфраструктуры каждая задача требует уточнений, что блокирует автономность",
     "fix": "Добавить в CHAT_PROMPT полную карту офиса: repos, filly-bot/bot.py как источник BOT_URLS, group IDs, Telethon функции",
     "status": "fixed",
-    "prevention": "При расширении офиса (новый бот, новый проект) — обновлять CHAT_PROMPT и SYSTEM_STATE.md одновременно"
+    "prevention": "При расширении офиса (новый бот, новый проект) — обновлять CHAT_PROMPT и SYSTEM_STATE.md одновременно",
+    "cause": "CHAT_PROMPT содержал только общее описание задач, без конкретного маппинга бот→репо→URL",
+    "tag": "system"
   },
   {
     "id": 14,
@@ -179,7 +205,9 @@
     "why_architecture": "BOT_URLS — центральный роутер офиса в filly-bot. Любая ошибка там затрагивает всю маршрутизацию. Нет валидации при старте",
     "fix": "Убрать дублирующиеся ключи. Добавить проверку assert len(BOT_URLS) == len(set(BOT_URLS)) при старте",
     "status": "fixed",
-    "prevention": "При добавлении бота в BOT_URLS: поиск по ключу перед вставкой. Линтер (pylint W0109) ловит дубли статически"
+    "prevention": "При добавлении бота в BOT_URLS: поиск по ключу перед вставкой. Линтер (pylint W0109) ловит дубли статически",
+    "cause": "Python dict при дублирующихся ключах молча перезаписывает предыдущее значение, ошибки нет",
+    "tag": "system"
   },
   {
     "id": 15,
@@ -192,7 +220,9 @@
     "why_architecture": "Python asyncio — кооперативная многозадачность. Один blocking call = весь офис стоит. Особенно критично для retry логики которая может ждать секунды",
     "fix": "Переделать в async def, заменить time.sleep → await asyncio.sleep, использовать AsyncAnthropic",
     "status": "fixed",
-    "prevention": "В async проектах: никогда time.sleep, requests, или другие blocking calls. Для Anthropic — AsyncAnthropic. Для HTTP — httpx.AsyncClient или aiohttp"
+    "prevention": "В async проектах: никогда time.sleep, requests, или другие blocking calls. Для Anthropic — AsyncAnthropic. Для HTTP — httpx.AsyncClient или aiohttp",
+    "cause": "time.sleep() блокирует event loop целиком — в async контексте нужен await asyncio.sleep()",
+    "tag": "system"
   },
   {
     "id": 16,
@@ -205,7 +235,9 @@
     "why_architecture": "Дубль урока #3 — системная проблема. Отсутствие автоматической регистрации при создании бота",
     "fix": "Добавить ed03c9d3 в SERVICES",
     "status": "fixed",
-    "prevention": "Чеклист создания бота обязателен (см. урок #3). Рассмотреть автоматическую регистрацию: при deploy нового сервиса — Силли сама добавляет в SERVICES"
+    "prevention": "Чеклист создания бота обязателен (см. урок #3). Рассмотреть автоматическую регистрацию: при deploy нового сервиса — Силли сама добавляет в SERVICES",
+    "cause": "gosling-bot был добавлен в офис без обновления SERVICES в coder.py Силли",
+    "tag": "system"
   },
   {
     "id": 17,
@@ -218,7 +250,9 @@
     "why_architecture": "Monitor loop читает логи блоками. Фильтрация на уровне блока вместо строки — системная ошибка гранулярности",
     "fix": "Применять IGNORE_PATTERNS только к error_logs (строкам с ошибками), не ко всему блоку",
     "status": "fixed",
-    "prevention": "Фильтры логов: всегда per-line, не per-block. Тест: искусственно вставить реальную ошибку рядом с ignored строкой и проверить что она не пропускается"
+    "prevention": "Фильтры логов: всегда per-line, не per-block. Тест: искусственно вставить реальную ошибку рядом с ignored строкой и проверить что она не пропускается",
+    "cause": "IGNORE_PATTERNS фильтровался по всему блоку лога (contains), а не построчно — один шумный лог скрывал реальный баг рядом",
+    "tag": "system"
   },
   {
     "id": 18,
@@ -231,7 +265,9 @@
     "why_architecture": "Railway redeploy ≠ новый деплой. Это важное различие которое Силли должна знать при autofix",
     "fix": "Если нет SUCCESS деплоев — использовать variableCollectionUpsert (_CACHE_BUST) для тригера нового деплоя",
     "status": "fixed",
-    "prevention": "Перед redeploy: проверить есть ли хотя бы один SUCCESS деплой. Если нет — variableCollectionUpsert"
+    "prevention": "Перед redeploy: проверить есть ли хотя бы один SUCCESS деплой. Если нет — variableCollectionUpsert",
+    "cause": "serviceInstanceRedeploy в Railway API требует существующего успешного деплоя для создания нового",
+    "tag": "system"
   },
   {
     "id": 19,
@@ -244,7 +280,9 @@
     "why_architecture": "Силли сама себя может сломать. Это единственный критический риск в архитектуре — если coder.py невалидный, весь офис без мозга",
     "fix": "Добавить ast.parse() валидацию в push_file() для всех .py файлов ПЕРЕД пушем",
     "status": "fixed",
-    "prevention": "push_file() для .py: ast.parse() обязателен. Уже реализовано. Дополнительно: держать backup последнего рабочего coder.py в Redis"
+    "prevention": "push_file() для .py: ast.parse() обязателен. Уже реализовано. Дополнительно: держать backup последнего рабочего coder.py в Redis",
+    "cause": "push_file() заливал Python код без синтаксической проверки — невалидный файл уходил на прод",
+    "tag": "system"
   },
   {
     "id": 20,
@@ -257,7 +295,9 @@
     "why_architecture": "LLM недетерминирован — он может вернуть что угодно. Любой json.loads(llm_response) без защиты — потенциальная точка краша",
     "fix": "try/except вокруг json.loads() + guard: если нет '[' в ответе → fallback на дефолтные значения",
     "status": "fixed",
-    "prevention": "ПРАВИЛО: никогда json.loads() на LLM ответе без try/except. Всегда извлекать JSON через поиск скобок + try/except"
+    "prevention": "ПРАВИЛО: никогда json.loads() на LLM ответе без try/except. Всегда извлекать JSON через поиск скобок + try/except",
+    "cause": "Anthropic API иногда возвращает JSON с trailing comma или markdown-обёрткой — json.loads() без try/except роняет процесс",
+    "tag": "system"
   },
   {
     "id": 21,
@@ -270,7 +310,9 @@
     "why_architecture": "Русские имена ботов (билли, милли, тилли) — популярные части слов. Substring match неприменим для имён в тексте",
     "fix": "re.search(r'\\b' + re.escape(BOT_NAME.lower()) + r'\\b', msg_text) — word-boundary regex",
     "status": "fixed",
-    "prevention": "Для детекта имён в тексте: всегда word-boundary regex, никогда substring. Это касается всех ботов в group mode"
+    "prevention": "Для детекта имён в тексте: всегда word-boundary regex, никогда substring. Это касается всех ботов в group mode",
+    "cause": "str.find() или 'name in text' матчит подстроку — 'билли' найдётся в 'дебилли' или других словах",
+    "tag": "system"
   },
   {
     "id": 22,
@@ -283,7 +325,9 @@
     "why_architecture": "Группа получает все типы сообщений. При расширении бота на группу нужны дополнительные guards которых нет в шаблоне",
     "fix": "Guard в начале handle_message: if not update.message or not update.message.text: return",
     "status": "fixed",
-    "prevention": "Шаблон для группового режима: всегда guard на message.text в самом начале handler"
+    "prevention": "Шаблон для группового режима: всегда guard на message.text в самом начале handler",
+    "cause": "PTB Update может содержать не только текстовые сообщения — обращение к update.message.text без проверки типа роняет бот",
+    "tag": "system"
   },
   {
     "id": 23,
@@ -296,7 +340,9 @@
     "why_architecture": "Batch изменений в Railway невозможен — каждое изменение переменной триггерит деплой. Боты с частыми env changes не должны иметь стартовые уведомления",
     "fix": "Убрать стартовое tg() сообщение. Уведомления только при реальных событиях",
     "status": "fixed",
-    "prevention": "Правило: никаких стартовых Telegram уведомлений в ботах которые могут часто рестартовать. Batch env изменения в одну операцию"
+    "prevention": "Правило: никаких стартовых Telegram уведомлений в ботах которые могут часто рестартовать. Batch env изменения в одну операцию",
+    "cause": "Стартовое уведомление в on_startup отправлялось при каждом перезапуске — каждое изменение env var триггерит Railway редеплой",
+    "tag": "system"
   },
   {
     "id": 24,
@@ -309,7 +355,9 @@
     "why_architecture": "Шаблон бота использует глобальный claude объект. Если handle_task использует другую переменную — молчаливый баг до первого вызова",
     "fix": "Заменить _client.messages.create() на claude.messages.create() в handle_task",
     "status": "fixed",
-    "prevention": "В HTTP handlers использовать только claude (глобальный клиент) или process(). Функцию _call_llm вызывать только внутри process()"
+    "prevention": "В HTTP handlers использовать только claude (глобальный клиент) или process(). Функцию _call_llm вызывать только внутри process()",
+    "cause": "В HTTP handler использовался _client (глобальная переменная Telethon) вместо локального anthropic.AsyncAnthropic()",
+    "tag": "system"
   },
   {
     "id": 25,
@@ -322,7 +370,9 @@
     "why_architecture": "Дубль урока #22 с другим проявлением. Системная проблема: шаблон не готов к группе",
     "fix": "if not msg: return — сразу после msg = update.message.text",
     "status": "fixed",
-    "prevention": "Шаблон должен включать None guard для message.text. Добавить в new_bot_template.py"
+    "prevention": "Шаблон должен включать None guard для message.text. Добавить в new_bot_template.py",
+    "cause": "Telegram доставляет фото/стикеры/голосовые как отдельные Update типы — message.text = None для не-текстовых сообщений",
+    "tag": "system"
   },
   {
     "id": 26,
@@ -335,7 +385,9 @@
     "why_architecture": "Side effects (дорогие операции) не должны зависеть от случайного ответа в группе. Это нарушение принципа наименьшего удивления",
     "fix": "if wants_image(msg) and not is_group: — image generation только в личных чатах",
     "status": "fixed",
-    "prevention": "При расширении бота на группу: аудит всех side effects. Дорогие/необратимые операции — только по явному запросу, не при случайном ответе"
+    "prevention": "При расширении бота на группу: аудит всех side effects. Дорогие/необратимые операции — только по явному запросу, не при случайном ответе",
+    "cause": "Детект wants_image() работал на основе ключевых слов — в группе любой участник мог случайно триггернуть генерацию",
+    "tag": "system"
   },
   {
     "id": 27,
@@ -348,7 +400,9 @@
     "why_architecture": "Schedulers в asyncio запускаются при старте процесса. Railway перезапускает сервисы (деплои, watchdog). Scheduler должен быть устойчив к рестарту в любой момент суток",
     "fix": "target += timedelta(days=1). Commit: 983b2c3ba3 в unperson22-alt/doctor-bot",
     "status": "fixed",
-    "prevention": "Для дат всегда timedelta, никогда replace(day=N+1). Schedulers тестировать с симуляцией рестарта после trigger-времени"
+    "prevention": "Для дат всегда timedelta, никогда replace(day=N+1). Schedulers тестировать с симуляцией рестарта после trigger-времени",
+    "cause": "datetime.replace(day=day+1) не работает для конца месяца и не переносит месяц — нужен timedelta",
+    "tag": "system"
   },
   {
     "id": 28,
@@ -361,7 +415,9 @@
     "why_architecture": "В Telegram каждый бот = отдельный аккаунт со своим токеном. Чтобы сообщение пришло от Билли — нужно использовать токен Билли. Один эндпоинт не может отправлять от имени всех ботов",
     "fix": "Добавить /send эндпоинт к каждому боту (использует собственный токен). /post_raw у Силли теперь проксирует запрос на /send нужного бота по BOT_URLS",
     "status": "fixed",
-    "prevention": "Для отправки от имени конкретного бота: всегда проксировать запрос к этому боту, не использовать чужой токен. Архитектурный принцип: каждый бот владеет своим токеном"
+    "prevention": "Для отправки от имени конкретного бота: всегда проксировать запрос к этому боту, не использовать чужой токен. Архитектурный принцип: каждый бот владеет своим токеном",
+    "cause": "/post_raw принимал bot_name параметр но игнорировал его — использовал глобальный объект бота вместо lookup по имени",
+    "tag": "system"
   },
   {
     "id": 29,
@@ -374,7 +430,9 @@
     "why_architecture": "handle_natural_language — большая функция (3000+ строк) с десятками переменных. Конфликт имён между глобальным bot объектом и loop variable неочевиден и не ловится линтером без запуска",
     "fix": "Переименовать: for bot in [...] → for bot_key in [...]. Коммит b603a91a1d",
     "status": "fixed",
-    "prevention": "Зарезервированные имена глобальных объектов (bot, redis, claude) никогда не использовать как loop variables или локальные переменные внутри функций где используется глобальный объект"
+    "prevention": "Зарезервированные имена глобальных объектов (bot, redis, claude) никогда не использовать как loop variables или локальные переменные внутри функций где используется глобальный объект",
+    "cause": "Python: переменная цикла for bot in [...] маскирует глобальную переменную bot в том же scope",
+    "tag": "system"
   },
   {
     "id": 30,
@@ -387,72 +445,88 @@
     "why_architecture": "Боты офиса используют Bot API, а не MTProto. Для операций требующих прав пользователя нужен отдельный Telethon клиент через get_telethon_client()",
     "fix": "Использовать Telethon userbot: tg_cl = await get_telethon_client() → get_messages(bot_entity) → delete_messages(). Бот ищет диалог с самим собой через entity бота",
     "status": "fixed",
-    "prevention": "Любое удаление чужих сообщений — только через Telethon. Bot API deleteMessage работает только для собственных сообщений бота"
+    "prevention": "Любое удаление чужих сообщений — только через Telethon. Bot API deleteMessage работает только для собственных сообщений бота",
+    "cause": "Telegram Bot API deleteMessage работает только для сообщений самого бота — чужие сообщения может удалить только Telethon userbot (MTProto)",
+    "tag": "system"
   },
   {
-    "id": "REPO-001",
+    "id": 31,
     "date": "2026-05-28",
     "symptom": "Силли не может найти репо bot-name при задачах с маркетинговыми или trading ботами",
     "cause": "Боты в dept-монорепо живут в папках, а не в отдельных репозиториях",
     "context": "ray-bot задача завершилась 404 — unperson22-alt/ray-bot не существует",
     "fix": "Маркетинговые боты: unperson22-alt/marketing-dept/ray/, marty/, nelli/, copy/, lex/. Trading: unperson22-alt/trading-dept. Если бот не найден как репо — искать в dept-монорепо.",
     "status": "fixed",
-    "prevention": "Перед 404 — проверить marketing-dept и trading-dept монорепо"
+    "prevention": "Перед 404 — проверить marketing-dept и trading-dept монорепо",
+    "title": "dept-монорепо: боты в папках, не отдельных репозиториях",
+    "tag": "system"
   },
   {
-    "id": "GITHUB-001",
+    "id": 32,
     "date": "2026-05-28",
     "symptom": "GitHub API возвращает 404 при попытке создать файл — URL содержит дублированный org: unperson22-alt/unperson22-alt/...",
     "cause": "Силли формирует путь как org + full_repo_path вместо просто repo_name/path",
     "context": "Задача создать family-dept/README.md — Силли обратилась по URL /repos/unperson22-alt/unperson22-alt/contents/family-dept/README.md",
     "fix": "GitHub API путь: /repos/{owner}/{repo}/contents/{path}. owner=unperson22-alt, repo=family-dept, path=README.md. Никогда не включать owner в repo или path.",
     "status": "fixed",
-    "prevention": "Перед GitHub API вызовом проверять: repo содержит только имя репо (без org), path не начинается с org или repo."
+    "prevention": "Перед GitHub API вызовом проверять: repo содержит только имя репо (без org), path не начинается с org или repo.",
+    "title": "GitHub API путь: owner/repo/contents/path, не org/bot-name",
+    "tag": "system"
   },
   {
-    "id": "CILLY-001",
+    "id": 33,
     "date": "2026-05-28",
     "symptom": "HTTP /task возвращает 500 на сообщениях длиннее ~200 символов",
     "cause": "1) max_tokens=1024 — Claude обрезает ответ на длинных задачах. 2) r.content[0].text — падает если Claude вернул tool_use block вместо text. 3) Нет try/except в handle_task",
     "fix": "1) max_tokens 1024→4096. 2) text = next((b.text for b in r.content if hasattr(b, 'text')), '[нет текста]'). 3) try/except в handle_task. ВНИМАНИЕ: client = anthropic.Anthropic() — синхронный, await НЕ нужен.",
     "status": "fixed",
-    "prevention": "Перед добавлением await проверить тип клиента: Anthropic() = sync, AsyncAnthropic() = async. Не менять await без проверки инициализации."
+    "prevention": "Перед добавлением await проверить тип клиента: Anthropic() = sync, AsyncAnthropic() = async. Не менять await без проверки инициализации.",
+    "title": "max_tokens=1024 обрезает ответ + корректный парсинг content блоков",
+    "tag": "system"
   },
   {
-    "id": "SHARED-001",
+    "id": 34,
     "date": "2026-05-28",
     "symptom": "Все боты на ai-office-shared v0.1.9 падают с ImportError при запуске",
     "cause": "В __init__.py добавлен auto-import impact_client который использует 'requests' — а requests нет в зависимостях пакета. При любом from ai_office_shared.shared import X весь пакет падает.",
     "fix": "1) Убрать auto-import из __init__.py. 2) В impact_client.py заменить requests на httpx (httpx уже есть у всех ботов). 3) Bump до v0.1.10. 4) Обновить requirements.txt у всех ботов.",
     "status": "fixed",
-    "prevention": "Перед добавлением импорта в __init__.py проверить: есть ли все зависимости нового модуля в pyproject.toml пакета. Никогда не делать eager import в __init__.py для модулей с внешними зависимостями."
+    "prevention": "Перед добавлением импорта в __init__.py проверить: есть ли все зависимости нового модуля в pyproject.toml пакета. Никогда не делать eager import в __init__.py для модулей с внешними зависимостями.",
+    "title": "Auto-import в __init__.py роняет все боты при отсутствии зависимости",
+    "tag": "system"
   },
   {
-    "id": "BOT-REGISTRY-001",
+    "id": 35,
     "date": "2026-05-28",
     "symptom": "Силли ищет репозитории с неправильными именами (ai-office, silly-bot, silly-office) когда нужны конкретные боты",
     "cause": "Силли не знает маппинг бот → репозиторий",
     "fix": "Реестр: billy→billy-bot, kriss→kriss-bot, milly→milly-bot, villy→villy-bot, gosling→gosling-bot, ellis/mama→mama-bot, prophet→prophet-bot, pilly→pilly-bot, dilly/doctor→dilly-bot, tilly→tilly-bot, filly→filly-bot, sillie→cilly-bot (с). Маркетинг: marketing-dept/ray/, marketing-dept/nelli/, marketing-dept/marty/ и тд. Trading: trading-dept/. Family: family-dept/.",
     "status": "documented",
-    "prevention": "Перед поиском файла в репо — проверить этот реестр. Репо называется {bot}-bot, не {bot}-office или ai-{bot}."
+    "prevention": "Перед поиском файла в репо — проверить этот реестр. Репо называется {bot}-bot, не {bot}-office или ai-{bot}.",
+    "title": "Реестр бот→репо обязателен в CHAT_PROMPT Силли",
+    "tag": "system"
   },
   {
-    "id": "CILLY-002",
+    "id": 36,
     "date": "2026-05-28",
     "symptom": "Силли ищет RAILWAY_TOKEN в GitHub репозиториях (silli-config, silli-tools) и не находит",
     "cause": "Силли не знает что Railway токен доступен как переменная окружения через os.getenv, а не хранится в GitHub",
     "fix": "RAILWAY_TOKEN_VLAD доступен через os.getenv('RAILWAY_TOKEN_VLAD'). В coder.py уже есть RAILWAY_TOKEN = os.getenv('RAILWAY_TOKEN_VLAD') or os.getenv('RAILWAY_TOKEN'). Для Railway API использовать функцию railway_graphql(query).",
     "status": "fixed",
-    "prevention": "Никогда не искать секреты/токены в GitHub репозиториях. Все токены — в env переменных Railway. Проверять через os.getenv()."
+    "prevention": "Никогда не искать секреты/токены в GitHub репозиториях. Все токены — в env переменных Railway. Проверять через os.getenv().",
+    "title": "RAILWAY_TOKEN доступен через os.getenv, не из GitHub",
+    "tag": "system"
   },
   {
-    "id": "CILLY-003",
+    "id": 37,
     "date": "2026-05-28",
     "symptom": "Силли пишет в офис каждый промежуточный шаг задачи — засоряет чат",
     "cause": "Нет правила когда писать в офис",
     "fix": "Писать в офис ТОЛЬКО финальный отчёт (успех или ошибка). Промежуточные шаги — только в логи.",
     "status": "fixed",
-    "prevention": "Правило: send_to_group() вызывать максимум 1-2 раза за задачу — в начале (если задача длинная) и в конце."
+    "prevention": "Правило: send_to_group() вызывать максимум 1-2 раза за задачу — в начале (если задача длинная) и в конце.",
+    "title": "send_to_group() только финальный результат, не промежуточные шаги",
+    "tag": "system"
   },
   {
     "id": 38,
@@ -460,7 +534,12 @@
     "title": "confidence как строка вместо числа",
     "bug": "float(intent_data.get(\"confidence\", 1.0)) падает с ValueError если Claude вернул \"low\"/\"medium\"/\"high\" вместо числа",
     "fix": "isinstance check + маппинг: {\"high\":0.9,\"medium\":0.6,\"low\":0.3}.get(str(v).lower(),0.5)",
-    "why_architecture": "Claude не гарантирует тип поля в JSON-ответе — всегда защищать парсинг через fallback"
+    "why_architecture": "Claude не гарантирует тип поля в JSON-ответе — всегда защищать парсинг через fallback",
+    "symptom": "LLM возвращает confidence как строку ('high'/'medium'/'low') — код ожидал float → TypeError при сравнении",
+    "cause": "Claude API не гарантирует тип поля — JSON поле может быть строкой или числом в зависимости от промпта",
+    "prevention": "Для любого числового поля из LLM: isinstance check + маппинг строк в числа",
+    "status": "fixed",
+    "tag": "cilly"
   },
   {
     "id": 39,
@@ -468,7 +547,12 @@
     "title": "web_search обрывает ответ при stop_reason=tool_use",
     "bug": "process() делал один вызов к Claude. Если Claude использовал web_search — stop_reason=tool_use, text пустой или обрезанный",
     "fix": "Multi-turn цикл: после tool_use собирать tool_result блоки и делать повторный вызов до stop_reason=end_turn",
-    "why_architecture": "Любой инструментный вызов (tools=[...]) требует multi-turn — одиночный вызов работает только для простых ответов без tool_use"
+    "why_architecture": "Любой инструментный вызов (tools=[...]) требует multi-turn — одиночный вызов работает только для простых ответов без tool_use",
+    "symptom": "web_search tool_use обрывает ответ — stop_reason=tool_use, финального текста нет",
+    "cause": "Anthropic API при tool_use останавливается и ждёт tool_result — однократный вызов не получает финальный ответ",
+    "prevention": "При использовании tools: всегда multi-turn цикл до stop_reason=end_turn",
+    "status": "fixed",
+    "tag": "cilly"
   },
   {
     "title": "HTTP сервер не стартовал — недостижимый код после return",
@@ -476,6 +560,10 @@
     "cause": "HTTP-старт (app_http, runner, TCPSite, ptb) находился внутри handler-функции ПОСЛЕ return — недостижимый код. main() завершалась сразу после Redis connected не запустив HTTP-сервер.",
     "context": "kriss-bot. При рефакторинге handle_reply() вставили перед HTTP-стартом. Railway деплой показывает SUCCESS даже если порт не слушается.",
     "fix": "Перенести app_http/runner/TCPSite/ptb в main(). Handler-функции должны быть чистыми — только обработка запроса. Commit 61a3deb2.",
-    "how_to_avoid": "После любого рефакторинга bot.py — проверять что весь HTTP-старт и PTB инициализация всегда внутри main(). SSL connect без HTTP ответа = HTTP сервер не запущен (не Railway outage). Railway SUCCESS не гарантирует что порт слушается."
+    "how_to_avoid": "После любого рефакторинга bot.py — проверять что весь HTTP-старт и PTB инициализация всегда внутри main(). SSL connect без HTTP ответа = HTTP сервер не запущен (не Railway outage). Railway SUCCESS не гарантирует что порт слушается.",
+    "id": 40,
+    "prevention": "HTTP-старт (app_http, runner, TCPSite, ptb) помещать после всей инициализации — никакого кода после их запуска",
+    "status": "fixed",
+    "tag": "cilly"
   }
 ]
