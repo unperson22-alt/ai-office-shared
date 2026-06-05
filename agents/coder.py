@@ -2218,7 +2218,7 @@ async def railway_create_service(repo_name: str, bot_display_name: str, variable
     return {"service_id": service_id}
 
 
-async def handle_natural_language(message_text: str, chat_id: int, reply_func, history: list = None):
+async def handle_natural_language(message_text: str, chat_id: int, reply_func, history: list = None, silent: bool = False):
     """Process any natural language request — detect intent and execute."""
     # Читаем ops.md — лог последних действий Claude и Силли
     # Это даёт Силли контекст о том что уже было сделано
@@ -3286,27 +3286,35 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                     steps_log.append({"action": f"push_file({a_repo}/{a_path})", "result": f"ERROR: {e}"})
 
             elif action == "send_messages":
-                a_chat = action_data.get("chat_id", -5194783850)
-                texts = action_data.get("texts", [])
-                sent = 0
-                import asyncio as _asyncio
-                for t in texts[:5]:
-                    try:
-                        await _GLOBAL_BOT.send_message(chat_id=int(a_chat), text=str(t))
-                        sent += 1
-                        await _asyncio.sleep(0.5)
-                    except Exception:
-                        pass
-                steps_log.append({"action": f"send_messages({a_chat})", "result": f"sent {sent}/{len(texts)}"})
+                # Заблокировано когда source=CLAUDE — результат только в HTTP ответе
+                if silent:
+                    steps_log.append({"action": "send_messages", "result": "SKIPPED (silent mode)"})
+                else:
+                    a_chat = action_data.get("chat_id", -5194783850)
+                    texts = action_data.get("texts", [])
+                    sent = 0
+                    import asyncio as _asyncio
+                    for t in texts[:5]:
+                        try:
+                            await _GLOBAL_BOT.send_message(chat_id=int(a_chat), text=str(t))
+                            sent += 1
+                            await _asyncio.sleep(0.5)
+                        except Exception:
+                            pass
+                    steps_log.append({"action": f"send_messages({a_chat})", "result": f"sent {sent}/{len(texts)}"})
 
             elif action == "send_message":
-                a_chat = action_data.get("chat_id", -5194783850)
-                a_text = action_data.get("text", "")
-                try:
-                    await _GLOBAL_BOT.send_message(chat_id=int(a_chat), text=a_text)
-                    steps_log.append({"action": f"send_message({a_chat})", "result": "OK"})
-                except Exception as e:
-                    steps_log.append({"action": f"send_message({a_chat})", "result": f"ERROR: {e}"})
+                # Заблокировано когда source=CLAUDE — результат только в HTTP ответе
+                if silent:
+                    steps_log.append({"action": "send_message", "result": "SKIPPED (silent mode)"})
+                else:
+                    a_chat = action_data.get("chat_id", -5194783850)
+                    a_text = action_data.get("text", "")
+                    try:
+                        await _GLOBAL_BOT.send_message(chat_id=int(a_chat), text=a_text)
+                        steps_log.append({"action": f"send_message({a_chat})", "result": "OK"})
+                    except Exception as e:
+                        steps_log.append({"action": f"send_message({a_chat})", "result": f"ERROR: {e}"})
 
             else:
                 steps_log.append({"action": action, "result": "UNKNOWN ACTION"})
@@ -3989,7 +3997,9 @@ async def _handle_cilly_task_inner(data):
     text    = data.get("message", "")
     chat_id = data.get("chat_id", "")   # нет дефолта — без chat_id шлём только JSON
     agent   = data.get("agent", "Unknown")
-    silent  = data.get("silent", False)  # явный флаг тишины
+    source  = data.get("source", "")
+    # source=CLAUDE → полная тишина: не пишем ни в группу ни в личку
+    silent  = data.get("silent", False) or source.upper() == "CLAUDE"
 
     responses = []
 
@@ -4044,7 +4054,7 @@ async def _handle_cilly_task_inner(data):
         responses.append(status)
         return web.json_response({"status": "ok", "responses": responses})
 
-    await handle_natural_language(f"[{agent}] {text}", int(chat_id) if chat_id else 0, collect)
+    await handle_natural_language(f"[{agent}] {text}", int(chat_id) if chat_id else 0, collect, silent=silent)
     return web.json_response({"status": "ok", "responses": responses})
 
 
