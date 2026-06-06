@@ -965,6 +965,9 @@ async def post_lesson(title: str, symptom: str, cause: str, context: str, fix: s
                         title=title[:100])
         # Помечаем урок как уже опубликованный — дедупликация для post_lessons batch
         try:
+            # Не можем получить числовой id здесь (append_lesson_ai async)
+            # Записываем title-based ключ — post_lessons использует числовые id
+            # Оба sadd на SET, тип не конфликтует. Дедупликация по id в post_lessons.
             lesson_hash = str(abs(hash(f"{title}{symptom}")))
             await r.sadd("office:lessons:posted_ids", lesson_hash)
         except Exception:
@@ -2377,18 +2380,42 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         if pattern_match and not result:
             pattern_str = pattern_match.group(1)
             if not pattern_str.endswith("*"):
-                # Точный ключ — пробуем get и hgetall
-                val = await r.get(pattern_str)
-                if val:
-                    result[pattern_str] = val
-                else:
-                    hval = await r.hgetall(pattern_str)
-                    if hval:
-                        result[pattern_str] = hval
+                # Точный ключ — сначала проверяем тип чтобы не получить WRONGTYPE
+                try:
+                    key_type = await r.type(pattern_str)
+                    key_type = key_type.decode() if isinstance(key_type, bytes) else str(key_type)
+                    if key_type == "string":
+                        val = await r.get(pattern_str)
+                        result[pattern_str] = val
+                    elif key_type == "hash":
+                        result[pattern_str] = await r.hgetall(pattern_str)
+                    elif key_type == "set":
+                        members = await r.smembers(pattern_str)
+                        result[pattern_str] = sorted([m.decode() if isinstance(m, bytes) else m for m in members])
+                    elif key_type == "list":
+                        result[pattern_str] = await r.lrange(pattern_str, 0, 19)
+                    elif key_type == "zset":
+                        result[pattern_str] = await r.zrange(pattern_str, 0, 19, withscores=True)
+                    else:
+                        result[pattern_str] = f"key_type={key_type}"
+                except Exception as _e:
+                    result[pattern_str] = f"error: {_e}"
             else:
                 async for key in r.scan_iter(pattern_str):
-                    val = await r.get(key)
-                    result[key] = val or await r.hgetall(key)
+                    try:
+                        key_type = await r.type(key)
+                        key_type = key_type.decode() if isinstance(key_type, bytes) else str(key_type)
+                        if key_type == "string":
+                            result[key] = await r.get(key)
+                        elif key_type == "hash":
+                            result[key] = await r.hgetall(key)
+                        elif key_type == "set":
+                            members = await r.smembers(key)
+                            result[key] = sorted([m.decode() if isinstance(m, bytes) else m for m in members])
+                        elif key_type == "list":
+                            result[key] = await r.lrange(key, 0, 9)
+                    except Exception:
+                        pass
 
         # ── 6. если ничего не нашли — показываем ВСЁ ─────────────────────
         if not result:
