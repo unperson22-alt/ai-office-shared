@@ -4044,11 +4044,14 @@ async def handle_cilly_task(request):
 
 async def _handle_cilly_task_inner(data):
     text    = data.get("message", "")
-    chat_id = data.get("chat_id", "")   # нет дефолта — без chat_id шлём только JSON
     agent   = data.get("agent", "Unknown")
     source  = data.get("source", "")
-    # source=CLAUDE → полная тишина: не пишем ни в группу ни в личку
+    # source=CLAUDE → полная тишина: не пишем промежуточные шаги ни в группу ни в личку
     silent  = data.get("silent", False) or source.upper() == "CLAUDE"
+    # chat_id: куда слать промежуточные reply_func ответы (только если НЕ silent)
+    # target_chat: явный параметр для операций (cleanup_group, post_lessons) — не зависит от silent
+    chat_id     = data.get("chat_id", "") if not silent else ""
+    target_chat = data.get("target_chat", "") or data.get("chat_id", "")
 
     responses = []
 
