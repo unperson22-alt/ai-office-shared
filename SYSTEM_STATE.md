@@ -4,8 +4,8 @@
 > деплой нового бота, смена Redis-контракта, обновление shared lib, закрытие уязвимости.
 > Формат обновления — в конце файла.
 
-**Последнее обновление:** 2026-06-05  
-**Версия shared lib:** v0.1.7  
+**Последнее обновление:** 2026-06-11  
+**Версия shared lib:** v0.1.15  
 **Активных ботов:** 10 (+1 роутер)  
 **GitHub org:** unperson22-alt  
 **Платформа:** Railway + Cloudflare Workers
@@ -55,7 +55,7 @@
 |**Филли**  |— (роутер)          |`фили` ¹                |filly-bot  |`5d61d403`|порт 8080, aiohttp                        |python-telegram-bot + aiohttp|
 |**Билли**  |`БИЛЛИ`             |`билли`                 |billy-bot  |`b441ce93`|billy-bot-production.up.railway.app       |python-telegram-bot          |
 |**Крисс**  |`КРИС`              |`крисс` ²               |kriss-bot  |`92f70bbb`|kriss-bot-production.up.railway.app       |python-telegram-bot          |
-|**Эллис**  |`ЭЛЛИС`             |`эллис`                 |mama-bot   |`fa7c87cf`|mama-bot-production.up.railway.app        |python-telegram-bot          |
+|**Эллис**  |`ЭЛЛИС`             |`эллис`                 |mama-bot (@ellice_mom_bot)|`2f647984`|ellice-mom-bot-production.up.railway.app  |python-telegram-bot          |
 |**Тилли**  |`ТИЛЛИ`             |`тилли`                 |tilly-bot  |`367e25d7`|tilly-bot-production.up.railway.app       |python-telegram-bot          |
 |**Милли**  |`МИЛЛИ`             |`милли`                 |milly-bot  |`db277aff`|milly-bot-production.up.railway.app       |python-telegram-bot          |
 |**Доктор** |`ДИЛЛИ`             |`доктор` ⚠              |dilly-bot  |`d949c4d2`|dilly-bot-production.up.railway.app       |python-telegram-bot          |
@@ -224,11 +224,11 @@
 | Ф3.3б: copy/lex SyntaxError (literal newline в строке) исправлен | ✅ Готово |
 | Ф3.3в: nelli/ray локальный log_event заменён на импорт из shared lib | ✅ Готово |
 | Ф3.3б: quality_keys_audit.py создан в scripts/ | ✅ Готово |
-| DATA-001: Доктор/Дилли рассинхрон задокументирован, аудит-скрипт готов | ⚠️ Требует запуска |
+| DATA-001: Доктор/Дилли рассинхрон — Redis аудит проведён, ключи office:quality:доктор/дилли отсутствуют, рассинхрона нет | ✅ Закрыто |
 | Villy/Gosling/Prophet — статус: активные официальные члены офиса | ✅ Подтверждено |
 
-**Shared lib v0.1.5** — текущая актуальная версия.  
-**Marketing-dept** теперь пишет в Redis через log_event (office:logs:нэлли, office:logs:рэй, office:logs:копи, office:logs:лекс).
+**Shared lib v0.1.15** — текущая актуальная версия.  
+**Marketing-dept** теперь пишет в Redis через log_event (office:logs:копи, office:logs:лекс). Нэлли и Рэй переехали в family-dept.
 
 ---
 
@@ -245,7 +245,7 @@
               └─ POST target_bot/task  { source: "ФИЛЛИ" }
                     ↓
          Глава отдела (опрашивает своих сам)
-         ├─ МАРТИ  → Рэй / Копи / Лекс / Нелли (внутри marketing-dept)
+         ├─ МАРТИ  → Копи / Лекс (внутри marketing-dept)
          ├─ ТИЛЛИ  → Чарт / Вайс / Леджер / Фир (внутри trading-dept)
          ├─ ДИЛЛИ  → (в будущем) своя команда
          └─ СИЛЛИ  → Claude Code субагент
@@ -263,7 +263,7 @@
 |---|---|---|
 | БИЛЛИ | billy-bot | Личный / дефолт |
 | КРИС | kriss-bot | Личный ассистент |
-| ГОСЛИНГ | gosling-bot | Группа Лука |
+| ГОСЛИНГ | gosling-bot | Чат-персонаж (Billie-чат) |
 | ЭЛЛИС | mama-bot | Семейный мост |
 | ТИЛЛИ | tilly-bot | Глава трейдинг-отдела |
 | ДИЛЛИ | doctor-bot | Глава медотдела |
@@ -343,7 +343,7 @@ family-dept       — Семья          [создан 2026-05-26]
 | awake-happiness | prophet-bot | prophet-bot-production-df65.up.railway.app | Решения |
 | trading-dept | tilly-bot | tilly-bot-production.up.railway.app | Глава трейдинга |
 | marketing-dept | marty-bot | marty-bot-production.up.railway.app | Глава маркетинга |
-| marketing-dept | ray-bot | ray-bot-production.up.railway.app | Контент |
+| family-dept | ray-bot | ray-bot-production.up.railway.app | Контент (семья) |
 | marketing-dept | copy-bot | copy-bot-production.up.railway.app | Копирайтер |
 | marketing-dept | lex-bot | lex-bot-production.up.railway.app | Юрист |
 | medical-dept | dilly-bot | dilly-bot-production-4a9b.up.railway.app | Глава медотдела |
