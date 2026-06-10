@@ -314,8 +314,9 @@
 | CLAUDE_WORK_PROTOCOL.md создан | ✅ |
 
 **Ожидает ручного действия:**
-- E2E тест с реальным DM (reply_chat_id != 0)
-- FILLY_URL в Railway Dashboard → marketing-dept (5 сервисов)
+- E2E тест с реальным DM (reply_chat_id != 0) — требует живого Telegram DM для проверки
+
+✅ FILLY_URL в marketing-dept (marty, copy, lex) — исправлено 2026-06-11, добавлен https://
 
 ---
 
