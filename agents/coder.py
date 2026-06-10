@@ -4306,6 +4306,29 @@ async def handle_redis(request):
         return web.json_response({"error": str(e)})
 
 
+async def handle_web_search(request):
+    """Shared web search endpoint for all office bots.
+    POST /web_search {"query": "...", "n": 5}
+    Auth: X-Auth-Token = Railway token.
+    Returns: {"results": [{"title": ..., "url": ..., "snippet": ...}]}
+    """
+    auth = request.headers.get("X-Auth-Token", "")
+    if not auth or auth != RAILWAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        body = await request.json()
+        query = body.get("query", "").strip()
+        n = int(body.get("n", 5))
+        if not query:
+            return web.json_response({"error": "query required"}, status=400)
+        from ai_office_shared.shared.web_search import web_search
+        results = await web_search(query, n)
+        return web.json_response({"results": results, "count": len(results)})
+    except Exception as e:
+        logger.error(f"[web_search] endpoint error: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def vietnam_cron_loop():
     """Триггерит vietnam-bot каждый день в 01:00 UTC."""
     import datetime
@@ -4350,6 +4373,7 @@ async def main():
     app.router.add_get("/health", handle_health)
     app.router.add_get("/envcheck", handle_envcheck)
     app.router.add_post("/redis", handle_redis)
+    app.router.add_post("/web_search", handle_web_search)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080)))
