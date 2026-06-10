@@ -14,5 +14,6 @@
     crypto       — get_price(), get_prices(), get_prices_text()
     currency     — get_rate(), get_rates(), get_rates_text()
     wiki         — wiki_summary(), wiki_search(), wiki_text()
+    elevenlabs   — text_to_voice(text) → bytes (mp3)
 """
 # Импорты по необходимости — from ai_office_shared.shared.X import Y
