@@ -21,6 +21,19 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# ── Anthropic server-side web search tool declaration ────────────────────────
+# Используется как tools= в messages.create() — Claude сам вызывает поиск.
+# Импортируй эту константу вместо хардкода в каждом боте:
+#   from ai_office_shared.shared.web_search import WEB_SEARCH_TOOLS
+WEB_SEARCH_TOOLS: list[dict] = [
+    {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
+]
+
+# Для случаев когда нужно ограничить до 3 (классификаторы, инсайты):
+WEB_SEARCH_TOOLS_LIGHT: list[dict] = [
+    {"type": "web_search_20250305", "name": "web_search", "max_uses": 3}
+]
+
 _DEFAULT_N = 5
 _TIMEOUT   = 15.0
 
