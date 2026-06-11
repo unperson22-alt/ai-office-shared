@@ -56,6 +56,8 @@
 |**Билли**  |`БИЛЛИ`             |`билли`                 |billy-bot  |`b441ce93`|billy-bot-production.up.railway.app       |python-telegram-bot          |
 |**Крисс**  |`КРИС`              |`крисс` ²               |kriss-bot  |`92f70bbb`|kriss-bot-production.up.railway.app       |python-telegram-bot          |
 |**Эллис**  |`ЭЛЛИС`             |`эллис`                 |ellice-bot |`2f647984`|ellice-bot-production.up.railway.app      |python-telegram-bot          |
+|**Нэлли**  |`НЭЛЛИ`             |`нэлли`                 |nelli-bot  |`6bfe9bc1`|nelli-bot-production.up.railway.app       |python-telegram-bot          |
+|**Рэй**    |`РЭЙ`               |`рэй`                   |ray-bot    |`8beda34a`|ray-bot-production.up.railway.app         |python-telegram-bot          |
 |**Тилли**  |`ТИЛЛИ`             |`тилли`                 |tilly-bot  |`367e25d7`|tilly-bot-production.up.railway.app       |python-telegram-bot          |
 |**Милли**  |`МИЛЛИ`             |`милли`                 |milly-bot  |`db277aff`|milly-bot-production.up.railway.app       |python-telegram-bot          |
 |**Доктор** |`ДИЛЛИ`             |`доктор`                |dilly-bot  |`d949c4d2`|dilly-bot-production.up.railway.app       |python-telegram-bot          |
@@ -68,7 +70,7 @@
 ¹ Филли-роутер не пишет quality-реакции — `office:quality:фили` всегда 0, это норма.  
 ² Uppercase агент — `КРИС` (одна С), lowercase quality-ключ — `крисс` (две С). Не путать.  
 ³ Гослинг на internal URL — доступен только внутри Railway-сети. Внешний curl не сработает.  
-⚠ Доктор — **неверифицированный рассинхрон**: health/routing пишется через `ДИЛЛИ`, а quality Филли читает через `доктор`. Бот (dilly-bot) может писать `office:quality:дилли`. Требует проверки через `quality_keys_audit.py`.  
+⁵ Доктор — рассинхрон BOT_URLS/quality-ключей проверен 2026-06-11: ключи `office:quality:доктор/дилли` отсутствуют, рассинхрона нет.  
 ⁴ Пророк не в METRICS_BOTS, quality не трекается.
 
 **Специальные пользователи:**
@@ -76,7 +78,7 @@
 |Переменная        |ID         |Роль                                          |
 |------------------|-----------|----------------------------------------------|
 |`YOUR_TELEGRAM_ID`|(из env)   |Влад — владелец, полный доступ                |
-|`LUK_USER_ID`     |`331989769`|Лук — особый гость, альтернативное приветствие|
+|`LUK_USER_ID`     |`675773302`|Лук — особый гость, альтернативное приветствие|
 
 -----
 
