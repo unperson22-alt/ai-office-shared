@@ -55,10 +55,10 @@
 |**Филли**  |— (роутер)          |`фили` ¹                |filly-bot  |`5d61d403`|порт 8080, aiohttp                        |python-telegram-bot + aiohttp|
 |**Билли**  |`БИЛЛИ`             |`билли`                 |billy-bot  |`b441ce93`|billy-bot-production.up.railway.app       |python-telegram-bot          |
 |**Крисс**  |`КРИС`              |`крисс` ²               |kriss-bot  |`92f70bbb`|kriss-bot-production.up.railway.app       |python-telegram-bot          |
-|**Эллис**  |`ЭЛЛИС`             |`эллис`                 |mama-bot (@ellice_mom_bot)|`2f647984`|ellice-mom-bot-production.up.railway.app  |python-telegram-bot          |
+|**Эллис**  |`ЭЛЛИС`             |`эллис`                 |ellice-bot |`2f647984`|ellice-bot-production.up.railway.app      |python-telegram-bot          |
 |**Тилли**  |`ТИЛЛИ`             |`тилли`                 |tilly-bot  |`367e25d7`|tilly-bot-production.up.railway.app       |python-telegram-bot          |
 |**Милли**  |`МИЛЛИ`             |`милли`                 |milly-bot  |`db277aff`|milly-bot-production.up.railway.app       |python-telegram-bot          |
-|**Доктор** |`ДИЛЛИ`             |`доктор` ⚠              |dilly-bot  |`d949c4d2`|dilly-bot-production.up.railway.app       |python-telegram-bot          |
+|**Доктор** |`ДИЛЛИ`             |`доктор`                |dilly-bot  |`d949c4d2`|dilly-bot-production.up.railway.app       |python-telegram-bot          |
 |**Вилли**  |`ВИЛЛИ`             |`вилли`                 |villy-bot  |`a5e37cc4`|villy-bot-production.up.railway.app       |python-telegram-bot          |
 |**Гослинг**|`ГОСЛИНГ`           |`гослинг`               |gosling-bot|`ed03c9d3`|gosling-bot-production.up.railway.app ³       |python-telegram-bot          |
 |**Силли**  |`СИЛЛИ`             |`силли`                 |ai-office-shared|`efa6bd21`|ai-office-shared-production.up.railway.app|aiogram 3.7 + Telethon       |
@@ -264,9 +264,9 @@
 | БИЛЛИ | billy-bot | Личный / дефолт |
 | КРИС | kriss-bot | Личный ассистент |
 | ГОСЛИНГ | gosling-bot | Чат-персонаж (Billie-чат) |
-| ЭЛЛИС | mama-bot | Семейный мост |
+| ЭЛЛИС | ellice-bot | Семейный мост |
 | ТИЛЛИ | tilly-bot | Глава трейдинг-отдела |
-| ДИЛЛИ | doctor-bot | Глава медотдела |
+| ДИЛЛИ | dilly-bot | Глава медотдела |
 | МАРТИ | marty-bot | Глава маркетинг-отдела |
 | СИЛЛИ | cilly-bot | Технический отдел |
 | МИЛЛИ | milly-bot | Бизнес/автоматизация |
