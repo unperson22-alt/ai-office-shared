@@ -96,7 +96,7 @@
 |`office:msg:{chat_id}:{msg_id}`|STRING|Каждый бот (`remember_my_message`)|Каждый бот (`reaction_owner`)       |из quality.py        |Имя бота lowercase — нужно для атрибуции реакции                          |
 |`office:logs:{bot}:{date}`     |LIST  |Каждый бот (`log_event`)          |Силли (`read_logs()`)               |7д                   |JSON события. `bot` — lowercase, `date` — `YYYY-MM-DD`. LPUSH + LTRIM 1000|
 |`office:members`               |STRING|Филли (`group_members_update`)    |Филли (`group_members_get`)         |30д                  |Текстовый профиль команды, генерируется Haiku раз в неделю               |
-|`office:mom_queue`             |LIST  |Эллис (`mama-bot`)                |Эллис (`/mention` endpoint)         |7д                   |JSON очередь сообщений мамы, сбрасывается при пинге из Филли             |
+|`office:mom_queue`             |LIST  |Эллис (`ellice-bot`)                |Эллис (`/mention` endpoint)         |7д                   |JSON очередь сообщений мамы, сбрасывается при пинге из Филли             |
 
 **Типичные события в `office:logs`:**
 `route_ok`, `route_miss`, `route_decision`, `message_received`, `response_sent`,
@@ -107,7 +107,7 @@
 ## Shared Library — ai_office_shared
 
 **Репо:** unperson22-alt/ai-office-shared (публичный)  
-**Установка:** `ai_office_shared @ git+https://github.com/unperson22-alt/ai-office-shared@v0.1.3`
+**Установка:** `ai_office_shared @ git+https://github.com/unperson22-alt/ai-office-shared@v0.1.15`
 
 |Модуль                |С версии|Что экспортирует                                                                                               |
 |----------------------|--------|---------------------------------------------------------------------------------------------------------------|
@@ -122,12 +122,12 @@
 
 > При любом касании бота по любой причине — **обязательно**:
 > 
-> 1. Поднять в `requirements.txt`: `ai_office_shared @ ...@v0.1.7`
+> 1. Поднять в `requirements.txt`: `ai_office_shared @ ...@v0.1.15`
 > 1. Заменить локальные копии на импорты из `ai_office_shared.shared`:
 >    `redis_get_history`, `redis_save_history`, `redis_get_notes`, `redis_add_note`,
 >    `auto_extract_interests`, `weekly_review`
 
-**Текущий статус миграции ботов:** все боты мигрированы на `v0.1.7` (2026-05-27).
+**Текущий статус миграции ботов:** все боты мигрированы на `v0.1.15` (2026-06-11).
 Включает: quality, redis_helpers, tasks, ollama. Локальные копии удалены.
 
 -----
@@ -270,7 +270,7 @@
 | ТИЛЛИ | tilly-bot | Глава трейдинг-отдела |
 | ДИЛЛИ | dilly-bot | Глава медотдела |
 | МАРТИ | marty-bot | Глава маркетинг-отдела |
-| СИЛЛИ | cilly-bot | Технический отдел |
+| СИЛЛИ | ai-office-shared | Технический отдел |
 | МИЛЛИ | milly-bot | Бизнес/автоматизация |
 | ВИЛЛИ | villy-bot | Дизайн |
 | ПРОРОК | prophet-bot | Сценарии/решения |
