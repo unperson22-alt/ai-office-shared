@@ -430,4 +430,20 @@ Framework: ptb 21.3 + aiohttp + claude-haiku-4-5. Задеплоены 2026-05-3
 | github_tools.py: fallback GH_PAT когда GITHUB_TOKEN не задан | ✅ |
 | Силли URL исправлен в BOT_URLS: cilly-bot → ai-office-shared | ✅ |
 | SYSTEM_STATE.md обновлён до актуального состояния | ✅ |
+## Рефакторинг 2026-06-11 (наведение порядка)
+
+| Что сделано | Статус |
+|---|---|
+| Shared lib версия: v0.1.7 → v0.1.15 (шапка + migration rule + статус) | ✅ |
+| DATA-001 Доктор/Дилли: Redis аудит проведён, рассинхрона нет, закрыто | ✅ |
+| Схема роутинга: убраны Рэй/Нэлли из команды Марти (они в family-dept) | ✅ |
+| Marketing-dept лог: убраны office:logs:нэлли/рэй | ✅ |
+| Ростер ботов: добавлены Нэлли и Рэй, исправлен Эллис URL/репо | ✅ |
+| Примечание Доктор ⚠: заменено на подтверждение отсутствия рассинхрона | ✅ |
+| LUK_USER_ID: исправлен 331989769 → 675773302 | ✅ |
+| BOT_URLS: doctor-bot → dilly-bot, mama-bot → ellice-bot | ✅ |
+| FILLY_URL marketing-dept (marty/copy/lex): добавлен https:// | ✅ |
+| office:mom_queue owner: mama-bot → ellice-bot | ✅ |
+| Структура Railway: ray-bot перенесён marketing → family | ✅ |
+| E2E тест DM | ⏳ Требует ручного теста |
 
