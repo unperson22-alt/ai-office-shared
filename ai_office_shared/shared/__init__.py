@@ -15,5 +15,6 @@
     currency     — get_rate(), get_rates(), get_rates_text()
     wiki         — wiki_summary(), wiki_search(), wiki_text()
     elevenlabs   — text_to_voice(text) → bytes (mp3)
+    dev_pipeline — run_dev_pipeline(task, repo, file_path, context, user_id) → dict
 """
 # Импорты по необходимости — from ai_office_shared.shared.X import Y
