@@ -3379,8 +3379,6 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
         Силли составляет план → Девви пишет код → Рикки review →
         Тести QA → Секки security → Скрибби docs → Силли деплоит.
         Каждый бот читает GitHub сам, получает артефакт предыдущего."""
-        import httpx as _httpx
-
         # ── 1. Силли составляет план ───────────────────────────────────────
         # Канонический список репо из SERVICES
         known_repos = sorted(set(repo_name for _, (repo_name, _) in SERVICES.items()))
@@ -3431,47 +3429,43 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             f"📋 ТЗ: {devvy_task[:200]}"
         )
 
-        # ── 2. Цепочка ────────────────────────────────────────────────────
-        DEV_CHAIN = [
-            (os.getenv("DEVVY_URL",  ""), "Девви",   "Напиши код по ТЗ"),
-            (os.getenv("RICKY_URL",  ""), "Рикки",   "Сделай code review"),
-            (os.getenv("TESTI_URL",  ""), "Тести",   "Протестируй и проверь"),
-            (os.getenv("SEKKY_URL",  ""), "Секки",   "Проведи security audit"),
-            (os.getenv("SCRIBBI_URL",""), "Скрибби", "Задокументируй изменения"),
-        ]
+        # ── 2. Параллельный пайплайн dev-dept ─────────────────────────────
+        # Девви → [Рикки ‖ Тести ‖ Секки] → Скрибби. Команда работает
+        # одновременно и видит действия друг друга через общий эфир задачи.
+        # Силли тоже публикует свои действия (план/деплой) — «включая Силли».
+        from ai_office_shared.shared.dev_pipeline import run_dev_pipeline
+        from ai_office_shared.shared.dev_activity import publish_activity
+        import uuid as _uuid
 
-        artifact  = ""   # артефакт (код/результат) передаётся по цепочке
-        results   = {}
-        uid       = int(os.getenv("YOUR_TELEGRAM_ID", "391077101"))
+        uid      = int(os.getenv("YOUR_TELEGRAM_ID", "391077101"))
+        _r_act   = await get_redis()
+        _task_id = _uuid.uuid4().hex[:12]
+        await publish_activity(_r_act, _task_id, "силли", "plan",
+                               f"{dev_repo or '—'}/{dev_file_path}: {devvy_task[:80]}")
 
-        async with _httpx.AsyncClient(timeout=90) as _hx:
-            for url, name, prefix in DEV_CHAIN:
-                if not url:
-                    results[name] = "⚠️ URL не задан"
-                    continue
-                try:
-                    payload = {
-                        "message":   f"{prefix}: {devvy_task}",
-                        "user_id":   uid,
-                        "repo":      dev_repo,
-                        "file_path": dev_file_path,
-                        "artifact":  artifact,   # результат предыдущего
-                        "context":   file_context,  # Силли передаёт код напрямую
-                        "source":    "СИЛЛИ",
-                    }
-                    resp = await _hx.post(f"{url}/task", json=payload)
-                    result = resp.json().get("response", "нет ответа") if resp.status_code == 200 else f"HTTP {resp.status_code}"
-                    results[name] = result
-                    artifact = result   # передаём следующему
-                    await reply_func(f"✅ {name} готов")
-                except Exception as e:
-                    results[name] = f"❌ {e}"
-                    logger.warning(f"[dev_task] {name} failed: {e}")
-                    # продолжаем цепочку — Рикки может работать без Девви если артефакт пустой
+        pipe = await run_dev_pipeline(
+            devvy_task,
+            repo=dev_repo,
+            file_path=dev_file_path,
+            context=file_context,
+            user_id=uid,
+            redis_client=_r_act,
+            task_id=_task_id,
+        )
+
+        # Человекочитаемые имена для итогового отчёта
+        results = {
+            "Девви":   pipe.get("devvy", "")   or "⚠️ нет ответа",
+            "Рикки":   pipe.get("ricky", "")   or "⚠️ нет ответа",
+            "Тести":   pipe.get("testi", "")   or "⚠️ нет ответа",
+            "Секки":   pipe.get("sekky", "")   or "⚠️ нет ответа",
+            "Скрибби": pipe.get("scribbi", "") or "⚠️ нет ответа",
+        }
+        await reply_func("✅ Команда отработала параллельно (Рикки ‖ Тести ‖ Секки)")
 
         # ── 3. Силли извлекает финальный код и деплоит ───────────────────
-        # Финальный код — из ответа Рикки (FINAL_CODE блок)
-        ricky_result = results.get("Рикки", "")
+        # Финальный код — из ревью Рикки (FINAL_CODE блок), иначе из кода Девви
+        ricky_result = pipe.get("final_code_artifact", "") or pipe.get("ricky", "")
         final_code   = ""
         if "```python" in ricky_result:
             cs = ricky_result.find("```python") + 9
@@ -3479,13 +3473,8 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             if ce > cs:
                 final_code = ricky_result[cs:ce].strip()
 
-        # Извлекаем commit_msg из Скрибби ДО деплоя
-        scribbi    = results.get("Скрибби", "")
-        commit_msg = ""
-        for _line in scribbi.splitlines():
-            if _line.startswith("COMMIT_MSG:"):
-                commit_msg = _line.replace("COMMIT_MSG:", "").strip()
-                break
+        # commit_msg уже извлечён пайплайном из ответа Скрибби
+        commit_msg = pipe.get("commit_msg", "")
 
         deploy_status = ""
         if final_code and dev_repo and dev_file_path:
@@ -3522,6 +3511,9 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             deploy_status = "ℹ️ Финальный код не найден в ответе Рикки — задеплой вручную"
         else:
             deploy_status = "ℹ️ Репо/файл не определены — задеплой вручную"
+
+        # Силли публикует финал в общий эфир — команда видит результат деплоя
+        await publish_activity(_r_act, _task_id, "силли", "deploy", deploy_status[:160])
 
         # ── 4. Итоговый отчёт ─────────────────────────────────────────────
         summary_parts = [f"🏁 Цепочка dev-dept завершена\n"]
