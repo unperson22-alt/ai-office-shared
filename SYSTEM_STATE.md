@@ -4,8 +4,8 @@
 > деплой нового бота, смена Redis-контракта, обновление shared lib, закрытие уязвимости.
 > Формат обновления — в конце файла.
 
-**Последнее обновление:** 2026-06-11  
-**Версия shared lib:** v0.1.15  
+**Последнее обновление:** 2026-06-13  
+**Версия shared lib:** v0.1.16  
 **Активных ботов:** 10 (+1 роутер)  
 **GitHub org:** unperson22-alt  
 **Платформа:** Railway + Cloudflare Workers
@@ -51,7 +51,7 @@
 ## Ростер ботов
 
 |Бот        |Uppercase (BOT_URLS)|Lowercase (quality-ключ)|Репо       |Railway ID|URL                                       |Framework                    |
-|-----------|--------------------|------------------------|-----------|----------|------------------------------------------|-----------------------------|
+|-----------|--------------------|------------------------|-----------|----------|------------------------------------------|--------------------------|
 |**Филли**  |— (роутер)          |`фили` ¹                |filly-bot  |`5d61d403`|порт 8080, aiohttp                        |python-telegram-bot + aiohttp|
 |**Билли**  |`БИЛЛИ`             |`билли`                 |billy-bot  |`b441ce93`|billy-bot-production.up.railway.app       |python-telegram-bot          |
 |**Крисс**  |`КРИС`              |`крисс` ²               |kriss-bot  |`92f70bbb`|kriss-bot-production.up.railway.app       |python-telegram-bot          |
@@ -107,7 +107,7 @@
 ## Shared Library — ai_office_shared
 
 **Репо:** unperson22-alt/ai-office-shared (публичный)  
-**Установка:** `ai_office_shared @ git+https://github.com/unperson22-alt/ai-office-shared@v0.1.15`
+**Установка:** `ai_office_shared @ git+https://github.com/unperson22-alt/ai-office-shared@v0.1.16`
 
 |Модуль                |С версии|Что экспортирует                                                                                               |
 |----------------------|--------|---------------------------------------------------------------------------------------------------------------|
@@ -122,13 +122,13 @@
 
 > При любом касании бота по любой причине — **обязательно**:
 > 
-> 1. Поднять в `requirements.txt`: `ai_office_shared @ ...@v0.1.15`
+> 1. Поднять в `requirements.txt`: `ai_office_shared @ ...@v0.1.16`
 > 1. Заменить локальные копии на импорты из `ai_office_shared.shared`:
 >    `redis_get_history`, `redis_save_history`, `redis_get_notes`, `redis_add_note`,
 >    `auto_extract_interests`, `weekly_review`
 
-**Текущий статус миграции ботов:** все боты мигрированы на `v0.1.15` (2026-06-11).
-Включает: quality, redis_helpers, tasks, ollama. Локальные копии удалены.
+**Текущий статус миграции ботов:** все production-боты на `v0.1.15` (2026-06-11).
+Воркеры dev-dept (devvy, ricky, testi, sekky, scribbi) используют `v0.1.16` на feature-ветке `claude/stroy-dev-dept-j6q4o9`.
 
 -----
 
@@ -229,7 +229,7 @@
 | DATA-001: Доктор/Дилли рассинхрон — Redis аудит проведён, ключи office:quality:доктор/дилли отсутствуют, рассинхрона нет | ✅ Закрыто |
 | Villy/Gosling/Prophet — статус: активные официальные члены офиса | ✅ Подтверждено |
 
-**Shared lib v0.1.15** — текущая актуальная версия.  
+**Shared lib v0.1.15** — предыдущая версия.  
 **Marketing-dept** теперь пишет в Redis через log_event (office:logs:копи, office:logs:лекс). Нэлли и Рэй переехали в family-dept.
 
 ---
@@ -250,7 +250,7 @@
          ├─ МАРТИ  → Копи / Лекс (внутри marketing-dept)
          ├─ ТИЛЛИ  → Чарт / Вайс / Леджер / Фир (внутри trading-dept)
          ├─ ДИЛЛИ  → (в будущем) своя команда
-         └─ СИЛЛИ  → Claude Code субагент
+         └─ СИЛЛИ  → dev-dept цепочка (dev_task intent)
                     ↓ JSON { "response": "..." }
               Филли получает ответ
                     ↓ POST source_bot/reply  { chat_id, text, from_agent }
@@ -352,6 +352,11 @@ family-dept       — Семья          [создан 2026-05-26]
 | medical-dept | dilly-bot | dilly-bot-production-4a9b.up.railway.app | Глава медотдела |
 | family-dept | ellice-bot | ellice-bot-production.up.railway.app | Глава семьи |
 | family-dept | nelli-bot | nelli-bot-production.up.railway.app | Семейная группа |
+| dev-dept | devvy-bot | devvy-bot-production-9a4f.up.railway.app | Junior dev |
+| dev-dept | ricky-bot | ricky-bot-production-ab47.up.railway.app | Code review |
+| dev-dept | testi-bot | testi-bot-production-9cab.up.railway.app | QA/тестирование |
+| dev-dept | sekky-bot | sekky-bot-production-9718.up.railway.app | Security audit |
+| dev-dept | scribbi-bot | scribbi-bot-production-9aa7.up.railway.app | Документация |
 
 ### Filly BOT_URLS (только главы отделов + личные)
 
@@ -376,7 +381,7 @@ Internal URL `redis.railway.internal:6379` доступен только из aw
 ### Изменения 2026-05-26 (реструктуризация)
 - Dilly переехал из awake-happiness → medical-dept (новый URL)
 - Ellice/mama-bot переехала из awake-happiness → family-dept (новый URL)
-- Nelli переехала из marketing-dept → family-dept
+- Nelli переехалась из marketing-dept → family-dept
 - Ellice = глава family-dept, роутит на Filly
 - Старые сервисы удалены из awake-happiness и marketing-dept
 
@@ -419,7 +424,7 @@ Internal URL `redis.railway.internal:6379` доступен только из aw
 | Секки | 664563e2 | sekky-bot-production-9718.up.railway.app | Security audit |
 | Скрибби | 618ca12f | scribbi-bot-production-9aa7.up.railway.app | Документация |
 
-Цепочка: Силли -> Девви -> Рикки -> Тести -> Секки -> Скрибби -> Силли
+Цепочка: Силли -> Девви -> Рикки -> Тести -> Секки -> Скрибби -> Силли  
 Framework: ptb 21.3 + aiohttp + claude-haiku-4-5. Задеплоены 2026-05-30.
 
 ## Рефакторинг 2026-06-05
@@ -447,3 +452,14 @@ Framework: ptb 21.3 + aiohttp + claude-haiku-4-5. Задеплоены 2026-05-3
 | Структура Railway: ray-bot перенесён marketing → family | ✅ |
 | E2E тест DM | ⏳ Требует ручного теста |
 
+## Рефакторинг 2026-06-13 (dev-dept воркеры + фиксы)
+
+| Что сделано | Статус |
+|---|---|
+| Shared lib версия: v0.1.15 → v0.1.16 (pyproject.toml) | ✅ |
+| dev-dept: Dockerfiles для всех 5 воркеров (devvy/ricky/testi/sekky/scribbi) | ✅ |
+| Воркеры обновлены на v0.1.16 в requirements.txt | ✅ |
+| SYSTEM_PROMPT воркеров улучшен: архитектура офиса, строгий формат ответа, haiku model | ✅ |
+| Силли coder.py BUG: commit_msg из Скрибби приходил с префиксом "COMMIT_MSG: " в git push | ✅ Исправлен (извлечение ДО деплоя) |
+| Пайплайн-тест (live): Девви→Рикки→Тести→Секки подтверждён рабочим | ✅ |
+| ВСЕ изменения на ветке `claude/stroy-dev-dept-j6q4o9` — ждут merge | ⏳ |
