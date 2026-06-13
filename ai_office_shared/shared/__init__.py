@@ -15,6 +15,7 @@
     currency     — get_rate(), get_rates(), get_rates_text()
     wiki         — wiki_summary(), wiki_search(), wiki_text()
     elevenlabs   — text_to_voice(text) → bytes (mp3)
-    dev_pipeline — run_dev_pipeline(task, repo, file_path, context, user_id) → dict
+    dev_pipeline — run_dev_pipeline(...) → dict (ПАРАЛЛЕЛЬНО: Девви → Рикки‖Тести‖Секки → Скрибби)
+    dev_activity — publish_activity()/read_activity() — общий эфир действий dev-dept
 """
 # Импорты по необходимости — from ai_office_shared.shared.X import Y
