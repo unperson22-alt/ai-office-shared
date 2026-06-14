@@ -2233,7 +2233,7 @@ async def railway_create_service(repo_name: str, bot_display_name: str, variable
     return {"service_id": service_id}
 
 
-async def handle_natural_language(message_text: str, chat_id: int, reply_func, history: list = None, silent: bool = False):
+async def handle_natural_language(message_text: str, chat_id: int, reply_func, history: list = None, silent: bool = False, repo_override: str = "", file_path_override: str = ""):
     """Process any natural language request — detect intent and execute."""
     # Читаем ops.md — лог последних действий Claude и Силли
     # Это даёт Силли контекст о том что уже было сделано
@@ -2285,7 +2285,9 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             return
 
     intent     = intent_data.get("intent", "answer")
-    repo       = intent_data.get("repo")
+    # Явный repo из payload (HTTP /task) приоритетнее догадки интента-LLM —
+    # иначе планировщик путал репо (tilly-trader ↔ tilly-bot).
+    repo       = repo_override or intent_data.get("repo")
     path       = intent_data.get("path")
     task       = intent_data.get("task", message_text)
     _conf_raw = intent_data.get("confidence", 1.0)
@@ -3407,7 +3409,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             plan = {}
 
         dev_repo      = repo or plan.get("repo") or ""
-        dev_file_path = plan.get("file_path") or "bot.py"
+        dev_file_path = file_path_override or plan.get("file_path") or "bot.py"
         # ТЗ для Девви = ОРИГИНАЛ задачи (авторитетно) + уточнение плана.
         # Не даём перефразу планировщика (Haiku/Ollama) затереть детали запроса —
         # из-за этого ТЗ искажалось ("подними порог до 9" вместо реальных правок).
@@ -4071,6 +4073,9 @@ async def _handle_cilly_task_inner(data):
     # target_chat: явный параметр для операций (cleanup_group, post_lessons) — не зависит от silent
     chat_id     = data.get("chat_id", "") if not silent else ""
     target_chat = data.get("target_chat", "") or data.get("chat_id", "")
+    # Явные repo/file_path из payload — прокидываем в планировщик (приоритетнее догадки интента)
+    payload_repo = data.get("repo", "")
+    payload_file = data.get("file_path", "")
 
     responses = []
 
@@ -4125,7 +4130,8 @@ async def _handle_cilly_task_inner(data):
         responses.append(status)
         return web.json_response({"status": "ok", "responses": responses})
 
-    await handle_natural_language(f"[{agent}] {text}", int(chat_id) if chat_id else 0, collect, silent=silent)
+    await handle_natural_language(f"[{agent}] {text}", int(chat_id) if chat_id else 0, collect, silent=silent,
+                                  repo_override=payload_repo, file_path_override=payload_file)
     return web.json_response({"status": "ok", "responses": responses})
 
 
