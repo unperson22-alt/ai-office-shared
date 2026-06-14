@@ -872,6 +872,46 @@ async def redeploy_service(service_id: str) -> bool:
         return False
 
 
+async def connect_repo(service_id: str, repo: str, branch: str = "main") -> bool:
+    """Привязать GitHub-репо к сервису и ВКЛЮЧИТЬ авто-деплой (serviceConnect).
+
+    Проверено 2026-06-14 на tilly-trader: чинит выключенный авто-деплой —
+    после этого push в branch снова автоматически катит деплой.
+    repo в формате 'owner/name'. (serviceInstanceRedeploy для нового кода НЕ годится —
+    пересобирает СТАРЫЙ коммит; выкат конкретного коммита — serviceInstanceDeployV2 + commitSha.)
+    """
+    try:
+        data = await railway_query("""
+            mutation($id: String!, $input: ServiceConnectInput!) {
+              serviceConnect(id: $id, input: $input) { id }
+            }
+        """, {"id": service_id, "input": {"repo": repo, "branch": branch}})
+        ok = "errors" not in data
+        if ok:
+            logger.info(f"connect_repo: auto-deploy enabled for {service_id} ({repo}@{branch})")
+        return ok
+    except Exception as e:
+        logger.error(f"connect_repo failed for {service_id}: {e}")
+        return False
+
+
+async def deploy_commit(service_id: str, commit_sha: str) -> str | None:
+    """Выкатить КОНКРЕТНЫЙ коммит (serviceInstanceDeployV2). Возвращает deploymentId или None.
+
+    Нужен когда авто-деплой выключен/недоступен, а код уже в GitHub.
+    """
+    try:
+        data = await railway_query("""
+            mutation($s: String!, $e: String!, $c: String!) {
+              serviceInstanceDeployV2(serviceId: $s, environmentId: $e, commitSha: $c)
+            }
+        """, {"s": service_id, "e": "2efaaf60-ba39-492c-bf86-007fd505493f", "c": commit_sha})
+        return data.get("data", {}).get("serviceInstanceDeployV2") if "errors" not in data else None
+    except Exception as e:
+        logger.error(f"deploy_commit failed for {service_id}: {e}")
+        return None
+
+
 # ── Ollama helper (silent fallback to Claude) ─────────────────────────────────
 async def _try_ollama(prompt: str, system: str, timeout: float = 20.0) -> str | None:
     """Пробует локальную Ollama. Возвращает текст или None при любой ошибке."""
