@@ -6,24 +6,58 @@
 
 ## Переменные окружения
 ```
-RAILWAY_TOKEN = из env (9cf51308-07ba-4161-b955-4a00d650c8da)
-PROJECT_ID    = 271b40b7-199a-429a-88ef-ca417f26a638
-ENV_ID        = 2efaaf60-ba39-492c-bf86-007fd505493f
+RAILWAY_TOKEN = из env (9cf51308-... в этом доке — УСТАРЕЛ, даёт "Not Authorized")
+PROJECT_ID    = 271b40b7-199a-429a-88ef-ca417f26a638   (проект "awake-happiness")
+ENV_ID        = 2efaaf60-ba39-492c-bf86-007fd505493f   (единственное окружение: production)
 ```
 
+> ⚠️ **Проверено 2026-06-14:** прямой Railway-токен из этого дока отвечает `Not Authorized`.
+> Рабочий путь — через **прокси Силли**: `POST /task {"message":"/railway <graphql>", "source":"CLAUDE"}`
+> на `ai-office-shared-production.up.railway.app` (у Силли в env лежит рабочий аккаунт-токен,
+> email `unperson22@gmail.com`, доступ ко всем проектам).
+
 ## Service ID по боту
+**ПРОВЕРЕНО 2026-06-14** через `project(id:271b40b7){services}` — проект awake-happiness, 14 сервисов:
 ```
-филли   = 5d61d403-feee-455e-9c0d-523f0e7c79d5
-билли   = b441ce93-9736-49b3-9b5d-d0c82e715b28
-крисс   = 92f70bbb-70ea-474c-be0d-5cc1c9bd8f4e
-эллис   = fa7c87cf-454c-4946-ab25-6a5091f0ac47
-тилли   = 367e25d7-8410-419d-896d-2cc86cd44efd
-милли   = db277aff-6638-4b4a-970e-b016bd753608
-доктор  = d949c4d2-59fa-4cbe-8bb8-a0589a476607
-вилли   = a5e37cc4-0a9f-4700-b6d3-d39b958ce0cb
-гослинг = ed03c9d3-e83f-4675-9f0a-a4d4fc622365
-силли   = efa6bd21-91d8-467f-8250-60f8a3853791
+# personal/основные боты (ID подтверждены):
+филли   = 5d61d403-feee-455e-9c0d-523f0e7c79d5   (filly-bot)
+билли   = b441ce93-9736-49b3-9b5d-d0c82e715b28   (billy-bot)
+крисс   = 92f70bbb-70ea-474c-be0d-5cc1c9bd8f4e   (kriss-bot)
+тилли   = 367e25d7-8410-419d-896d-2cc86cd44efd   (tilly-bot)
+милли   = db277aff-6638-4b4a-970e-b016bd753608   (milly-bot)
+вилли   = a5e37cc4-0a9f-4700-b6d3-d39b958ce0cb   (villy-bot)
+гослинг = ed03c9d3-e83f-4675-9f0a-a4d4fc622365   (gosling-bot)
+# добавлены 2026-06-14 (были не в скилле):
+tilly-trader    = 9f868f0c-9c94-4776-a2dc-86a30d812b92   ⚠️ AUTO-DEPLOY ВЫКЛ — катить вручную (см. ниже)
+logger-bot      = 3319eabd-5bcb-4e59-839e-4813f1e7ef33
+pilly-bot       = 5533bc5f-24aa-4079-903b-50bcde4cdd01
+prophet-bot     = 9db4108e-19f1-4c1f-a21c-3909442e137c
+watchdog-bot    = e23833d2-8a05-4749-adce-c856ec026927
+office-dashboard= 3dfc7336-2e91-4ade-950a-4f3d566baced
+# Redis        = b62bdd8d-237a-4f2b-b4dc-9fed787c168d
 ```
+**⚠️ ПРОТУХЛИ (не в активном списке проекта 271b40b7):**
+```
+силли   = efa6bd21-...  → резолвится в УДАЛЁННЫЙ сервис "cilly-bot-<UUID>". Реальный неизвестен.
+эллис   = fa7c87cf-...  → не в проекте awake-happiness.
+доктор  = d949c4d2-...  → не в проекте awake-happiness.
+```
+> **TODO:** Силли/Девви/dev-dept (devvy/ricky/testi/sekky/scribbi) — в ДРУГОМ Railway-проекте.
+> Через прокси перечислить проекты не удалось (project/workspace-запросы 400). Нужно достать
+> ID офисного проекта (напр. из env Силли `RAILWAY_PROJECT_ID`), затем `project(id){services}`.
+
+## Деплой конкретного коммита (когда auto-deploy ВЫКЛ)
+**Проверено 2026-06-14 на tilly-trader.** `serviceInstanceRedeploy` НЕ годится — пересобирает
+СТАРЫЙ (последний задеплоенный) коммит. Чтобы выкатить новый код:
+```graphql
+mutation{ serviceInstanceDeployV2(
+  serviceId:"<SVC>", environmentId:"2efaaf60-...", commitSha:"<полный SHA из git rev-parse>"
+)}   # возвращает deploymentId
+```
+Проверка: `deployments(first:1, input:{serviceId,environmentId}){edges{node{status meta}}}` →
+`meta.commitHash` должен совпасть с целевым SHA, `status` → SUCCESS.
+
+
 
 ## Алгоритм
 
