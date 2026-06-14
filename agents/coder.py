@@ -338,10 +338,14 @@ async def multi_file_refactor(
     try:
         response = await get_claude().messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=8000,
+            max_tokens=32000,   # было 8000 — полный файл в JSON усекался → битый код у Девви
             system=system_prompt,
             messages=[{"role": "user", "content": user_msg}],
         )
+        # Усечение по лимиту → честная ошибка, а НЕ молчаливый обрезанный файл
+        if getattr(response, "stop_reason", None) == "max_tokens":
+            return {"error": "Вывод обрезан по лимиту токенов: файл слишком большой "
+                             "для полной перезаписи. Нужна точечная правка, не перезапись целиком."}
         raw = response.content[0].text.strip()
         # Очищаем от markdown если есть
         if "```" in raw:
@@ -3402,9 +3406,13 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
         except Exception:
             plan = {}
 
-        dev_repo      = plan.get("repo") or repo or ""
+        dev_repo      = repo or plan.get("repo") or ""
         dev_file_path = plan.get("file_path") or "bot.py"
-        devvy_task    = plan.get("devvy_task") or task
+        # ТЗ для Девви = ОРИГИНАЛ задачи (авторитетно) + уточнение плана.
+        # Не даём перефразу планировщика (Haiku/Ollama) затереть детали запроса —
+        # из-за этого ТЗ искажалось ("подними порог до 9" вместо реальных правок).
+        _hint = (plan.get("devvy_task") or "").strip()
+        devvy_task    = task if not _hint else f"{task}\n\nУточнение плана: {_hint}"
 
         # Силли сама читает файл и передаёт контекст команде — надёжнее чем доверять Девви
         file_context = ""
