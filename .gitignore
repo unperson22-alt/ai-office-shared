@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+# Secrets — не коммитим
+.env
+.env.*
+!.env.example

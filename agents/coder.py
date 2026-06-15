@@ -1162,6 +1162,7 @@ HEALTH_URLS = {
     "villy-bot":        "https://villy-bot-production.up.railway.app/health",
     "milly-bot":        "https://milly-bot-production.up.railway.app/health",
     "tilly-bot":        "https://tilly-bot-production.up.railway.app/health",
+    "tilly-trader":     "https://tilly-trader-production.up.railway.app/health",
 }
 
 async def run_daily_audit() -> str:
@@ -2995,7 +2996,10 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
         try:
             import urllib.request as _ur
 
-            RAILWAY_TOKEN = "5245769f-c5db-4d2b-9256-4ce456d4218b"
+            RAILWAY_TOKEN = os.getenv("RAILWAY_TOKEN_VLAD") or os.getenv("RAILWAY_TOKEN") or ""
+            if not RAILWAY_TOKEN:
+                await reply_func("❌ RAILWAY_TOKEN не задан в окружении.")
+                return
             PROJECT_ID    = "271b40b7-199a-429a-88ef-ca417f26a638"
             ENV_ID        = "2efaaf60-ba39-492c-bf86-007fd505493f"
 
