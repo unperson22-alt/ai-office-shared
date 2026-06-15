@@ -38,7 +38,7 @@ _DEFAULT_N = 5
 _TIMEOUT   = 15.0
 
 _REDIS_PROXY = "https://ai-office-shared-production.up.railway.app/redis"
-_REDIS_TOKEN = "5245769f-c5db-4d2b-9256-4ce456d4218b"
+_REDIS_TOKEN = os.environ.get("REDIS_PROXY_TOKEN") or os.environ.get("RAILWAY_TOKEN", "")
 
 
 async def _get_secret(env_name: str, redis_key: str) -> str:
