@@ -1162,6 +1162,7 @@ HEALTH_URLS = {
     "villy-bot":        "https://villy-bot-production.up.railway.app/health",
     "milly-bot":        "https://milly-bot-production.up.railway.app/health",
     "tilly-bot":        "https://tilly-bot-production.up.railway.app/health",
+    "tilly-trader":     "https://tilly-trader-production.up.railway.app/health",
 }
 
 async def run_daily_audit() -> str:
