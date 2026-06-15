@@ -546,7 +546,12 @@ ANALYZER_PROMPT = """Анализатор багов Python/Telegram/Railway. JS
 {"is_bug":bool,"confidence":"high|low","bug_type":"crash|logic|config|network|unknown","description":"1-2 предл","affected_file":"path|null","fix_description":"конкретно","lesson_title":"","lesson_symptom":"","lesson_cause":"","lesson_fix":"","lesson_avoid":""}
 high=явный crash/NameError/ImportError/SyntaxError/KeyError→автофикс. low=логика/сеть→спросить."""
 
-FIXER_PROMPT = """Фиксер Python кода. Верни ТОЛЬКО полный исправленный файл целиком. Минимум изменений — только то что нужно для фикса. Сохраняй стиль оригинала. Без markdown, без объяснений."""
+FIXER_PROMPT = """Фиксер Python кода. Верни ТОЛЬКО полный исправленный файл целиком. Минимум изменений — только то что нужно для фикса. Сохраняй стиль оригинала. Без markdown, без объяснений.
+
+ЖЁСТКИЕ ПРАВИЛА (урок #5 — иначе бот крашится на старте):
+- НИКАКИХ side-effects на уровне модуля. Любое чтение env (os.environ[...] / os.getenv) и любые сетевые/Redis-соединения — ТОЛЬКО внутри функций или main(), не на верхнем уровне файла.
+- НЕ вводи новые обязательные переменные окружения, которых не было в оригинале. Не выдумывай имена переменных.
+- Не превращай файл бота в скрипт/утилиту — сохраняй его исходное назначение и точку входа."""
 
 
 # ── Railway API ───────────────────────────────────────────────────────────────
@@ -1019,8 +1024,25 @@ async def post_lesson(title: str, symptom: str, cause: str, context: str, fix: s
             pass
 
 
+async def outbound_paused() -> bool:
+    """Глобальный mute исходящих в офис-группу.
+    True если env CILLY_PAUSED ∈ {1,true,yes} ИЛИ выставлен Redis-флаг cilly:paused."""
+    if os.getenv("CILLY_PAUSED", "").lower() in ("1", "true", "yes"):
+        return True
+    try:
+        r = await get_redis()
+        if r and await r.get("cilly:paused"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 async def notify_office(text: str):
     if not OFFICE_CHAT_ID:
+        return
+    if await outbound_paused():
+        logger.info("notify_office: подавлено (CILLY_PAUSED/cilly:paused)")
         return
     try:
         sent = await bot.send_message(chat_id=OFFICE_CHAT_ID, text=text)
@@ -1700,9 +1722,27 @@ async def monitor_loop():
                     continue
                 error_logs = filtered_errors
 
-                # Дедупликация: хэш первых 3 строк ошибки
-                import hashlib
-                error_signature = hashlib.md5("\n".join(error_logs[:3]).encode()).hexdigest()
+                # Дедупликация: УСТОЙЧИВАЯ сигнатура (тип ошибки + файл + сообщение
+                # без чисел), чтобы один и тот же баг не пере-детектился из-за разных
+                # номеров строк/динамики и не обнулял fix_count по кругу.
+                import hashlib, re as _re
+                _err_text = "\n".join(error_logs)
+                _exc = _re.findall(r"\b([A-Za-z_]+(?:Error|Exception))\b", _err_text)
+                _files = _re.findall(r'File "[^"]*?([^"/\\]+\.py)"', _err_text)
+                _msg = ""
+                for _line in reversed(error_logs):
+                    if _exc and _exc[-1] in _line:
+                        _msg = _line
+                        break
+                _msg_norm = _re.sub(r"0x[0-9a-fA-F]+|\d+", "", _msg).strip()
+                _sig_basis = "|".join([
+                    _exc[-1] if _exc else "",
+                    _files[-1] if _files else "",
+                    _msg_norm,
+                ]).strip("|")
+                if not _sig_basis:  # фолбэк: нормализованный текст без чисел
+                    _sig_basis = _re.sub(r"0x[0-9a-fA-F]+|\d+", "", _err_text)[:500]
+                error_signature = hashlib.md5(_sig_basis.encode()).hexdigest()
                 now = time.time()
                 redis_key = f"seen_error:{service_id}:{error_signature}"
                 r = await get_redis()
@@ -2209,6 +2249,16 @@ async def railway_get_service_id(repo_name: str) -> str | None:
         if edge["node"]["name"] == repo_name:
             return edge["node"]["id"]
     return None
+
+async def railway_get_variables(service_id: str) -> dict:
+    """Прочитать переменные окружения сервиса Railway (для check_var)."""
+    data = await railway_graphql(
+        """query($proj: String!, $svc: String!, $env: String!) {
+             variables(projectId: $proj, serviceId: $svc, environmentId: $env)
+           }""",
+        {"proj": PROJECT_ID, "svc": service_id, "env": ENVIRONMENT_ID}
+    )
+    return (data.get("data") or {}).get("variables") or {}
 
 
 async def railway_get_bot_url(name_hint: str) -> str:
@@ -3294,21 +3344,27 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
 Доступные действия:
 - read_file: {"action":"read_file","repo":"...","path":"..."}
 - push_file: {"action":"push_file","repo":"...","path":"...","content":"...","message":"..."}
-- send_message: {"action":"send_message","chat_id":-5194783850,"text":"..."} — по умолчанию в ОФИС ГРУППУ (-5194783850), НЕ в личку
-- send_messages: {"action":"send_messages","chat_id":-5194783850,"texts":["msg1","msg2",...]} — батч, по умолчанию в офис группу до 5 сообщений за раз
+- check_var: {"action":"check_var","service":"billy-bot","name":"REDIS_PROXY_TOKEN","expected":"опц. ожидаемая строка"} — читает переменную окружения сервиса в Railway (значение вернётся ЗАМАСКИРОВАННЫМ)
+- send_message: {"action":"send_message","chat_id":-5194783850,"text":"..."} — в ОФИС ГРУППУ (-5194783850)
+- send_messages: {"action":"send_messages","chat_id":-5194783850,"texts":["msg1","msg2",...]} — батч до 5
 - done: {"action":"done","result":"итог для пользователя"}
 
 Правила:
 - Один JSON на шаг, без лишнего текста
+- НИКОГДА не проси у людей токены/секреты/пароли/ключи в чат. Нужно значение переменной сервиса — используй check_var. Не хватает данных — заверши done с кратким запросом и НЕ повторяй одно и то же действие.
+- Не больше 2 сообщений в группу за всю задачу.
 - Если нужно прочитать несколько файлов — читай по одному
-- done — когда задача полностью выполнена
-- Максимум 15 шагов"""
+- done — когда задача выполнена. Максимум 12 шагов."""
 
         steps_log = []
         context = task
-        max_steps = 30
+        max_steps = 12
         consecutive_failures = 0
         last_error = None
+        group_sends = 0           # анти-спам: сообщений в группу за задачу
+        sent_texts = set()        # дедуп одинаковых сообщений
+        _last_action_sig = None   # стоп-гард против зацикливания
+        _action_repeat = 0
 
         # agentic_task НЕ шлёт промежуточные шаги в чат — только финальный результат
         # silent_collect накапливает шаги в лог без отправки в группу
@@ -3344,6 +3400,17 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                 break
 
             action = action_data.get("action", "")
+
+            # Стоп-гард: одно и то же действие 3 раза подряд → зацикливание
+            _sig = json.dumps(action_data, sort_keys=True, ensure_ascii=False)[:300]
+            if _sig == _last_action_sig:
+                _action_repeat += 1
+            else:
+                _action_repeat = 0
+                _last_action_sig = _sig
+            if _action_repeat >= 2:
+                await reply_func("⚠️ Остановлено: повторяющееся действие (зацикливание).")
+                break
 
             # Выполняем действие
             if action == "done":
@@ -3386,35 +3453,80 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                     steps_log.append({"action": f"push_file({a_repo}/{a_path})", "result": f"ERROR: {e}"})
 
             elif action == "send_messages":
-                # Заблокировано когда source=CLAUDE — результат только в HTTP ответе
-                if silent:
-                    steps_log.append({"action": "send_messages", "result": "SKIPPED (silent mode)"})
+                # silent (source=CLAUDE) / пауза / лимит 2 за задачу / дедуп
+                if silent or await outbound_paused():
+                    steps_log.append({"action": "send_messages", "result": "SKIPPED (silent/paused)"})
+                elif group_sends >= 2:
+                    steps_log.append({"action": "send_messages", "result": "SUPPRESSED (лимит сообщений в группу)"})
                 else:
                     a_chat = action_data.get("chat_id", -5194783850)
                     texts = action_data.get("texts", [])
                     sent = 0
                     import asyncio as _asyncio
                     for t in texts[:5]:
+                        if group_sends >= 2 or str(t) in sent_texts:
+                            continue
                         try:
                             await _GLOBAL_BOT.send_message(chat_id=int(a_chat), text=str(t))
                             sent += 1
+                            group_sends += 1
+                            sent_texts.add(str(t))
                             await _asyncio.sleep(0.5)
                         except Exception:
                             pass
                     steps_log.append({"action": f"send_messages({a_chat})", "result": f"sent {sent}/{len(texts)}"})
 
             elif action == "send_message":
-                # Заблокировано когда source=CLAUDE — результат только в HTTP ответе
-                if silent:
-                    steps_log.append({"action": "send_message", "result": "SKIPPED (silent mode)"})
+                # silent (source=CLAUDE) / пауза / лимит 2 за задачу / дедуп
+                if silent or await outbound_paused():
+                    steps_log.append({"action": "send_message", "result": "SKIPPED (silent/paused)"})
+                elif group_sends >= 2 or action_data.get("text", "") in sent_texts:
+                    steps_log.append({"action": "send_message", "result": "SUPPRESSED (дубль/лимит)"})
                 else:
                     a_chat = action_data.get("chat_id", -5194783850)
                     a_text = action_data.get("text", "")
                     try:
                         await _GLOBAL_BOT.send_message(chat_id=int(a_chat), text=a_text)
+                        group_sends += 1
+                        sent_texts.add(a_text)
                         steps_log.append({"action": f"send_message({a_chat})", "result": "OK"})
                     except Exception as e:
                         steps_log.append({"action": f"send_message({a_chat})", "result": f"ERROR: {e}"})
+
+            elif action == "check_var":
+                a_service  = action_data.get("service", "")
+                a_name     = action_data.get("name", "")
+                a_expected = action_data.get("expected")
+                try:
+                    svc_id = next((sid for sid, (r, _) in SERVICES.items() if r == a_service), None)
+                    if not svc_id:
+                        svc_id = await railway_get_service_id(a_service)
+                    if not svc_id:
+                        raise Exception(f"сервис '{a_service}' не найден")
+                    vars_map = await railway_get_variables(svc_id)
+                    val = vars_map.get(a_name)
+                    if val is None:
+                        res = f"{a_name} НЕ задан на {a_service}"
+                    else:
+                        masked = (val[:4] + "…" + val[-4:]) if len(str(val)) > 8 else "***"
+                        res = f"{a_name} на {a_service} = {masked} (len={len(str(val))})"
+                        if a_expected is not None:
+                            res += f"; equals_expected={str(val) == str(a_expected)}"
+                    steps_log.append({"action": f"check_var({a_service}/{a_name})", "result": res})
+                    context += f"\n\n[check_var] {res}"
+                    consecutive_failures = 0
+                    last_error = None
+                except Exception as e:
+                    err_str = str(e)
+                    steps_log.append({"action": f"check_var({a_service}/{a_name})", "result": f"ERROR: {err_str}"})
+                    if err_str == last_error:
+                        consecutive_failures += 1
+                    else:
+                        consecutive_failures = 1
+                        last_error = err_str
+                    if consecutive_failures >= 3:
+                        await reply_func(f"❌ Задача остановлена: повторяющаяся ошибка — {err_str}")
+                        break
 
             else:
                 steps_log.append({"action": action, "result": "UNKNOWN ACTION"})
@@ -3997,6 +4109,28 @@ async def cmd_skip(message: Message):
         await message.answer(f"⏭️ Фикс `{fix_id}` пропущен.")
     else:
         await message.answer(f"❌ Фикс `{fix_id}` не найден.")
+
+
+@dp.message(F.text.startswith("/pause"))
+async def cmd_pause(message: Message):
+    """Мгновенно заглушить исходящие сообщения Силли в группу (kill-switch)."""
+    r = await get_redis()
+    if r:
+        await r.set("cilly:paused", "1")
+        await message.answer("⏸ Силли поставлена на паузу: исходящие в группу подавлены. /resume — снять.")
+    else:
+        await message.answer("⚠️ Redis недоступен. Поставь env CILLY_PAUSED=1 в Railway для остановки.")
+
+
+@dp.message(F.text.startswith("/resume"))
+async def cmd_resume(message: Message):
+    """Снять паузу."""
+    r = await get_redis()
+    if r:
+        await r.delete("cilly:paused")
+        await message.answer("▶️ Пауза снята. (Если стоит env CILLY_PAUSED — убери его в Railway.)")
+    else:
+        await message.answer("⚠️ Redis недоступен.")
 
 
 @dp.message(F.text.startswith("/update_all"))
