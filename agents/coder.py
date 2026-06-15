@@ -546,7 +546,12 @@ ANALYZER_PROMPT = """Анализатор багов Python/Telegram/Railway. JS
 {"is_bug":bool,"confidence":"high|low","bug_type":"crash|logic|config|network|unknown","description":"1-2 предл","affected_file":"path|null","fix_description":"конкретно","lesson_title":"","lesson_symptom":"","lesson_cause":"","lesson_fix":"","lesson_avoid":""}
 high=явный crash/NameError/ImportError/SyntaxError/KeyError→автофикс. low=логика/сеть→спросить."""
 
-FIXER_PROMPT = """Фиксер Python кода. Верни ТОЛЬКО полный исправленный файл целиком. Минимум изменений — только то что нужно для фикса. Сохраняй стиль оригинала. Без markdown, без объяснений."""
+FIXER_PROMPT = """Фиксер Python кода. Верни ТОЛЬКО полный исправленный файл целиком. Минимум изменений — только то что нужно для фикса. Сохраняй стиль оригинала. Без markdown, без объяснений.
+
+ЖЁСТКИЕ ПРАВИЛА (урок #5 — иначе бот крашится на старте):
+- НИКАКИХ side-effects на уровне модуля. Любое чтение env (os.environ[...] / os.getenv) и любые сетевые/Redis-соединения — ТОЛЬКО внутри функций или main(), не на верхнем уровне файла.
+- НЕ вводи новые обязательные переменные окружения, которых не было в оригинале. Не выдумывай имена переменных.
+- Не превращай файл бота в скрипт/утилиту — сохраняй его исходное назначение и точку входа."""
 
 
 # ── Railway API ───────────────────────────────────────────────────────────────
@@ -1700,9 +1705,27 @@ async def monitor_loop():
                     continue
                 error_logs = filtered_errors
 
-                # Дедупликация: хэш первых 3 строк ошибки
-                import hashlib
-                error_signature = hashlib.md5("\n".join(error_logs[:3]).encode()).hexdigest()
+                # Дедупликация: УСТОЙЧИВАЯ сигнатура (тип ошибки + файл + сообщение
+                # без чисел), чтобы один и тот же баг не пере-детектился из-за разных
+                # номеров строк/динамики и не обнулял fix_count по кругу.
+                import hashlib, re as _re
+                _err_text = "\n".join(error_logs)
+                _exc = _re.findall(r"\b([A-Za-z_]+(?:Error|Exception))\b", _err_text)
+                _files = _re.findall(r'File "[^"]*?([^"/\\]+\.py)"', _err_text)
+                _msg = ""
+                for _line in reversed(error_logs):
+                    if _exc and _exc[-1] in _line:
+                        _msg = _line
+                        break
+                _msg_norm = _re.sub(r"0x[0-9a-fA-F]+|\d+", "", _msg).strip()
+                _sig_basis = "|".join([
+                    _exc[-1] if _exc else "",
+                    _files[-1] if _files else "",
+                    _msg_norm,
+                ]).strip("|")
+                if not _sig_basis:  # фолбэк: нормализованный текст без чисел
+                    _sig_basis = _re.sub(r"0x[0-9a-fA-F]+|\d+", "", _err_text)[:500]
+                error_signature = hashlib.md5(_sig_basis.encode()).hexdigest()
                 now = time.time()
                 redis_key = f"seen_error:{service_id}:{error_signature}"
                 r = await get_redis()
