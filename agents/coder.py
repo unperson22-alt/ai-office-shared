@@ -1329,6 +1329,39 @@ async def run_daily_audit() -> str:
     else:
         lines.append(f"✅ Деплои ({len(deploy_ok)}): все SUCCESS")
 
+    # 1b. Сквозной аудит ВСЕХ проектов-отделов (а не только awake-happiness).
+    #     Только видимость/алерт; авто-фикс остаётся лишь для известных репо из
+    #     SERVICES — чужие отделы не чиним вслепую.
+    try:
+        known_sids = set(SERVICES.keys())
+        other_fail, other_total = [], 0
+        all_data = await railway_query(
+            "{ projects { edges { node { name services { edges { node { id name } } } } } } }"
+        )
+        for pe in ((all_data.get("data") or {}).get("projects") or {}).get("edges") or []:
+            pname = pe["node"]["name"]
+            for se in (pe["node"].get("services") or {}).get("edges") or []:
+                sid = se["node"]["id"]
+                if sid in known_sids:
+                    continue
+                other_total += 1
+                try:
+                    dd = await railway_query(
+                        "query($sid:String!){deployments(first:1,input:{serviceId:$sid}){edges{node{status}}}}",
+                        {"sid": sid})
+                    deps2 = (dd.get("data") or {}).get("deployments", {}).get("edges") or []
+                    st = deps2[0]["node"]["status"] if deps2 else "NO_DEPLOY"
+                    if st != "SUCCESS":
+                        other_fail.append(f"{pname}/{se['node']['name']}:{st}")
+                except Exception:
+                    pass
+        if other_fail:
+            lines.append(f"❌ Другие отделы упали: {', '.join(other_fail)}")
+        elif other_total:
+            lines.append(f"✅ Другие отделы ({other_total}): все деплои SUCCESS")
+    except Exception as e:
+        logger.error(f"[audit] cross-project sweep failed: {e}")
+
     # 2. Health checks for HTTP services
     health_fail = []
     async with httpx.AsyncClient(timeout=10) as c:
