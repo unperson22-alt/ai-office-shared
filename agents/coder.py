@@ -4595,6 +4595,96 @@ async def vietnam_cron_loop():
 
 
 
+async def handle_add_lessons(request):
+    """Добавить готовые уроки в lessons.json (GitHub) + выложить в Bug Lessons + дедуп.
+
+    Используется Клодом в конце сессии: POST готовых уроков → Силли их персистит и постит.
+    Auth: X-Auth-Token = RAILWAY_SECRET.
+    Body: {"lessons":[{title,symptom,cause|root_cause,fix,prevention,bot?,layer?,status?,
+           why_architecture?,context?}], "post":true, "dry_run":false}
+    Идемпотентно по title (дубли по названию пропускаются)."""
+    auth = request.headers.get("X-Auth-Token", "")
+    if not auth or auth != RAILWAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        body = await request.json()
+        incoming = body.get("lessons", [])
+        do_post = body.get("post", True)
+        dry_run = body.get("dry_run", False)
+        if not isinstance(incoming, list) or not incoming:
+            return web.json_response({"error": "lessons (non-empty list) required"}, status=400)
+        import datetime as _dt
+        raw = await read_file("ai-office-shared", LESSONS_FILE)
+        lessons = json.loads(raw)
+        existing_titles = {str(l.get("title", "")).strip().lower() for l in lessons}
+        next_id = max((l.get("id", 0) for l in lessons), default=0) + 1
+        added = []
+        for item in incoming:
+            title = str(item.get("title", "")).strip()
+            if not title or title.lower() in existing_titles:
+                continue
+            entry = {
+                "id": next_id,
+                "date": item.get("date") or _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d"),
+                "bot": item.get("bot", "cilly"),
+                "layer": item.get("layer", "system"),
+                "title": title,
+                "symptom": item.get("symptom", ""),
+                "root_cause": item.get("root_cause") or item.get("cause", ""),
+                "fix": item.get("fix", ""),
+                "prevention": item.get("prevention", ""),
+                "why_architecture": item.get("why_architecture", ""),
+                "cause": item.get("cause") or item.get("root_cause", ""),
+                "status": item.get("status", "fixed"),
+                "tag": item.get("tag", "system"),
+            }
+            if item.get("context"):
+                entry["context"] = item["context"]
+            lessons.append(entry)
+            existing_titles.add(title.lower())
+            added.append(entry)
+            next_id += 1
+        if not added:
+            return web.json_response({"added": [], "note": "все уроки уже есть (дедуп по title)"})
+        if dry_run:
+            return web.json_response({"dry_run": True, "would_add": [l["id"] for l in added],
+                                      "titles": [l["title"] for l in added]})
+        # 1) персист в GitHub одним коммитом
+        await push_file("ai-office-shared", LESSONS_FILE,
+                        json.dumps(lessons, ensure_ascii=False, indent=2),
+                        f"lessons: +{len(added)} (#{added[0]['id']}-#{added[-1]['id']})")
+        # 2) выложить в Bug Lessons группу + проставить дедуп
+        BUG_GROUP = -5197140411
+        EMO = {"fixed": "✅", "still_relevant": "⚠️", "outdated": "🗄", "documented": "📝"}
+        r = await get_redis()
+        posted = 0
+        for l in added:
+            if do_post:
+                se = EMO.get(l.get("status", ""), "❓")
+                msg = (f"🐛 Урок #{l['id']} — {l['title']}\n\n"
+                       f"📍 {l['bot']} | {l['layer']}\n\n"
+                       f"👁 Симптом:\n{l['symptom']}\n\n"
+                       f"🔍 Причина:\n{l.get('root_cause') or l.get('cause', '')}\n\n"
+                       f"✅ Фикс:\n{l['fix']}\n\n"
+                       f"🛡 Профилактика:\n{l['prevention']}\n\n"
+                       f"{se} Статус: {l['status']}")
+                try:
+                    await _GLOBAL_BOT.send_message(chat_id=BUG_GROUP, text=msg)
+                    posted += 1
+                    await asyncio.sleep(0.8)
+                except Exception as e:
+                    logger.error(f"add_lessons post #{l['id']} failed: {e}")
+            if r:
+                try:
+                    await r.sadd("office:lessons:posted_ids", str(l["id"]))
+                except Exception:
+                    pass
+        return web.json_response({"added": [l["id"] for l in added], "posted": posted})
+    except Exception as e:
+        logger.error(f"handle_add_lessons: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def main():
     # Загружаем office:decisions из Redis при старте
     await init_office_decisions()
@@ -4610,6 +4700,7 @@ async def main():
     app.router.add_get("/health", handle_health)
     app.router.add_get("/envcheck", handle_envcheck)
     app.router.add_post("/redis", handle_redis)
+    app.router.add_post("/add_lessons", handle_add_lessons)
     app.router.add_post("/web_search", handle_web_search)
     runner = web.AppRunner(app)
     await runner.setup()

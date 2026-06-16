@@ -22,6 +22,7 @@ ops.py — инцидент-реакция офиса для Клода (sandbox
 """
 import os
 import sys
+import json
 
 import httpx
 
@@ -173,6 +174,21 @@ def cmd_redis(args: list):
     print(redis_proxy(args[0].upper(), *args[1:]))
 
 
+def cmd_lesson(args: list):
+    """Добавить уроки в lessons.json + Bug Lessons через Силли (/add_lessons).
+    ops.py lesson <file.json> [--dry]  — file: JSON-список уроков (или {"lessons":[...]})."""
+    dry = "--dry" in args
+    path = next((a for a in args if not a.startswith("--")), None)
+    if not path:
+        _die("ops.py lesson <file.json> [--dry]")
+    data = json.load(open(path, encoding="utf-8"))
+    lessons = data.get("lessons", [data]) if isinstance(data, dict) else data
+    r = httpx.post(f"{SILLI_URL}/add_lessons",
+                   json={"lessons": lessons, "post": not dry, "dry_run": dry},
+                   headers={"X-Auth-Token": _proxy_token(), "Content-Type": "application/json"}, timeout=90)
+    print(json.dumps(r.json(), ensure_ascii=False, indent=2))
+
+
 def cmd_pause():
     cmd_setvar("ai-office-shared", "CILLY_PAUSED", "1")
     cmd_redeploy("ai-office-shared")
@@ -197,6 +213,7 @@ def main():
         elif cmd == "getvar":    cmd_getvar(rest[0], rest[1])
         elif cmd == "setvar":    cmd_setvar(rest[0], rest[1], rest[2])
         elif cmd == "redis":     cmd_redis(rest)
+        elif cmd == "lesson":    cmd_lesson(rest)
         elif cmd == "pause":     cmd_pause()
         elif cmd == "resume":    cmd_resume()
         else:                    _die(f"неизвестная команда: {cmd}")
