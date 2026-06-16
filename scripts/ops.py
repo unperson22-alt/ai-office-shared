@@ -146,13 +146,21 @@ def cmd_setvar(name: str, key: str, value: str):
     print(f"✅ {name}: {key}={mask(value) if value else '(пусто)'} установлен")
 
 
+def _proxy_token() -> str:
+    """Токен для /redis-прокси. Из env REDIS_PROXY_TOKEN, иначе сам подтягиваю
+    офисный RAILWAY_TOKEN_VLAD у Силли через Railway (прокси сверяет именно его)."""
+    if REDIS_PROXY_TOKEN:
+        return REDIS_PROXY_TOKEN
+    t = _vars("ai-office-shared").get("RAILWAY_TOKEN_VLAD") or ""
+    if not t:
+        _die("не нашёл токен для /redis (RAILWAY_TOKEN_VLAD у Силли пуст)")
+    return t
+
+
 def redis_proxy(cmd: str, *args):
     """Redis через HTTP /redis Силли (прямой TCP из песочницы заблокирован)."""
-    if not REDIS_PROXY_TOKEN:
-        _die("REDIS_PROXY_TOKEN не задан. Прямой Redis из песочницы заблокирован (TCP); "
-             "Redis идёт через /redis Силли — добавь REDIS_PROXY_TOKEN в env (= офисный токен).")
     r = httpx.post(f"{SILLI_URL}/redis", json={"cmd": cmd, "args": list(args)},
-                   headers={"X-Auth-Token": REDIS_PROXY_TOKEN, "Content-Type": "application/json"}, timeout=20)
+                   headers={"X-Auth-Token": _proxy_token(), "Content-Type": "application/json"}, timeout=20)
     data = r.json()
     if data.get("error"):
         _die(f"redis proxy: {data['error']}")
