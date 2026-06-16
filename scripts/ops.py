@@ -29,10 +29,7 @@ RAILWAY_TOKEN     = os.environ.get("RAILWAY_TOKEN") or os.environ.get("RAILWAY_T
 GQL               = "https://backboard.railway.com/graphql/v2"
 SILLI_URL         = os.environ.get("SILLI_URL", "https://ai-office-shared-production.up.railway.app").rstrip("/")
 REDIS_PROXY_TOKEN = os.environ.get("REDIS_PROXY_TOKEN", "")
-PROJECTS = [p.strip() for p in os.environ.get(
-    "RAILWAY_PROJECT_IDS",
-    "271b40b7-199a-429a-88ef-ca417f26a638,30a933d1-689f-4709-a12c-a36a49aa1820",
-).split(",") if p.strip()]
+PROJECTS_FILTER = [p.strip() for p in os.environ.get("RAILWAY_PROJECT_IDS", "").split(",") if p.strip()]
 
 _CATALOG = None  # name -> (project_id, service_id, env_id)
 
@@ -58,24 +55,25 @@ def gql(query: str, variables: dict | None = None) -> dict:
 
 
 def catalog() -> dict:
-    """name -> (project_id, service_id, env_id) по всем проектам офиса."""
+    """name -> (project_id, service_id, env_id) по ВСЕМ проектам, видимым токену.
+    Авто-обнаружение через projects; RAILWAY_PROJECT_IDS — опциональный фильтр."""
     global _CATALOG
     if _CATALOG is not None:
         return _CATALOG
     _CATALOG = {}
-    for pid in PROJECTS:
-        d = gql(
-            "query($id:String!){project(id:$id){"
-            "environments{edges{node{id name}}}"
-            "services{edges{node{id name}}}}}",
-            {"id": pid},
-        )
-        proj = (d.get("data") or {}).get("project") or {}
-        envs = [(e["node"]["name"], e["node"]["id"])
-                for e in (proj.get("environments") or {}).get("edges") or []]
-        env_id = next((i for n, i in envs if n == "production"), envs[0][1] if envs else None)
-        for e in (proj.get("services") or {}).get("edges") or []:
-            _CATALOG[e["node"]["name"]] = (pid, e["node"]["id"], env_id)
+    d = gql("{ projects { edges { node { id name "
+            "environments { edges { node { id name } } } "
+            "services { edges { node { id name } } } } } } }")
+    for e in ((d.get("data") or {}).get("projects") or {}).get("edges") or []:
+        n = e["node"]
+        pid = n["id"]
+        if PROJECTS_FILTER and pid not in PROJECTS_FILTER:
+            continue
+        envs = [(x["node"]["name"], x["node"]["id"])
+                for x in (n.get("environments") or {}).get("edges") or []]
+        env_id = next((i for nm, i in envs if nm == "production"), envs[0][1] if envs else None)
+        for s in (n.get("services") or {}).get("edges") or []:
+            _CATALOG[s["node"]["name"]] = (pid, s["node"]["id"], env_id)
     return _CATALOG
 
 
@@ -96,7 +94,8 @@ def mask(v) -> str:
 
 def cmd_status():
     c = catalog()
-    print(f"Сервисов: {len(c)} в {len(PROJECTS)} проектах")
+    nproj = len({pid for pid, _, _ in c.values()})
+    print(f"Сервисов: {len(c)} в {nproj} проектах")
     for name, (pid, sid, eid) in sorted(c.items()):
         d = gql("query($id:String!){deployments(first:1,input:{serviceId:$id}){edges{node{status}}}}", {"id": sid})
         edges = (((d.get("data") or {}).get("deployments") or {}).get("edges")) or []
