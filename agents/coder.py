@@ -1351,7 +1351,8 @@ async def run_daily_audit() -> str:
                         {"sid": sid})
                     deps2 = (dd.get("data") or {}).get("deployments", {}).get("edges") or []
                     st = deps2[0]["node"]["status"] if deps2 else "NO_DEPLOY"
-                    if st != "SUCCESS":
+                    # NO_DEPLOY — это кроны/не настроенные сервисы, не инцидент → не алертим
+                    if st not in ("SUCCESS", "NO_DEPLOY"):
                         other_fail.append(f"{pname}/{se['node']['name']}:{st}")
                 except Exception:
                     pass

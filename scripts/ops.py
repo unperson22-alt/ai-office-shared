@@ -100,7 +100,8 @@ def cmd_status():
         d = gql("query($id:String!){deployments(first:1,input:{serviceId:$id}){edges{node{status}}}}", {"id": sid})
         edges = (((d.get("data") or {}).get("deployments") or {}).get("edges")) or []
         st = edges[0]["node"]["status"] if edges else "NO_DEPLOY"
-        print(f"  {'🟢' if st == 'SUCCESS' else '🔴'} {name:<22} {st}")
+        icon = "🟢" if st == "SUCCESS" else ("⚪" if st == "NO_DEPLOY" else "🔴")
+        print(f"  {icon} {name:<22} {st}")
 
 
 def cmd_logs(name: str, n: int = 40):
