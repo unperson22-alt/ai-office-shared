@@ -4,8 +4,8 @@
 > деплой нового бота, смена Redis-контракта, обновление shared lib, закрытие уязвимости.
 > Формат обновления — в конце файла.
 
-**Последнее обновление:** 2026-06-13 (апгрейд торгового отдела)  
-**Версия shared lib:** v0.1.17  
+**Последнее обновление:** 2026-06-19 (автономное управление Силли: доска задач, рантайм-обучение, делегирование, проактивная петля)  
+**Версия shared lib:** v0.1.18  
 **Активных ботов:** 10 (+1 роутер)  
 **GitHub org:** unperson22-alt  
 **Платформа:** Railway + Cloudflare Workers
@@ -97,6 +97,10 @@
 |`office:logs:{bot}:{date}`     |LIST  |Каждый бот (`log_event`)          |Силли (`read_logs()`)               |7д                   |JSON события. `bot` — lowercase, `date` — `YYYY-MM-DD`. LPUSH + LTRIM 1000|
 |`office:members`               |STRING|Филли (`group_members_update`)    |Филли (`group_members_get`)         |30д                  |Текстовый профиль команды, генерируется Haiku раз в неделю               |
 |`office:mom_queue`             |LIST  |Эллис (`ellice-bot`)                |Эллис (`/mention` endpoint)         |7д                   |JSON очередь сообщений мамы, сбрасывается при пинге из Филли             |
+|`office:task:{id}`             |HASH  |Силли (`taskboard.create_task`)   |Силли (`management_loop`), дашборд  |∞ / 30д у done       |Доска задач. Поля: `id,title,created_by,assignee,status,parent_id,result,attempts,escalated,created_at,updated_at`. Статусы: open/in_progress/needs_fix/blocked/awaiting_approval/done/rejected |
+|`office:tasks:index`           |ZSET  |Силли (`taskboard`)               |Силли (`taskboard.list_tasks`)      |—                    |member=task_id, score=updated_at(epoch). ZREVRANGE → свежие первыми       |
+|`office:pending:{id}`          |STRING|Силли (`stage_pending`)           |Силли (`/approve`, `pop_pending`)   |24ч                  |JSON pending-действия approval-гейта. `type`: deploy_fix/deploy_devtask/update_instruction/delegate |
+|`office:instructions:{bot}`    |STRING|Силли (`set_bot_instruction`)     |Каждый бот (`build_system` через `office.instructions_suffix`)|∞|Рантайм-инструкция тимлида, аппендится к системному промпту БЕЗ редеплоя. `bot` — lowercase canonical |
 
 **Типичные события в `office:logs`:**
 `route_ok`, `route_miss`, `route_decision`, `message_received`, `response_sent`,
@@ -107,7 +111,7 @@
 ## Shared Library — ai_office_shared
 
 **Репо:** unperson22-alt/ai-office-shared (публичный)  
-**Установка:** `ai_office_shared @ git+https://github.com/unperson22-alt/ai-office-shared@v0.1.16`
+**Установка:** `ai_office_shared @ git+https://github.com/unperson22-alt/ai-office-shared@v0.1.18`
 
 |Модуль                |С версии|Что экспортирует                                                                                               |
 |----------------------|--------|---------------------------------------------------------------------------------------------------------------|
@@ -117,18 +121,25 @@
 |`shared.tasks`        |v0.1.2  |`auto_extract_interests`, `weekly_review`                                                                      |
 |`shared.quality`      |v0.1.3  |`remember_my_message`, `reaction_owner`, `classify_reaction`, `record_reaction`, `REACTION_UP`, `REACTION_DOWN`|
 |`shared.url_check`    |v0.1.7  |`check_url`, `filter_live_urls`, `extract_urls`, `verify_text_urls`                                            |
+|`shared.office`       |v0.1.18 |`call_office`, `OFFICE_AGENTS`, `parse_office_tag`, `instructions_suffix(redis, bot)` ← рантайм-обучение      |
+|`shared.taskboard`    |v0.1.18 |`create_task`, `update_status`, `set_result`, `incr_attempts`, `add_subtask`, `get_task`, `list_tasks`        |
 
 ### ⚡ MIGRATION RULE
 
 > При любом касании бота по любой причине — **обязательно**:
 > 
-> 1. Поднять в `requirements.txt`: `ai_office_shared @ ...@v0.1.16`
+> 1. Поднять в `requirements.txt`: `ai_office_shared @ ...@v0.1.18`
 > 1. Заменить локальные копии на импорты из `ai_office_shared.shared`:
 >    `redis_get_history`, `redis_save_history`, `redis_get_notes`, `redis_add_note`,
 >    `auto_extract_interests`, `weekly_review`
 
-**Текущий статус миграции ботов:** все production-боты на `v0.1.15` (2026-06-11).
-Воркеры dev-dept (devvy, ricky, testi, sekky, scribbi) используют `v0.1.16` на feature-ветке `claude/stroy-dev-dept-j6q4o9`.
+**Текущий статус миграции ботов:** 8 ботов (билли, тилли, доктор, гослинг, вилли, эллис/mama, крисс, милли)
+переведены на `v0.1.18` на ветке `claude/cilly-autonomous-management-8oze50` —
+их `build_system` дочитывает `office:instructions:{bot}` (рантайм-обучение).
+
+> ⚠️ **ПЕРЕД деплоем ботов с v0.1.18:** выпустить релиз/таг `v0.1.18` в `ai-office-shared`
+> (git tag + GitHub release), иначе pip-сборка ботов упадёт на несуществующем теге.
+> Силли (сам репо ai-office-shared) использует код локально — тег ей не нужен.
 
 -----
 

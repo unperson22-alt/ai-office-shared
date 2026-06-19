@@ -20,6 +20,7 @@ from aiogram.filters import CommandStart
 from anthropic import AsyncAnthropic
 import redis.asyncio as aioredis
 from ai_office_shared.shared.logging import log_event, read_logs
+from ai_office_shared.shared import taskboard as tb
 
 from shared.github_tools import (
     push_file, read_file, list_files, create_repo,
@@ -64,6 +65,10 @@ LESSONS_FILE    = "lessons/lessons.json"
 
 MONITOR_INTERVAL   = 300  # секунд между проверками логов
 TEMPLATE_BOTS_FILE = "shared/template_bots.json"  # реестр ботов созданных по шаблону
+
+# Проактивная петля управления (management_loop): ревью доски задач + метрик
+MANAGEMENT_INTERVAL = int(os.getenv("CILLY_MGMT_INTERVAL", "1800"))  # 30 мин
+MGMT_STUCK_AFTER_SEC = int(os.getenv("CILLY_MGMT_STUCK_SEC", str(2 * 3600)))  # 2ч
 
 # Railway service_id → (repo_name, main_file)
 SERVICES = {
@@ -270,7 +275,63 @@ BOT_SYSTEMS_WEB = {
 }
 
 # Хранит pending-фиксы ожидающие /approve: {fix_id: fix_data}
+# In-memory fallback — основной store теперь Redis (office:pending:{id}),
+# чтобы pending-действия переживали рестарт Силли (см. stage_pending/pop_pending).
 pending_fixes: dict = {}
+
+# ── Redis-backed approval-гейт ──────────────────────────────────────────────
+# Любое риск-действие (деплой кода, правка конфигов, update_instruction, delegate)
+# стейджится сюда и ждёт /approve. Переживает рестарт. Привязано к задаче на доске.
+import uuid as _uuid_mod
+
+PENDING_TTL = 24 * 3600  # pending-действие живёт сутки
+
+def _pending_key(action_id: str) -> str:
+    return f"office:pending:{action_id}"
+
+
+async def stage_pending(action_type: str, payload: dict, *, task_id: str = "",
+                        title: str = "") -> str:
+    """
+    Кладёт риск-действие в очередь на подтверждение. Возвращает action_id.
+    Пишет в Redis (переживает рестарт), при отсутствии Redis — in-memory fallback.
+    """
+    action_id = f"{action_type}_{int(time.time())}_{_uuid_mod.uuid4().hex[:4]}"
+    entry = {
+        "id": action_id,
+        "type": action_type,
+        "task_id": task_id,
+        "title": title,
+        "payload": payload,
+        "created_at": int(time.time()),
+    }
+    r = await get_redis()
+    if r:
+        try:
+            await r.setex(_pending_key(action_id), PENDING_TTL,
+                          json.dumps(entry, ensure_ascii=False, default=str))
+            return action_id
+        except Exception as e:
+            logger.warning(f"[pending] Redis stage failed, fallback to memory: {e}")
+    pending_fixes[action_id] = entry
+    return action_id
+
+
+async def pop_pending(action_id: str) -> dict | None:
+    """Извлекает и удаляет pending-действие. Ищет в Redis, затем в памяти."""
+    r = await get_redis()
+    if r:
+        try:
+            raw = await r.get(_pending_key(action_id))
+            if raw:
+                await r.delete(_pending_key(action_id))
+                try:
+                    return json.loads(raw)
+                except Exception:
+                    return None
+        except Exception as e:
+            logger.warning(f"[pending] Redis pop failed: {e}")
+    return pending_fixes.pop(action_id, None)
 
 # ── CC-like subagent: многофайловый рефактор через Sonnet ──────────────────
 
@@ -621,7 +682,7 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
 
 
 INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
-{"intent":"push_code|fix_bot|create_bot|create_cron|add_external_bot|get_bot_token|deploy|read_file|list_files|redis_query|dev_task|answer","repo":"repo_name_or_null","path":"file_path_or_null","task":"task_description","confidence":0.0-1.0}
+{"intent":"push_code|fix_bot|create_bot|create_cron|add_external_bot|get_bot_token|deploy|read_file|list_files|redis_query|dev_task|delegate|update_bot_instruction|answer","repo":"repo_name_or_null","path":"file_path_or_null","task":"task_description","bot":"имя_бота_или_null","instruction":"текст_инструкции_или_null","mode":"append|set|clear","confidence":0.0-1.0}
 
 ГЛАВНОЕ ПРАВИЛО — различай вопрос и команду:
 - ВОПРОС о процессе ("как создать бота?", "что нужно для деплоя?", "какой стек?", "как задеплоить?", "с чего начать?") → intent=answer
@@ -629,7 +690,7 @@ INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
 Сигналы вопроса: как, какой, какие, что такое, зачем, почему, расскажи, объясни, с чего начать, какие шаги
 Сигналы команды: создай, сделай, залей, задеплой, исправь, добавь, зарегистрируй
 
-push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не расписание!), create_cron=создать расписание/напоминание/cron для пользователя ("напоминай каждый день", "отправляй каждое утро", "напоминалка в X время") — создаёт Railway cron-сервис, add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon, cleanup_dm=удалить сообщения с ключами/секретами в личке (gsk_, GROQ, токен) через Telethon — ищет в диалоге с user_id=int(BOT_TOKEN.split(':')[0]) (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), edit_file=точечная замена строки в файле без чтения всего файла (сигналы: замени в файле, вставь после строки, patch, добавь в начало функции — когда указан repo+path+old+new), agentic_task=многошаговая задача из 2+ шагов: читай+делай, исправь+задеплой, залей+проверь, прочитай+перепиши. Сигналы: исправь и задеплой, залей код и задеплой, прочитай X и отправь, прочитай X и перепиши, пройдись по всем, для каждого, рефакторинг, аудит. ВАЖНО: если задача содержит И (исправить код И задеплоить) — это agentic_task. При чтении большого файла (bot.py 800+ строк) — не читать целиком в цикле, читать один раз и искать нужную функцию по имени, dev_task=делегировать задачу КОМАНДЕ разработки (Девви→Рикки→Тести→Секки→Скрибби). ТОЛЬКО когда речь о новой фиче/модуле/компоненте для продукта — НЕ о правке одного файла. Требует ВЫСОКОЙ уверенности (confidence>=0.85). Чёткие сигналы: "реализуй фичу", "разработай модуль", "напиши новый компонент", "сделай PR для", "задача для команды", "отдай команде", "dev-dept", "через цепочку". НЕЯСНЫЙ запрос ("сделай что-нибудь", "напиши функцию" без контекста) → confidence<0.85 → Силли переспрашивает. Если задача про правку существующего файла/бота — это push_code или agentic_task, НЕ dev_task. answer=ответить словами.
+push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не расписание!), create_cron=создать расписание/напоминание/cron для пользователя ("напоминай каждый день", "отправляй каждое утро", "напоминалка в X время") — создаёт Railway cron-сервис, add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon, cleanup_dm=удалить сообщения с ключами/секретами в личке (gsk_, GROQ, токен) через Telethon — ищет в диалоге с user_id=int(BOT_TOKEN.split(':')[0]) (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), edit_file=точечная замена строки в файле без чтения всего файла (сигналы: замени в файле, вставь после строки, patch, добавь в начало функции — когда указан repo+path+old+new), agentic_task=многошаговая задача из 2+ шагов: читай+делай, исправь+задеплой, залей+проверь, прочитай+перепиши. Сигналы: исправь и задеплой, залей код и задеплой, прочитай X и отправь, прочитай X и перепиши, пройдись по всем, для каждого, рефакторинг, аудит. ВАЖНО: если задача содержит И (исправить код И задеплоить) — это agentic_task. При чтении большого файла (bot.py 800+ строк) — не читать целиком в цикле, читать один раз и искать нужную функцию по имени, dev_task=делегировать задачу КОМАНДЕ разработки (Девви→Рикки→Тести→Секки→Скрибби). ТОЛЬКО когда речь о новой фиче/модуле/компоненте для продукта — НЕ о правке одного файла. Требует ВЫСОКОЙ уверенности (confidence>=0.85). Чёткие сигналы: "реализуй фичу", "разработай модуль", "напиши новый компонент", "сделай PR для", "задача для команды", "отдай команде", "dev-dept", "через цепочку". НЕЯСНЫЙ запрос ("сделай что-нибудь", "напиши функцию" без контекста) → confidence<0.85 → Силли переспрашивает. Если задача про правку существующего файла/бота — это push_code или agentic_task, НЕ dev_task. delegate=поручить задачу ГЛАВЕ ОТДЕЛА и проверить результат (НЕ написание кода). Сигналы: "спроси у Тилли", "пусть Милли посчитает", "делегируй Доктору", "поручи отделу", "узнай у <бот>". Заполни "bot" именем отдела. confidence>=0.85, иначе Силли переспросит. update_bot_instruction=изменить поведение бота на лету через инструкцию в системном промпте (БЕЗ редеплоя). Сигналы: "научи <бота>", "пусть <бот> всегда/больше не", "добавь <боту> правило", "обнови инструкцию <бота>", "запомни для <бота>". Заполни "bot" (кого учим), "instruction" (что добавить), "mode" (append по умолчанию; set=заменить; clear=сбросить). answer=ответить словами.
 ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis" → redis_query.
 ВАЖНО: "подключить бота", "добавить чужого бота" → add_external_bot, НЕ create_bot.
 Репо: billy-bot,tilly-bot,filly-bot,dilly-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard,mama-bot,gosling-bot,villy-bot,prophet-bot,kriss-bot,pilly-bot,doctor-bot,marketing-dept.
@@ -1093,16 +1154,22 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
     if False:  # Автофикс ОТКЛЮЧЁН — всегда требуем /approve
         pass
     else:
-        # Всегда спрашиваем /approve — автофикс отключён во избежание цепных реакций
-        fix_id = f"{service_name}_{int(time.time())}"
-        pending_fixes[fix_id] = {
+        # Всегда спрашиваем /approve — автофикс отключён во избежание цепных реакций.
+        # Заводим задачу на доске + стейджим действие в Redis-backed pending (переживает рестарт).
+        r_tb = await get_redis()
+        task_id = await tb.create_task(
+            r_tb, f"Фикс {service_name}: {fix_desc[:80]}",
+            created_by="силли", assignee=repo.replace("-bot", ""),
+            status="awaiting_approval",
+        ) or ""
+        fix_id = await stage_pending("deploy_fix", {
             "service_id": service_id,
             "service_name": service_name,
             "repo": repo,
             "affected": affected,
             "fixed_code": fixed_code,
             "analysis": analysis,
-        }
+        }, task_id=task_id, title=f"Фикс {service_name}")
         await notify_office(
             f"🤔 Cilly нашёл подозрительное в *{service_name}*:\n\n"
             f"_{description}_\n\n"
@@ -3656,10 +3723,10 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             f"📋 ТЗ: {devvy_task[:200]}"
         )
 
-        # ── 2. Параллельный пайплайн dev-dept ─────────────────────────────
-        # Девви → [Рикки ‖ Тести ‖ Секки] → Скрибби. Команда работает
-        # одновременно и видит действия друг друга через общий эфир задачи.
-        # Силли тоже публикует свои действия (план/деплой) — «включая Силли».
+        # ── 2. Доска задач + параллельный пайплайн с ретраями ──────────────
+        # Девви → [Рикки ‖ Тести ‖ Секки] → Скрибби. При провале гейта
+        # (NEEDS_FIX / не компилируется / нет кода) — авто-повтор с фидбеком,
+        # до MAX_DEV_ATTEMPTS. Исчерпали — blocked + эскалация (как fix_count>=3).
         from ai_office_shared.shared.dev_pipeline import run_dev_pipeline
         from ai_office_shared.shared.dev_activity import publish_activity
         import uuid as _uuid
@@ -3667,100 +3734,115 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
         uid      = int(os.getenv("YOUR_TELEGRAM_ID", "391077101"))
         _r_act   = await get_redis()
         _task_id = _uuid.uuid4().hex[:12]
-        await publish_activity(_r_act, _task_id, "силли", "plan",
-                               f"{dev_repo or '—'}/{dev_file_path}: {devvy_task[:80]}")
 
-        pipe = await run_dev_pipeline(
-            devvy_task,
-            repo=dev_repo,
-            file_path=dev_file_path,
-            context=file_context,
-            user_id=uid,
-            redis_client=_r_act,
-            task_id=_task_id,
-        )
+        # Заводим задачу на доске тем же id, что у эфира — связка board ↔ activity
+        board_id = await tb.create_task(
+            _r_act, f"dev_task: {devvy_task[:80]}",
+            created_by="силли", assignee="dev-dept",
+            status="in_progress", task_id=_task_id,
+        ) or _task_id
 
-        # Человекочитаемые имена для итогового отчёта
-        results = {
-            "Девви":   pipe.get("devvy", "")   or "⚠️ нет ответа",
-            "Рикки":   pipe.get("ricky", "")   or "⚠️ нет ответа",
-            "Тести":   pipe.get("testi", "")   or "⚠️ нет ответа",
-            "Секки":   pipe.get("sekky", "")   or "⚠️ нет ответа",
-            "Скрибби": pipe.get("scribbi", "") or "⚠️ нет ответа",
-        }
-        await reply_func("✅ Команда отработала параллельно (Рикки ‖ Тести ‖ Секки)")
+        MAX_DEV_ATTEMPTS = 3
+        final_code = ""
+        review_ok = compile_ok = False
+        commit_msg = ""
+        results: dict = {}
+        retry_feedback = ""
+        attempt = 0
 
-        # ── 3. Силли извлекает финальный код и деплоит ───────────────────
-        # Финальный код — из ревью Рикки (FINAL_CODE блок), иначе из кода Девви
-        ricky_result = pipe.get("final_code_artifact", "") or pipe.get("ricky", "")
-        final_code   = ""
-        if "```python" in ricky_result:
-            cs = ricky_result.find("```python") + 9
-            ce = ricky_result.find("```", cs)
-            if ce > cs:
-                final_code = ricky_result[cs:ce].strip()
+        while attempt < MAX_DEV_ATTEMPTS:
+            attempt += 1
+            cur_task = devvy_task if not retry_feedback else (
+                f"{devvy_task}\n\n[ПОВТОР #{attempt}] Предыдущая попытка отклонена:\n{retry_feedback}"
+            )
+            await publish_activity(_r_act, _task_id, "силли", "plan",
+                                   f"попытка {attempt}/{MAX_DEV_ATTEMPTS}: {dev_repo or '—'}/{dev_file_path}")
 
-        # commit_msg уже извлечён пайплайном из ответа Скрибби
-        commit_msg = pipe.get("commit_msg", "")
+            pipe = await run_dev_pipeline(
+                cur_task, repo=dev_repo, file_path=dev_file_path,
+                context=file_context, user_id=uid,
+                redis_client=_r_act, task_id=_task_id,
+            )
+            results = {
+                "Девви":   pipe.get("devvy", "")   or "⚠️ нет ответа",
+                "Рикки":   pipe.get("ricky", "")   or "⚠️ нет ответа",
+                "Тести":   pipe.get("testi", "")   or "⚠️ нет ответа",
+                "Секки":   pipe.get("sekky", "")   or "⚠️ нет ответа",
+                "Скрибби": pipe.get("scribbi", "") or "⚠️ нет ответа",
+            }
+            commit_msg = pipe.get("commit_msg", "")
 
-        deploy_status = ""
-        # Гейт качества перед деплоем (уроки инцидента + живого теста делегирования):
-        #   1) Рикки вернул NEEDS_FIX → код не готов, НЕ деплоим (раньше игнорировалось);
-        #   2) Python не компилируется → обрезан/битый, НЕ деплоим.
-        # Compile ловит структурный обрыв; вердикт Рикки ловит «валидный, но недописанный».
-        review_ok  = "NEEDS_FIX" not in (ricky_result or "").upper()
-        compile_ok = True
-        _se_info   = ""
-        if final_code and dev_file_path.endswith(".py"):
-            try:
-                compile(final_code, dev_file_path, "exec")
-            except SyntaxError as _se:
-                compile_ok = False
-                _se_info = f"{_se.msg}, строка {_se.lineno}"
-        if final_code and not review_ok:
-            deploy_status = "⛔ НЕ задеплоено: Рикки вернул NEEDS_FIX — код требует доработки. Нужен повтор задачи."
-        elif final_code and not compile_ok:
-            deploy_status = f"⛔ НЕ задеплоено: финальный код не компилируется ({_se_info}). Похоже воркер обрезал код — нужен повтор."
-        elif final_code and dev_repo and dev_file_path:
-            try:
-                # Читаем sha текущего файла
-                import urllib.request as _ur
-                _ghurl = f"https://api.github.com/repos/{GITHUB_USER}/{dev_repo}/contents/{dev_file_path}"
-                _req = _ur.Request(_ghurl, headers={
-                    "Authorization": f"token {os.getenv('GH_PAT', '')}",
-                    "User-Agent": "cilly-deploy"
-                })
-                with _ur.urlopen(_req, timeout=15) as _r:
-                    _d = json.load(_r)
-                _sha = _d["sha"]
+            # Финальный код — из ревью Рикки (FINAL_CODE блок), иначе из кода Девви
+            ricky_result = pipe.get("final_code_artifact", "") or pipe.get("ricky", "")
+            final_code = ""
+            if "```python" in ricky_result:
+                cs = ricky_result.find("```python") + 9
+                ce = ricky_result.find("```", cs)
+                if ce > cs:
+                    final_code = ricky_result[cs:ce].strip()
 
-                # Пушим
-                _body = json.dumps({
-                    "message": commit_msg or f"feat: {devvy_task[:80]}",
-                    "content": __import__("base64").b64encode(final_code.encode()).decode(),
-                    "sha": _sha
-                }).encode()
-                _preq = _ur.Request(_ghurl, data=_body, method="PUT", headers={
-                    "Authorization": f"token {os.getenv('GH_PAT', '')}",
-                    "Content-Type": "application/json",
-                    "User-Agent": "cilly-deploy"
-                })
-                with _ur.urlopen(_preq, timeout=15) as _r:
-                    _pr = json.load(_r)
-                _commit = _pr.get("commit", {}).get("sha", "")[:8]
-                deploy_status = f"✅ Запушено (commit {_commit}) — Railway задеплоит автоматически"
-            except Exception as e:
-                deploy_status = f"⚠️ Автодеплой не удался: {e}\nКод готов — задеплой вручную"
-        elif not final_code:
-            deploy_status = "ℹ️ Финальный код не найден в ответе Рикки — задеплой вручную"
+            # Гейт качества: вердикт Рикки + компиляция
+            review_ok = "NEEDS_FIX" not in (ricky_result or "").upper()
+            compile_ok = True
+            _se_info = ""
+            if final_code and dev_file_path.endswith(".py"):
+                try:
+                    compile(final_code, dev_file_path, "exec")
+                except SyntaxError as _se:
+                    compile_ok = False
+                    _se_info = f"{_se.msg}, строка {_se.lineno}"
+
+            if final_code and review_ok and compile_ok:
+                break  # успех — выходим из цикла ретраев
+
+            # Провал гейта: считаем попытку, формируем фидбек на следующий заход
+            await tb.incr_attempts(_r_act, board_id)
+            if not final_code:
+                retry_feedback = "Рикки не вернул финальный код (блок ```python отсутствует/пуст)."
+            elif not review_ok:
+                retry_feedback = "Рикки вернул NEEDS_FIX — код требует доработки. " + ricky_result[:600]
+            else:
+                retry_feedback = f"Финальный код не компилируется: {_se_info}. Похоже воркер обрезал код."
+            await tb.update_status(_r_act, board_id, "needs_fix", result=retry_feedback)
+            await reply_func(f"🛠 Попытка {attempt}/{MAX_DEV_ATTEMPTS} отклонена: {retry_feedback[:160]}")
+
+        # Подзадачи-срез по воркерам — прозрачность доски
+        for _name, _res in results.items():
+            _st = "done" if "⚠️" not in _res else "blocked"
+            await tb.add_subtask(_r_act, board_id,
+                                 f"{_name}: {_res[:60].replace(chr(10), ' ')}",
+                                 assignee=_name.lower(), status=_st)
+
+        # ── 3. Гейт: успех → стейджим деплой на /approve; провал → эскалация ─
+        if final_code and review_ok and compile_ok and dev_repo and dev_file_path:
+            action_id = await stage_pending("deploy_devtask", {
+                "repo": dev_repo, "path": dev_file_path, "code": final_code,
+                "commit_msg": commit_msg or f"feat: {devvy_task[:60]}",
+                "title": f"dev_task {dev_repo}/{dev_file_path}",
+            }, task_id=board_id, title=f"deploy {dev_repo}/{dev_file_path}")
+            await tb.update_status(_r_act, board_id, "awaiting_approval")
+            await publish_activity(_r_act, _task_id, "силли", "done", "код готов, ждёт /approve")
+            deploy_status = (
+                f"✅ Код готов и прошёл гейт (review + compile).\n"
+                f"⏳ Approval-гейт — нужно твоё подтверждение:\n"
+                f"/approve {action_id} — задеплоить в {dev_repo}/{dev_file_path}\n"
+                f"/skip {action_id} — отменить"
+            )
         else:
-            deploy_status = "ℹ️ Репо/файл не определены — задеплой вручную"
+            await tb.update_status(_r_act, board_id, "blocked",
+                                   result=retry_feedback or "не удалось получить рабочий код",
+                                   escalated=True)
+            await publish_activity(_r_act, _task_id, "силли", "error",
+                                   "исчерпаны попытки, эскалация")
+            deploy_status = (
+                f"⛔ После {MAX_DEV_ATTEMPTS} попыток рабочий код не получен — задача [{board_id}] "
+                f"в статусе blocked, нужен твой разбор.\nПричина: {retry_feedback[:200]}"
+            )
 
-        # Силли публикует финал в общий эфир — команда видит результат деплоя
         await publish_activity(_r_act, _task_id, "силли", "deploy", deploy_status[:160])
 
         # ── 4. Итоговый отчёт ─────────────────────────────────────────────
-        summary_parts = [f"🏁 Цепочка dev-dept завершена\n"]
+        summary_parts = [f"🏁 Цепочка dev-dept завершена (задача [{board_id}], попыток: {attempt})\n"]
         for name, res in results.items():
             short = res[:150].replace("\n", " ")
             summary_parts.append(f"• {name}: {short}")
@@ -3769,6 +3851,100 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             summary_parts.append(f"📝 {commit_msg}")
 
         await reply_func("\n".join(summary_parts))
+
+    elif intent == "update_bot_instruction":
+        """Рантайм-обучение бота: добавить/заменить инструкцию в системном промпте
+        через Redis (office:instructions:{canon}) — бот учтёт без редеплоя.
+        Approval-гейт: применяется только после /approve."""
+        from ai_office_shared.shared.identity import canonical, display, BOTS
+
+        target = intent_data.get("bot") or repo or ""
+        canon = canonical(target) if target else None
+        if not canon:
+            for word in task.replace(",", " ").replace(":", " ").split():
+                c = canonical(word)
+                if c:
+                    canon = c
+                    break
+        if not canon:
+            await reply_func(
+                "⚠️ Не понял, какому боту менять инструкцию. Укажи имя бота явно "
+                f"(доступны: {', '.join(display(b) for b in BOTS)})."
+            )
+            return
+
+        instruction = (intent_data.get("instruction") or "").strip()
+        if not instruction:
+            # эвристика: убираем имя бота из текста, остальное — инструкция
+            words = [w for w in task.split() if canonical(w.strip(",:")) != canon]
+            instruction = " ".join(words).strip(" :,-—") or task
+        mode = intent_data.get("mode", "append")
+        if mode not in ("append", "set", "clear"):
+            mode = "append"
+        disp = display(canon) or canon
+
+        r_tb = await get_redis()
+        board_id = await tb.create_task(
+            r_tb, f"Инструкция {disp}: {instruction[:60]}",
+            created_by="силли", assignee=canon, status="awaiting_approval",
+        ) or ""
+        action_id = await stage_pending("update_instruction", {
+            "canon": canon, "display": disp, "instruction": instruction, "mode": mode,
+        }, task_id=board_id, title=f"инструкция {disp}")
+        await reply_func(
+            f"📝 Готов обновить инструкцию для *{disp}* (mode={mode}):\n"
+            f"«{instruction[:300]}»\n\n"
+            f"Бот учтёт это в следующем ответе БЕЗ редеплоя.\n"
+            f"/approve {action_id} — применить\n"
+            f"/skip {action_id} — отменить"
+        )
+
+    elif intent == "delegate":
+        """Делегирование задачи главе отдела (через офисный роутинг) + верификация
+        результата. Approval-гейт: вызов отдела идёт после /approve."""
+        from ai_office_shared.shared.office import OFFICE_AGENTS
+        from ai_office_shared.shared.identity import canonical, display
+
+        if confidence < 0.85:
+            await reply_func(
+                "🤔 Не уверен, кому и что делегировать. Уточни: какому отделу "
+                "(Тилли/Милли/Доктор/Билли/Крисс/Вилли) и какую задачу?"
+            )
+            return
+
+        target = intent_data.get("bot") or repo or ""
+        canon = canonical(target) if target else None
+        if not canon:
+            for word in task.replace(",", " ").replace(":", " ").split():
+                c = canonical(word)
+                if c:
+                    canon = c
+                    break
+        assignee_display = (canon.upper() if canon else (target.upper() if target else ""))
+        if assignee_display not in OFFICE_AGENTS:
+            await reply_func(
+                f"⚠️ Не знаю отдела для делегирования: {assignee_display or target or '—'}.\n"
+                f"Доступны: {', '.join(OFFICE_AGENTS)}"
+            )
+            return
+
+        r_tb = await get_redis()
+        board_id = await tb.create_task(
+            r_tb, f"delegate {assignee_display}: {task[:60]}",
+            created_by="силли", assignee=(canon or assignee_display.lower()),
+            status="awaiting_approval",
+        ) or ""
+        action_id = await stage_pending("delegate", {
+            "assignee_display": assignee_display,
+            "task_text": task,
+            "user_id": int(os.getenv("YOUR_TELEGRAM_ID", "391077101")),
+        }, task_id=board_id, title=f"delegate {assignee_display}")
+        await reply_func(
+            f"🤝 Готов делегировать *{assignee_display}*:\n«{task[:300]}»\n\n"
+            f"После подтверждения дёрну отдел и проверю результат (верификация).\n"
+            f"/approve {action_id} — делегировать\n"
+            f"/skip {action_id} — отменить"
+        )
 
 
 # ── Telegram handlers ──────────────────────────────────────────────────────────
@@ -4004,35 +4180,176 @@ async def cmd_ls(message: Message):
     await message.answer(f"📂 `{repo}/{path}`:\n" + "\n".join(lines), parse_mode="Markdown")
 
 
+async def set_bot_instruction(name: str, instruction: str, mode: str = "append") -> bool:
+    """
+    Рантайм-обучение бота: пишет office:instructions:{canon}, который бот дочитывает
+    в build_system() и аппендит к системному промпту БЕЗ редеплоя.
+
+    mode: "append" (добавить строку), "set" (заменить целиком), "clear" (удалить).
+    """
+    from ai_office_shared.shared.identity import canonical
+    canon = canonical(name) or name
+    r = await get_redis()
+    if not r:
+        return False
+    key = f"office:instructions:{canon}"
+    instruction = (instruction or "").strip()
+    try:
+        if mode == "clear" or not instruction:
+            await r.delete(key)
+        elif mode == "set":
+            await r.set(key, instruction[:4000])
+        else:  # append
+            existing = await r.get(key) or ""
+            combined = (existing + "\n" + instruction).strip() if existing else instruction
+            await r.set(key, combined[:4000])
+        return True
+    except Exception as e:
+        logger.warning(f"[instruction] set failed for {canon}: {e}")
+        return False
+
+
+async def _verify_delegation(task_text: str, response: str) -> dict:
+    """Верификация ответа отдела: отвечает ли он на задачу. {ok:bool, reason:str}."""
+    if not response.strip():
+        return {"ok": False, "reason": "пустой ответ"}
+    prompt = (
+        f"Задача, которую делегировали отделу:\n{task_text}\n\n"
+        f"Ответ отдела:\n{response[:2000]}\n\n"
+        "Ответ закрывает задачу по существу (не отписка, не отказ, не запрос уточнений)?"
+    )
+    sys = ('Верификатор делегированных задач. JSON без markdown: '
+           '{"ok": true|false, "reason": "1 короткое предложение"}')
+    try:
+        raw = await ask_claude(prompt, system=sys, model="claude-haiku-4-5-20251001")
+        s, e = raw.find("{"), raw.rfind("}") + 1
+        data = json.loads(raw[s:e]) if s != -1 and e > s else {}
+        return {"ok": bool(data.get("ok")), "reason": str(data.get("reason", ""))[:200]}
+    except Exception as e:
+        # Верификатор упал — не блокируем, но честно помечаем
+        return {"ok": True, "reason": f"верификатор недоступен ({e}), принято без проверки"}
+
+
+async def run_delegation(assignee_display: str, task_text: str, user_id: int,
+                         *, task_id: str = "") -> dict:
+    """
+    Делегирует задачу главе отдела через call_office (source=ФИЛЛИ → отдел вернёт JSON,
+    не дублируя в группу), затем верифицирует ответ. Обновляет доску.
+    Возвращает {ok, response, verdict}.
+    """
+    from ai_office_shared.shared.office import call_office
+    r = await get_redis()
+    if task_id:
+        await tb.update_status(r, task_id, "in_progress")
+    resp = await call_office(assignee_display, task_text, user_id, source="ФИЛЛИ")
+    if not resp:
+        if task_id:
+            await tb.update_status(r, task_id, "blocked", result="нет ответа от отдела")
+        return {"ok": False, "response": "", "verdict": "нет ответа от отдела"}
+    verdict = await _verify_delegation(task_text, resp)
+    if task_id:
+        await tb.update_status(
+            r, task_id, "done" if verdict["ok"] else "needs_fix",
+            result=f"[{'OK' if verdict['ok'] else 'NEEDS_FIX'}] {verdict['reason']}\n\n{resp[:3000]}",
+        )
+    return {"ok": verdict["ok"], "response": resp, "verdict": verdict["reason"]}
+
+
+async def _apply_pending_action(entry: dict) -> str:
+    """
+    Применяет подтверждённое (/approve) риск-действие. Диспетчит по type.
+    Поддерживает legacy in-memory фикс-дикты (без поля type → deploy_fix).
+    Возвращает человекочитаемый статус.
+    """
+    atype = entry.get("type")
+    if atype is None:                 # legacy: сам entry и есть payload фикса
+        atype = "deploy_fix"
+        payload = entry
+    else:
+        payload = entry.get("payload", {}) or {}
+    task_id = entry.get("task_id", "")
+    r = await get_redis()
+    try:
+        if atype == "deploy_fix":
+            analysis = payload.get("analysis", {})
+            await push_file(
+                payload["repo"], payload["affected"], payload["fixed_code"],
+                f"approved fix({payload['service_name']}): {analysis.get('fix_description','')[:60]}",
+            )
+            redeployed = await redeploy_service(payload["service_id"])
+            status = "редеплой запущен ✅" if redeployed else "редеплой не удался ⚠️"
+            asyncio.create_task(append_ops_log(
+                f"approved fix: {analysis.get('fix_description','')[:60]}",
+                payload["service_name"], f"approved by Влад | {status}",
+            ))
+            await post_lesson(
+                title        = analysis.get("lesson_title", ""),
+                symptom      = analysis.get("lesson_symptom", ""),
+                cause        = analysis.get("lesson_cause", ""),
+                context      = f"{payload['repo']}/{payload['affected']}",
+                fix          = analysis.get("lesson_fix", ""),
+                how_to_avoid = analysis.get("lesson_avoid", ""),
+            )
+            if task_id:
+                await tb.update_status(r, task_id, "done", result=status)
+            return f"✅ Фикс применён ({payload['service_name']}), {status}"
+
+        if atype == "deploy_devtask":
+            res = await push_file(
+                payload["repo"], payload["path"], payload["code"],
+                payload.get("commit_msg") or f"feat: {payload.get('title', 'dev task')[:60]}",
+            )
+            action = res.get("action", "pushed") if isinstance(res, dict) else "pushed"
+            url = res.get("url", "") if isinstance(res, dict) else ""
+            asyncio.create_task(append_ops_log(
+                "approved dev_task push", payload["repo"], f"{action} {payload['path']}",
+            ))
+            if task_id:
+                await tb.update_status(r, task_id, "done", result=f"{action}: {url}")
+            return (f"✅ Код запушен в {payload['repo']}/{payload['path']} ({action}) — "
+                    f"Railway задеплоит автоматически.\n{url}")
+
+        if atype == "update_instruction":
+            ok = await set_bot_instruction(
+                payload["canon"], payload.get("instruction", ""),
+                mode=payload.get("mode", "append"),
+            )
+            if task_id:
+                await tb.update_status(r, task_id, "done" if ok else "blocked")
+            who = payload.get("display", payload.get("canon", "?"))
+            return (f"✅ Инструкция для {who} обновлена (mode={payload.get('mode','append')})"
+                    if ok else f"⚠️ Не удалось обновить инструкцию для {who} (Redis?)")
+
+        if atype == "delegate":
+            uid = payload.get("user_id") or int(os.getenv("YOUR_TELEGRAM_ID", "391077101"))
+            result = await run_delegation(
+                payload["assignee_display"], payload["task_text"], uid, task_id=task_id,
+            )
+            mark = "✅" if result["ok"] else "⚠️"
+            return (f"{mark} Делегировано {payload['assignee_display']}: {result['verdict']}\n\n"
+                    f"{result['response'][:1500]}")
+
+        return f"❌ Неизвестный тип pending-действия: {atype}"
+    except Exception as e:
+        if task_id:
+            await tb.update_status(r, task_id, "blocked", result=f"ошибка применения: {e}")
+        return f"❌ Ошибка при применении ({atype}): {e}"
+
+
 @dp.message(F.text.startswith("/approve"))
 async def cmd_approve(message: Message):
-    fix_id = message.text[8:].strip()
-    fix = pending_fixes.pop(fix_id, None)
-    if not fix:
-        await message.answer(f"❌ Фикс `{fix_id}` не найден или уже применён.")
+    # /approve_pr — отдельный handler ниже; не перехватываем его здесь
+    if message.text.startswith("/approve_pr"):
         return
-    await message.answer(f"⏳ Применяю фикс для *{fix['service_name']}*...", parse_mode="Markdown")
-    try:
-        await push_file(fix["repo"], fix["affected"], fix["fixed_code"],
-                        f"approved fix({fix['service_name']}): {fix['analysis'].get('fix_description','')[:60]}")
-        redeployed = await redeploy_service(fix["service_id"])
-        status = "редеплой запущен ✅" if redeployed else "редеплой не удался ⚠️"
-        await message.answer(f"✅ Фикс применён, {status}")
-        asyncio.create_task(append_ops_log(
-            f"approved fix: {fix['analysis'].get('fix_description','')[:60]}",
-            fix['service_name'], f"approved by Влад | {status}"
-        ))
-        analysis = fix["analysis"]
-        await post_lesson(
-            title       = analysis.get("lesson_title", ""),
-            symptom     = analysis.get("lesson_symptom", ""),
-            cause       = analysis.get("lesson_cause", ""),
-            context     = f"{fix['repo']}/{fix['affected']}",
-            fix         = analysis.get("lesson_fix", ""),
-            how_to_avoid= analysis.get("lesson_avoid", "")
-        )
-    except Exception as e:
-        await message.answer(f"❌ Ошибка при применении фикса: {e}")
+    action_id = message.text[8:].strip()
+    entry = await pop_pending(action_id)
+    if not entry:
+        await message.answer(f"❌ Действие `{action_id}` не найдено или уже применено.")
+        return
+    label = entry.get("title") or entry.get("type", "действие")
+    await message.answer(f"⏳ Применяю: {label}...")
+    status = await _apply_pending_action(entry)
+    await message.answer(status)
 
 
 
@@ -4164,11 +4481,16 @@ async def cmd_approve_pr(message: Message):
 
 @dp.message(F.text.startswith("/skip"))
 async def cmd_skip(message: Message):
-    fix_id = message.text[5:].strip()
-    if pending_fixes.pop(fix_id, None):
-        await message.answer(f"⏭️ Фикс `{fix_id}` пропущен.")
+    action_id = message.text[5:].strip()
+    entry = await pop_pending(action_id)
+    if entry:
+        task_id = entry.get("task_id", "") if isinstance(entry, dict) else ""
+        if task_id:
+            r = await get_redis()
+            await tb.update_status(r, task_id, "rejected", result="пропущено Владом")
+        await message.answer(f"⏭️ Действие `{action_id}` пропущено.")
     else:
-        await message.answer(f"❌ Фикс `{fix_id}` не найден.")
+        await message.answer(f"❌ Действие `{action_id}` не найдено.")
 
 
 @dp.message(F.text.startswith("/pause"))
@@ -4711,12 +5033,120 @@ async def handle_add_lessons(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+def _age_seconds(iso_ts: str) -> float:
+    """Возраст ISO8601-таймстампа (UTC, формат taskboard) в секундах. 0 при ошибке."""
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.strptime(iso_ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).total_seconds()
+    except Exception:
+        return 0.0
+
+
+async def _review_quality_and_routing(r):
+    """B3: проактивно заводит задачи по падению качества и роутинг-промахам."""
+    from ai_office_shared.shared.identity import BOTS, display, redis_key
+
+    open_tasks = await tb.list_tasks(r, status="open", limit=200)
+    open_titles = {t.get("title", "") for t in open_tasks}
+
+    # 1. Качество: много 👎 относительно 👍
+    for canon in BOTS:
+        try:
+            h = await r.hgetall(redis_key(canon, "quality"))
+        except Exception:
+            continue
+        if not h:
+            continue
+        up = int(h.get("up", 0) or 0)
+        down = int(h.get("down", 0) or 0)
+        if down >= 5 and down > up:
+            title = f"Качество {display(canon)}: {up}👍/{down}👎 — разобраться"
+            if title not in open_titles:
+                await tb.create_task(r, title, created_by="силли", assignee=canon, status="open")
+                await notify_office(f"📉 {title}. Завёл задачу на доске.")
+
+    # 2. Роутинг-промахи: частые промахи на агента
+    try:
+        raw = await r.lrange("office:routing:misses", 0, 99)
+    except Exception:
+        raw = []
+    counts: dict = {}
+    for item in raw:
+        try:
+            d = json.loads(item)
+            agent = d.get("agent", "?")
+            counts[agent] = counts.get(agent, 0) + 1
+        except Exception:
+            continue
+    for agent, n in counts.items():
+        if n >= 5:
+            title = f"Роутинг-промахи {agent}: {n} за окно — проверить доступность/маршрут"
+            if title not in open_titles:
+                await tb.create_task(r, title, created_by="силли",
+                                     assignee=str(agent).lower(), status="open")
+                await notify_office(f"🧭 {title}. Завёл задачу на доске.")
+
+
+async def _management_tick():
+    """Один проход проактивного управления: доска + метрики."""
+    r = await get_redis()
+    if not r:
+        return
+    # Доска: подвисшие и заблокированные верхнеуровневые задачи
+    active = await tb.list_tasks(
+        r, status={"in_progress", "needs_fix", "blocked"}, parent_id="", limit=100,
+    )
+    for t in active:
+        tid = t.get("id")
+        status = t.get("status")
+        age = _age_seconds(t.get("updated_at", ""))
+        if status == "blocked" and not t.get("escalated"):
+            await tb.update_status(r, tid, "blocked", escalated=True)
+            await notify_office(
+                f"🚨 Задача [{tid}] заблокирована: {t.get('title','')[:80]}\n"
+                f"Причина: {t.get('result','')[:200]}\nНужен твой разбор, шеф."
+            )
+        elif status in ("in_progress", "needs_fix") and age > MGMT_STUCK_AFTER_SEC \
+                and not t.get("escalated"):
+            # нудж один раз (помечаем escalated, чтобы не спамить)
+            await tb.update_status(r, tid, status, escalated=True)
+            await notify_office(
+                f"⏳ Задача [{tid}] висит ~{int(age // 3600)}ч в статусе {status}: "
+                f"{t.get('title','')[:80]}"
+            )
+    # B3: метрики качества и роутинга → проактивные задачи
+    await _review_quality_and_routing(r)
+
+
+async def management_loop():
+    """
+    Проактивная петля управления (A4 + B3). В отличие от monitor_loop (реактивно
+    чинит баги), эта ревьюит доску задач и метрики и сама инициирует работу.
+    Все РИСК-действия всё равно идут через approval-гейт (/approve) — петля только
+    нуджит, эскалирует и заводит задачи на доске.
+    """
+    await asyncio.sleep(60)  # дать боту стартовать
+    logger.info("[management] started")
+    while True:
+        if MONITOR_PAUSED():
+            logger.info("[management] paused via CILLY_MONITOR_PAUSED, sleeping...")
+            await asyncio.sleep(60)
+            continue
+        try:
+            await _management_tick()
+        except Exception as e:
+            logger.error(f"[management] tick error: {e}")
+        await asyncio.sleep(MANAGEMENT_INTERVAL)
+
+
 async def main():
     # Загружаем office:decisions из Redis при старте
     await init_office_decisions()
     asyncio.create_task(monitor_loop())
     asyncio.create_task(daily_audit_loop())
     asyncio.create_task(vietnam_cron_loop())
+    asyncio.create_task(management_loop())
     # HTTP server for Filly routing
     app = web.Application()
     app.router.add_post("/task", handle_cilly_task)

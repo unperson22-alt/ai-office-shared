@@ -101,8 +101,23 @@ mutation {
 
 **Файл:** `agents/coder.py` → `INTENT_PROMPT` (~L539)
 
-**Текущие intents:** push_code, fix_bot, create_bot, add_external_bot,
-get_bot_token, deploy, read_file, list_files, redis_query, answer
+**Текущие intents:** push_code, fix_bot, create_bot, create_cron, add_external_bot,
+get_bot_token, deploy, read_file, list_files, redis_query, edit_file, agentic_task,
+dev_task, delegate, update_bot_instruction, post_lessons, cleanup_group, cleanup_dm,
+send_group_message, answer
+
+**Автономное управление (с 2026-06-19):**
+- `dev_task` — делегирует команде dev-dept, ведёт задачу на доске (`office:tasks`),
+  при NEEDS_FIX/не-компиляции авто-повтор до 3 раз, потом blocked + эскалация.
+- `delegate` — поручает задачу главе отдела (через `call_office`) + верификация ответа.
+- `update_bot_instruction` — рантайм-обучение бота через `office:instructions:{bot}`
+  (бот учтёт без редеплоя; читается в `build_system`).
+- **Approval-гейт:** риск-действия (деплой, правка инструкций, делегирование) стейджатся
+  в `office:pending:{id}` и применяются только после `/approve <id>` (или `/skip <id>`).
+- **Проактивная петля** `management_loop` (каждые 30 мин, env `CILLY_MGMT_INTERVAL`):
+  ревьюит доску (нуджит подвисшие, эскалирует blocked) и метрики
+  (`office:quality`, `office:routing:misses`) → заводит задачи. Глушится
+  `CILLY_MONITOR_PAUSED=true`.
 
 **Если нужного action нет:**
 1. Добавить intent в INTENT_PROMPT (одно слово, snake_case)
