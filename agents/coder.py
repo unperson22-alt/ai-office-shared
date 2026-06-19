@@ -49,6 +49,16 @@ OLLAMA_ENABLED  = os.getenv("OLLAMA_ENABLED", "").lower() in ("1", "true", "yes"
 RAILWAY_TOKEN   = os.getenv("RAILWAY_TOKEN_VLAD") or os.getenv("RAILWAY_TOKEN")  # VLAD-token приоритет (audit fix)
 RAILWAY_PROJECT = "271b40b7-199a-429a-88ef-ca417f26a638"
 RAILWAY_ENV_ID  = "2efaaf60-ba39-492c-bf86-007fd505493f"  # BUILD:20260518-1803
+
+# Сервисы, живущие в ДРУГИХ Railway-проектах (после миграций) → их environment_id.
+# Дефолт остаётся awake-happiness production (RAILWAY_ENV_ID).
+SERVICE_ENV = {
+    "1c08bbcc-32bb-4e91-9bc9-d196c937c1c4": "7ff2ff7a-b6d7-4c06-95c9-9958f0d3af7b",  # tilly-trader → trading-dept
+}
+def _env_for(service_id: str) -> str:
+    """environment_id для редеплоя сервиса (дефолт — awake-happiness production)."""
+    return SERVICE_ENV.get(service_id, RAILWAY_ENV_ID)
+
 GITHUB_USER     = "unperson22-alt"
 LESSONS_FILE    = "lessons/lessons.json"
 
@@ -65,7 +75,7 @@ SERVICES = {
     "3dfc7336-2e91-4ade-950a-4f3d566baced": ("office-dashboard", "main.py"),
     "b441ce93-9736-49b3-9b5d-d0c82e715b28": ("billy-bot",        "bot.py"),
     "9db4108e-19f1-4c1f-a21c-3909442e137c": ("prophet-bot",      "bot.py"),
-    "9f868f0c-9c94-4776-a2dc-86a30d812b92": ("tilly-trader",     "bot.py"),
+    "1c08bbcc-32bb-4e91-9bc9-d196c937c1c4": ("tilly-trader",     "bot.py"),  # trading-dept (миграция 2026-06)
     "2f647984-c08e-405c-aaa3-a2bffc7fdd14": ("mama-bot",         "bot.py"),  # Эллис — исправлен 2026-06-02
     "5533bc5f-24aa-4079-903b-50bcde4cdd01": ("pilly-bot",        "bot.py"),
     "92f70bbb-70ea-474c-be0d-5cc1c9bd8f4e": ("kriss-bot",        "bot.py"),
@@ -870,7 +880,7 @@ async def redeploy_service(service_id: str) -> bool:
             mutation($serviceId: String!, $environmentId: String!) {
               serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId)
             }
-        """, {"serviceId": service_id, "environmentId": "2efaaf60-ba39-492c-bf86-007fd505493f"})
+        """, {"serviceId": service_id, "environmentId": _env_for(service_id)})
         return "errors" not in data
     except Exception as e:
         logger.error(f"redeploy failed for {service_id}: {e}")
@@ -910,7 +920,7 @@ async def deploy_commit(service_id: str, commit_sha: str) -> str | None:
             mutation($s: String!, $e: String!, $c: String!) {
               serviceInstanceDeployV2(serviceId: $s, environmentId: $e, commitSha: $c)
             }
-        """, {"s": service_id, "e": "2efaaf60-ba39-492c-bf86-007fd505493f", "c": commit_sha})
+        """, {"s": service_id, "e": _env_for(service_id), "c": commit_sha})
         return data.get("data", {}).get("serviceInstanceDeployV2") if "errors" not in data else None
     except Exception as e:
         logger.error(f"deploy_commit failed for {service_id}: {e}")
