@@ -28,7 +28,6 @@ ENV_ID        = 2efaaf60-ba39-492c-bf86-007fd505493f   (единственное
 вилли   = a5e37cc4-0a9f-4700-b6d3-d39b958ce0cb   (villy-bot)
 гослинг = ed03c9d3-e83f-4675-9f0a-a4d4fc622365   (gosling-bot)
 # добавлены 2026-06-14 (были не в скилле):
-tilly-trader    = 9f868f0c-9c94-4776-a2dc-86a30d812b92   ⚠️ AUTO-DEPLOY ВЫКЛ — катить вручную (см. ниже)
 logger-bot      = 3319eabd-5bcb-4e59-839e-4813f1e7ef33
 pilly-bot       = 5533bc5f-24aa-4079-903b-50bcde4cdd01
 prophet-bot     = 9db4108e-19f1-4c1f-a21c-3909442e137c
@@ -36,6 +35,15 @@ watchdog-bot    = e23833d2-8a05-4749-adce-c856ec026927
 office-dashboard= 3dfc7336-2e91-4ade-950a-4f3d566baced
 # Redis        = b62bdd8d-237a-4f2b-b4dc-9fed787c168d
 ```
+**⚠️ В ДРУГОМ проекте (мигрировали из awake-happiness):**
+```
+# проект trading-dept = 3e58f2c8-a07c-482e-9886-8d356ba8e672
+# env production       = 7ff2ff7a-b6d7-4c06-95c9-9958f0d3af7b
+tilly-trader = 1c08bbcc-32bb-4e91-9bc9-d196c937c1c4   ✅ auto-deploy с main ВКЛ (репо подключён)
+# старый id 9f868f0c-… из awake-happiness УДАЛЁН — не использовать (давал ложный NO_DEPLOY)
+```
+При редеплое tilly-trader использовать env `7ff2ff7a-…`, НЕ awake-happiness `2efaaf60-…`.
+
 **⚠️ ПРОТУХЛИ (не в активном списке проекта 271b40b7):**
 ```
 силли   = efa6bd21-...  → резолвится в УДАЛЁННЫЙ сервис "cilly-bot-<UUID>". Реальный неизвестен.
