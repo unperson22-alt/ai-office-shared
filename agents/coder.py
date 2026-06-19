@@ -1187,6 +1187,21 @@ HEALTH_URLS = {
     "tilly-trader":     "https://tilly-trader-production.up.railway.app/health",
 }
 
+async def _all_office_services() -> list:
+    """[(service_id, name)] по ВСЕМ проектам-отделам (для аудита/скана логов на баги).
+    Фолбэк на статический SERVICES, если Railway API недоступен."""
+    try:
+        d = await railway_query("{ projects { edges { node { services { edges { node { id name } } } } } } }")
+        out = []
+        for pe in ((d.get("data") or {}).get("projects") or {}).get("edges") or []:
+            for se in (pe["node"].get("services") or {}).get("edges") or []:
+                out.append((se["node"]["id"], se["node"]["name"]))
+        return out or [(sid, repo) for sid, (repo, _) in SERVICES.items()]
+    except Exception as e:
+        logger.error(f"_all_office_services: {e}")
+        return [(sid, repo) for sid, (repo, _) in SERVICES.items()]
+
+
 async def run_daily_audit() -> str:
     """Полный аудит офиса: деплои, логи, health. Возвращает текст отчёта."""
     import datetime
@@ -1387,7 +1402,8 @@ async def run_daily_audit() -> str:
         "Conflict: terminated by other getUpdates",
         "DeprecationWarning", "TimedOut", "NetworkError",
     ]
-    for service_id, (repo, _) in SERVICES.items():
+    office_services = await _all_office_services()
+    for service_id, repo in office_services:
         try:
             logs = await get_service_logs(service_id)
             errs = [l for l in logs
@@ -1411,7 +1427,7 @@ async def run_daily_audit() -> str:
 
         # Собираем все ошибки за сутки по всем сервисам
         all_errors: dict[str, list[str]] = {}
-        for service_id, (repo, _) in SERVICES.items():
+        for service_id, repo in office_services:
             try:
                 logs = await get_service_logs(service_id)
                 errs = [l for l in logs if any(p in l for p in ERROR_PATTERNS)
