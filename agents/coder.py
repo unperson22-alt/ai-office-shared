@@ -1116,37 +1116,89 @@ async def generate_fix(source_code: str, fix_description: str) -> str:
 
 
 # ── Lesson & notifications ─────────────────────────────────────────────────────
-async def post_lesson(title: str, symptom: str, cause: str, context: str, fix: str, how_to_avoid: str):
-    if not LESSONS_CHAT_ID:
-        return
-    text = (
-        f"📚 Урок — {title}\n\n"
-        f"🔴 Симптом\n{symptom}\n\n"
-        f"🔍 Причина\n{cause}\n\n"
-        f"📍 Контекст\n{context}\n\n"
-        f"🔧 Фикс\n{fix}\n\n"
-        f"🛡️ Как избежать\n{how_to_avoid}"
+BUG_LESSONS_CHAT = -5197140411  # Telegram-группа Bug Lessons — единая точка публикации уроков
+
+def _format_lesson(l: dict) -> str:
+    """Единый формат сообщения урока для Bug Lessons."""
+    status_emoji = {"fixed": "✅", "still_relevant": "⚠️", "outdated": "🗄", "documented": "📝"}
+    se = status_emoji.get(l.get("status", ""), "❓")
+    return (
+        f"🐛 Урок #{l.get('id')} — {l.get('title', '?')}\n\n"
+        f"📍 {l.get('bot', '?')} | {l.get('layer', '?')}\n\n"
+        f"👁 Симптом:\n{l.get('symptom', '?')}\n\n"
+        f"🔍 Причина:\n{l.get('root_cause', l.get('cause', '?'))}\n\n"
+        f"✅ Фикс:\n{l.get('fix', '?')}\n\n"
+        f"🛡 Профилактика:\n{l.get('prevention', '?')}\n\n"
+        f"{se} Статус: {l.get('status', '?')}"
     )
+
+
+async def publish_pending_lessons(reply_func=None, limit: int = 25) -> int:
+    """Постит в Bug Lessons ТОЛЬКО уроки без флага posted_to_group, ставит флаг и
+    коммитит lessons.json. Единый источник правды — сам файл (durable): переживает
+    сброс Redis и НЕ может зафлудить (уже опубликованное помечено в git).
+
+    Вызывается из аудита (Силли сама подтягивает новые уроки), из post_lesson и add_lessons.
+    """
+    from datetime import datetime as _dt, timezone as _tz
     try:
-        sent = await bot.send_message(chat_id=LESSONS_CHAT_ID, text=text)
-        await remember_my_message(sent)
+        raw = await read_file("ai-office-shared", LESSONS_FILE)
+        lessons = json.loads(raw)
     except Exception as e:
-        logger.error(f"post_lesson failed: {e}")
-    # Save compact AI format to lessons.json in parallel
-    asyncio.create_task(append_lesson_ai(title, symptom, cause, context, fix, how_to_avoid))
+        logger.error(f"publish_pending_lessons read failed: {e}")
+        if reply_func:
+            await reply_func(f"❌ Не могу прочитать lessons.json: {e}")
+        return 0
+
+    pending = [l for l in lessons if not l.get("posted_to_group")]
+    if not pending:
+        if reply_func:
+            await reply_func(f"✅ Новых уроков нет — все {len(lessons)} уже в Bug Lessons")
+        return 0
+
+    capped = pending[:limit]
+    posted = 0
+    now_iso = _dt.now(_tz.utc).isoformat()
+    for lesson in capped:
+        try:
+            await _GLOBAL_BOT.send_message(chat_id=BUG_LESSONS_CHAT, text=_format_lesson(lesson))
+            lesson["posted_to_group"] = True
+            lesson["posted_at"] = now_iso
+            posted += 1
+            await asyncio.sleep(0.8)
+        except Exception as e:
+            logger.error(f"publish_pending_lessons #{lesson.get('id')} failed: {e}")
+            break  # непосланное НЕ помечаем; коммитим только то, что успели
+
+    if posted:
+        try:
+            await push_file("ai-office-shared", LESSONS_FILE,
+                            json.dumps(lessons, ensure_ascii=False, indent=2),
+                            f"chore(lessons): mark {posted} posted_to_group")
+        except Exception as e:
+            logger.error(f"publish_pending_lessons commit failed: {e}")
+    if reply_func:
+        extra = f" (ещё {len(pending) - posted} в очереди)" if len(pending) > posted else ""
+        await reply_func(f"✅ Опубликовано {posted} новых уроков в Bug Lessons{extra}")
+    return posted
+
+
+async def post_lesson(title: str, symptom: str, cause: str, context: str, fix: str, how_to_avoid: str):
+    """Записывает урок в durable-историю (lessons.json) и публикует НОВЫЕ уроки.
+
+    Публикация в Bug Lessons идёт ТОЛЬКО через publish_pending_lessons (идемпотентно по
+    флагу posted_to_group), поэтому повторный вызов и аудит не задваивают сообщения.
+    """
+    # 1) durable-история: ждём, урок должен лечь в файл до публикации
+    await append_lesson_ai(title, symptom, cause, context, fix, how_to_avoid)
     r = await get_redis()
     if r:
-        await log_event(r, BOT_NAME_LOWER, "lesson_saved",
-                        title=title[:100])
-        # Помечаем урок как уже опубликованный — дедупликация для post_lessons batch
-        try:
-            # Не можем получить числовой id здесь (append_lesson_ai async)
-            # Записываем title-based ключ — post_lessons использует числовые id
-            # Оба sadd на SET, тип не конфликтует. Дедупликация по id в post_lessons.
-            lesson_hash = str(abs(hash(f"{title}{symptom}")))
-            await r.sadd("office:lessons:posted_ids", lesson_hash)
-        except Exception:
-            pass
+        await log_event(r, BOT_NAME_LOWER, "lesson_saved", title=title[:100])
+    # 2) опубликовать новые (включая только что записанный) — идемпотентно по флагу
+    try:
+        await publish_pending_lessons()
+    except Exception as e:
+        logger.error(f"post_lesson publish failed: {e}")
 
 
 async def outbound_paused() -> bool:
@@ -1622,6 +1674,15 @@ async def run_daily_audit() -> str:
         lines.append(f"📚 Новых уроков записано: {new_lesson_count}")
     else:
         lines.append("📚 Новых паттернов багов не найдено")
+
+    # 4b. Публикация новых уроков в Bug Lessons — Силли подтягивает их сама на аудите
+    #     (durable: постятся только уроки без posted_to_group, повтор/флуд исключён)
+    try:
+        published = await publish_pending_lessons()
+        if published:
+            lines.append(f"📤 Опубликовано новых уроков в Bug Lessons: {published}")
+    except Exception as e:
+        logger.error(f"[daily_audit] publish lessons failed: {e}")
 
     # 5. Итог
     lines.append("")
@@ -3336,6 +3397,8 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             target_chat = -5197140411
             if any(w in task.lower() for w in ["дубл", "dedup", "дублир", "повтор"]):
                 cutoff_mode = "dedup_lessons"
+            elif any(w in task.lower() for w in ["всё", "все ", "вычист", "очист", "wipe", "полност", "чистый лист", "clean"]):
+                cutoff_mode = "all_bots"   # чистый лист: удалить ВСЕ сообщения от ботов
             else:
                 cutoff_mode = "old_bots"
         else:
@@ -3391,6 +3454,18 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                             if lesson_key not in _lesson_map:
                                 _lesson_map[lesson_key] = []
                             _lesson_map[lesson_key].append(msg.id)
+                elif cutoff_mode == "all_bots":
+                    # Чистый лист: ВСЕ сообщения от ботов в группе, без фильтра по дате
+                    sender_id = getattr(msg.from_id, 'user_id', None)
+                    if not sender_id:
+                        continue
+                    try:
+                        user = await tg_cl.get_entity(sender_id)
+                        if getattr(user, 'bot', False):
+                            to_delete.append(msg.id)
+                    except Exception:
+                        if msg.text and any(p in msg.text for p in SERVICE_PATTERNS):
+                            to_delete.append(msg.id)
                 else:
                     # Старый режим: удаляем старые сообщения от ботов
                     if msg.date >= cutoff:
@@ -3433,69 +3508,11 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
 
 
     elif intent == "post_lessons":
-        """Читает lessons.json и постит только новые уроки в Bug Lessons группу (защита от дублей через Redis)."""
-        import asyncio as _asyncio
-        _bot = bot  # избегаем конфликта с локальной переменной data
-        BUG_GROUP = -5197140411
-        REDIS_KEY = "office:lessons:posted_ids"
-        force = "force" in task.lower() or "все" in task.lower() or "all" in task.lower()
-        try:
-            raw = await read_file("ai-office-shared", "lessons/lessons.json")
-            lessons_list = json.loads(raw)
-        except Exception as e:
-            await reply_func(f"❌ Не могу прочитать lessons.json: {e}")
-            return
-
-        # Получаем уже запощенные ID из Redis
-        posted_ids = set()
-        if not force:
-            try:
-                r = await get_redis()
-                if r:
-                    raw_ids = await r.smembers(REDIS_KEY)
-                    posted_ids = {v.decode() if isinstance(v, bytes) else str(v) for v in raw_ids}
-            except Exception:
-                pass
-
-        to_post = [l for l in lessons_list if str(l.get("id")) not in posted_ids]
-        if not to_post:
-            await reply_func(f"✅ Все {len(lessons_list)} уроков уже опубликованы в Bug Lessons")
-            return
-
-        await reply_func(f"📚 Постю {len(to_post)} новых уроков (из {len(lessons_list)}) в Bug Lessons...")
-
-        STATUS_EMOJI = {"fixed": "✅", "still_relevant": "⚠️", "outdated": "🗄"}
-
-        for lesson in to_post:
-            lesson_id = str(lesson.get("id"))
-            status_e = STATUS_EMOJI.get(lesson.get("status", ""), "❓")
-            msg = (
-                f"🐛 Урок #{lesson.get('id')} — {lesson.get('title', '?')}\n\n"
-                f"📍 {lesson.get('bot', '?')} | {lesson.get('layer', '?')}\n\n"
-                f"👁 Симптом:\n{lesson.get('symptom', '?')}\n\n"
-                f"🔍 Причина:\n{lesson.get('root_cause', lesson.get('cause', '?'))}\n\n"
-                f"✅ Фикс:\n{lesson.get('fix', '?')}\n\n"
-                f"🛡 Профилактика:\n{lesson.get('prevention', '?')}\n\n"
-                f"{status_e} Статус: {lesson.get('status', '?')}"
-            )
-            try:
-                from aiogram.exceptions import TelegramAPIError
-                await _GLOBAL_BOT.send_message(chat_id=BUG_GROUP, text=msg)
-                # Помечаем как запощенный
-                try:
-                    r = await get_redis()
-                    if r:
-                        await r.sadd(REDIS_KEY, lesson_id)
-                except Exception:
-                    pass
-                await _asyncio.sleep(0.8)
-            except Exception as e:
-                try:
-                    await _GLOBAL_BOT.send_message(chat_id=BUG_GROUP, text=f"⚠️ Урок #{lesson.get('id')} — ошибка: {e}")
-                except Exception:
-                    pass
-
-        await reply_func(f"✅ Опубликовано {len(to_post)} уроков в Bug Lessons")
+        """Публикует в Bug Lessons только НОВЫЕ уроки через единый durable-механизм.
+        Состояние «опубликован» хранится флагом posted_to_group в lessons.json (git) —
+        переживает сброс Redis и НЕ может зафлудить. Чтобы перепостить конкретный урок,
+        снимите ему posted_to_group в lessons.json."""
+        await publish_pending_lessons(reply_func)
 
 
     elif intent == "edit_file":
@@ -5157,32 +5174,10 @@ async def handle_add_lessons(request):
         await push_file("ai-office-shared", LESSONS_FILE,
                         json.dumps(lessons, ensure_ascii=False, indent=2),
                         f"lessons: +{len(added)} (#{added[0]['id']}-#{added[-1]['id']})")
-        # 2) выложить в Bug Lessons группу + проставить дедуп
-        BUG_GROUP = -5197140411
-        EMO = {"fixed": "✅", "still_relevant": "⚠️", "outdated": "🗄", "documented": "📝"}
-        r = await get_redis()
-        posted = 0
-        for l in added:
-            if do_post:
-                se = EMO.get(l.get("status", ""), "❓")
-                msg = (f"🐛 Урок #{l['id']} — {l['title']}\n\n"
-                       f"📍 {l['bot']} | {l['layer']}\n\n"
-                       f"👁 Симптом:\n{l['symptom']}\n\n"
-                       f"🔍 Причина:\n{l.get('root_cause') or l.get('cause', '')}\n\n"
-                       f"✅ Фикс:\n{l['fix']}\n\n"
-                       f"🛡 Профилактика:\n{l['prevention']}\n\n"
-                       f"{se} Статус: {l['status']}")
-                try:
-                    await _GLOBAL_BOT.send_message(chat_id=BUG_GROUP, text=msg)
-                    posted += 1
-                    await asyncio.sleep(0.8)
-                except Exception as e:
-                    logger.error(f"add_lessons post #{l['id']} failed: {e}")
-            if r:
-                try:
-                    await r.sadd("office:lessons:posted_ids", str(l["id"]))
-                except Exception:
-                    pass
+        # 2) опубликовать новые уроки через единый durable-механизм.
+        #    Добавленные на шаге 1 записи ещё без posted_to_group → publish их подхватит,
+        #    пометит и закоммитит. Без ручного цикла и без Redis-дедупа (single source of truth).
+        posted = await publish_pending_lessons() if do_post else 0
         return web.json_response({"added": [l["id"] for l in added], "posted": posted})
     except Exception as e:
         logger.error(f"handle_add_lessons: {e}")
