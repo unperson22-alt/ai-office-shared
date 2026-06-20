@@ -69,6 +69,31 @@ async def call_office(
     return ""
 
 
+async def instructions_suffix(redis_client, bot_name: str) -> str:
+    """
+    Рантайм-инструкции тимлида Cilly для бота: читает office:instructions:{canon}
+    и возвращает готовый суффикс для системного промпта (или '' если их нет).
+
+    Боты дописывают результат к системному промпту в build_system() — это позволяет
+    Cilly менять поведение бота БЕЗ редеплоя (writer — set_bot_instruction в coder.py).
+    Fail-silent: при любой ошибке/отсутствии Redis возвращает ''.
+    """
+    if redis_client is None or not bot_name:
+        return ""
+    try:
+        from .identity import canonical
+        canon = canonical(bot_name) or bot_name
+        raw = await redis_client.get(f"office:instructions:{canon}")
+        if not raw:
+            return ""
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
+        raw = raw.strip()
+        return f"\n\n[Указания тимлида Cilly — обязательно учитывай]\n{raw}" if raw else ""
+    except Exception:
+        return ""
+
+
 def parse_office_tag(text: str) -> tuple[str | None, str | None]:
     """
     Парсит тег [OFFICE:АГЕНТ:запрос] из текста ответа LLM.
