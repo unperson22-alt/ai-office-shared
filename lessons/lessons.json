@@ -796,7 +796,8 @@
     "prevention": "Во ВСЕХ ботах: 'нет данных' и 'всё ок, пусто' должны быть различимы; отправка алерта не должна зависеть от персиста/логирования; критичные данные — минимум 2 провайдера с фолбэком; если сервис производит health-телеметрию, кто-то должен её читать и реагировать (503, а не 200)",
     "cause": "single-point-of-failure + silent-failure",
     "tag": "trading,resilience,observability,data-source",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T20:20:10.388256+00:00"
   },
   {
     "id": 53,
@@ -812,6 +813,7 @@
     "cause": "Дедуп-состояние в Redis рассинхронизировалось с историей уроков в git",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T20:20:10.388256+00:00"
   }
 ]
