@@ -660,7 +660,8 @@
     "cause": "Мониторинг был завязан на захардкоженный список сервисов одного проекта",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:31:34.090806+00:00"
   },
   {
     "id": 42,
@@ -676,7 +677,8 @@
     "cause": "Railpack/mise не смог верифицировать аттестации pinned python из runtime.txt",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:31:34.090806+00:00"
   },
   {
     "id": 43,
@@ -692,7 +694,8 @@
     "cause": "Стартовый get_me() не оборачивался в retry/try, таймаут ронял процесс",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:31:34.090806+00:00"
   },
   {
     "id": 44,
@@ -708,7 +711,8 @@
     "cause": "Внутренний redis.railway.internal не резолвится из другого Railway-проекта",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:31:34.090806+00:00"
   },
   {
     "id": 45,
@@ -724,7 +728,8 @@
     "cause": "Отсутствие лимита на постинг в группу + отсутствие инструмента под задачу → бесконечная просьба о помощи",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:31:34.090806+00:00"
   },
   {
     "id": 46,
@@ -740,7 +745,8 @@
     "cause": "md5 по сырым строкам лога нестабилен из-за номеров строк",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:31:34.090806+00:00"
   },
   {
     "id": 47,
@@ -756,7 +762,8 @@
     "cause": "Токены были вписаны в код как строки вместо os.environ",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:31:34.090806+00:00"
   },
   {
     "id": 48,
@@ -772,7 +779,8 @@
     "cause": "Одноразовый скрипт закоммичен поверх bot.py и задеплоен",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:31:34.090806+00:00"
   },
   {
     "id": 49,
@@ -788,7 +796,8 @@
     "cause": "klines из BingX не сортировались, порядок был обратный ожидаемому",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:31:34.090806+00:00"
   },
   {
     "id": 50,
@@ -804,7 +813,8 @@
     "cause": "Env-переменная SCREENER_INTERVAL_H слетела при переподключении сервиса",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:31:34.090806+00:00"
   },
   {
     "id": 51,
@@ -820,7 +830,8 @@
     "cause": "post_lesson помечал дедуп title-хэшем, а post_lessons дедупит по числовым id — наборы разъехались; плюс Redis мог быть очищен. Запуск post_lessons выложил бы все 40 заново",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:31:34.090806+00:00"
   },
   {
     "id": 52,
@@ -870,6 +881,7 @@
     "cause": "Полный wipe был дефолтным и автоматическим вместо узкого дедупа",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:31:34.090806+00:00"
   }
 ]
