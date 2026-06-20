@@ -1133,7 +1133,7 @@ def _format_lesson(l: dict) -> str:
     )
 
 
-async def publish_pending_lessons(reply_func=None, limit: int = 25) -> int:
+async def publish_pending_lessons(reply_func=None, limit: int = 100) -> int:
     """Постит в Bug Lessons ТОЛЬКО уроки без флага posted_to_group, ставит флаг и
     коммитит lessons.json. Единый источник правды — сам файл (durable): переживает
     сброс Redis и НЕ может зафлудить (уже опубликованное помечено в git).
@@ -1201,80 +1201,18 @@ async def post_lesson(title: str, symptom: str, cause: str, context: str, fix: s
         logger.error(f"post_lesson publish failed: {e}")
 
 
-CLEANUP_FLAG_FILE = "lessons/_migrations.json"
+async def publish_pending_on_startup():
+    """Старт-задача: опубликовать pending-уроки (НИЧЕГО не удаляет).
 
-async def cleanup_bug_lessons_legacy():
-    """Одноразовая авто-чистка Bug Lessons от легаси-флуда уроков.
-
-    Idempotent через durable-флаг в git. Fail-safe: если связь с git не подтверждает
-    отсутствие флага (любая ошибка, кроме явного 404) — чистку НЕ делаем, чтобы случайно
-    не снести уже опубликованные актуальные уроки. После первого успешного прогона
-    функция всегда выходит быстро (без Telethon).
+    Идемпотентно — постит только уроки без posted_to_group. Нужна, чтобы при редеплое
+    Силли сама дозалила в Bug Lessons новые/восстановленные уроки без ручных команд.
+    Никакой авто-чистки/wipe здесь нет — чистка только дедупом по явной команде.
     """
-    FLAG = "bug_lessons_wiped_v1"
-    state = {}
-    try:
-        raw = await read_file("ai-office-shared", CLEANUP_FLAG_FILE)
-        state = json.loads(raw)
-        if state.get(FLAG):
-            return  # уже чистили
-    except Exception as e:
-        status = getattr(getattr(e, "response", None), "status_code", None)
-        if status != 404:
-            logger.warning(f"[cleanup_legacy] flag read inconclusive ({e}); skip wipe")
-            return  # не можем подтвердить → fail-safe, не чистим
-        state = {}  # файла нет (404) → первый запуск, продолжаем
-
-    deleted = 0
-    try:
-        tg_cl = await get_telethon_client()
-        try:
-            messages = await tg_cl.get_messages(BUG_LESSONS_CHAT, limit=3000)
-            to_delete = []
-            for msg in messages:
-                if not msg or not getattr(msg, "from_id", None):
-                    continue
-                sender_id = getattr(msg.from_id, "user_id", None)
-                if not sender_id:
-                    continue
-                try:
-                    user = await tg_cl.get_entity(sender_id)
-                    if getattr(user, "bot", False):
-                        to_delete.append(msg.id)
-                except Exception:
-                    continue
-            for i in range(0, len(to_delete), 100):
-                await tg_cl.delete_messages(BUG_LESSONS_CHAT, to_delete[i:i + 100])
-                await asyncio.sleep(0.5)
-            deleted = len(to_delete)
-        finally:
-            await tg_cl.disconnect()
-        logger.info(f"[cleanup_legacy] removed {deleted} legacy Bug Lessons messages")
-    except Exception as e:
-        logger.error(f"[cleanup_legacy] wipe failed: {e}")
-        return  # флаг НЕ ставим — повторим на следующем старте
-
-    from datetime import datetime as _dt, timezone as _tz
-    state[FLAG] = True
-    state[f"{FLAG}_at"] = _dt.now(_tz.utc).isoformat()
-    state[f"{FLAG}_deleted"] = deleted
-    try:
-        await push_file("ai-office-shared", CLEANUP_FLAG_FILE,
-                        json.dumps(state, ensure_ascii=False, indent=2),
-                        "chore(lessons): one-shot Bug Lessons legacy wipe done")
-    except Exception as e:
-        logger.error(f"[cleanup_legacy] flag commit failed: {e}")
-
-
-async def bug_lessons_migration_task():
-    """Старт-задача: один раз снести легаси-флуд Bug Lessons, затем опубликовать
-    актуальные (pending) уроки. Полностью автономно, без команд от пользователя."""
     try:
         await asyncio.sleep(25)  # дать боту и сети подняться
-        await cleanup_bug_lessons_legacy()
         await publish_pending_lessons()
     except Exception as e:
-        logger.error(f"[cleanup_legacy] migration task failed: {e}")
+        logger.error(f"[publish_startup] failed: {e}")
 
 
 async def outbound_paused() -> bool:
@@ -3473,8 +3411,6 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             target_chat = -5197140411
             if any(w in task.lower() for w in ["дубл", "dedup", "дублир", "повтор"]):
                 cutoff_mode = "dedup_lessons"
-            elif any(w in task.lower() for w in ["всё", "все ", "вычист", "очист", "wipe", "полност", "чистый лист", "clean"]):
-                cutoff_mode = "all_bots"   # чистый лист: удалить ВСЕ сообщения от ботов
             else:
                 cutoff_mode = "old_bots"
         else:
@@ -3530,18 +3466,6 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                             if lesson_key not in _lesson_map:
                                 _lesson_map[lesson_key] = []
                             _lesson_map[lesson_key].append(msg.id)
-                elif cutoff_mode == "all_bots":
-                    # Чистый лист: ВСЕ сообщения от ботов в группе, без фильтра по дате
-                    sender_id = getattr(msg.from_id, 'user_id', None)
-                    if not sender_id:
-                        continue
-                    try:
-                        user = await tg_cl.get_entity(sender_id)
-                        if getattr(user, 'bot', False):
-                            to_delete.append(msg.id)
-                    except Exception:
-                        if msg.text and any(p in msg.text for p in SERVICE_PATTERNS):
-                            to_delete.append(msg.id)
                 else:
                     # Старый режим: удаляем старые сообщения от ботов
                     if msg.date >= cutoff:
@@ -5374,7 +5298,7 @@ async def main():
     asyncio.create_task(daily_audit_loop())
     asyncio.create_task(vietnam_cron_loop())
     asyncio.create_task(management_loop())
-    asyncio.create_task(bug_lessons_migration_task())  # одноразовая авто-чистка легаси Bug Lessons
+    asyncio.create_task(publish_pending_on_startup())  # дозалить pending-уроки (без удалений)
     # HTTP server for Filly routing
     app = web.Application()
     app.router.add_post("/task", handle_cilly_task)
