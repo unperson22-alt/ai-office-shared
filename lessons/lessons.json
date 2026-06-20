@@ -13,7 +13,7 @@
     "prevention": "При добавлении нового бота: UUID брать только из Railway API, никогда не копировать вручную. Добавить проверку живости SERVICES при старте Силли",
     "cause": "UUID сервисов в SERVICES были захардкожены вручную и устарели после рестарта Railway",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 2,
@@ -29,7 +29,7 @@
     "prevention": "Все Railway операции: всегда использовать UUID (projectId, environmentId, serviceId). Хранить их в константах, не в строках",
     "cause": "Railway GraphQL API требует environmentId как UUID, не строковый алиас",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 3,
@@ -45,7 +45,7 @@
     "prevention": "Чеклист создания бота: 1) BotFather 2) Railway сервис 3) GitHub репо 4) SERVICES в coder.py 5) BOT_URLS в filly-bot. Без пункта 4 — мониторинг слепой",
     "cause": "Чеклист создания бота не включал обязательный шаг добавления service_id в SERVICES",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 4,
@@ -61,7 +61,7 @@
     "prevention": "Для технического контента: всегда HTML parse_mode или plain text. Markdown — только для контролируемого контента без спецсимволов",
     "cause": "Telegram Bot API parse_mode=MarkdownV2 требует экранирования спецсимволов, LLM-сгенерированный код их не экранирует",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 5,
@@ -77,7 +77,7 @@
     "prevention": "Правило: никаких side effects на уровне модуля. Всё что читает env или открывает соединения — только внутри функций",
     "cause": "Вызов os.getenv() или валидации на уровне модуля выполняется при импорте, до загрузки env vars",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 6,
@@ -93,7 +93,7 @@
     "prevention": "В шаблоне бота: все глобальные переменные объявлять в начале файла как None, инициализировать в main() с явным global. Или переходить на dependency injection",
     "cause": "Python: если переменная используется с global внутри функции, она становится локальной во всём scope функции",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 7,
@@ -109,7 +109,7 @@
     "prevention": "В шаблоне бота: весь main() в try/except. Логировать все необработанные исключения перед выходом",
     "cause": "PTB app.run_polling() не оборачивался в try/except, необработанное исключение убивало main thread без traceback",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 8,
@@ -125,7 +125,7 @@
     "prevention": "В шаблоне: Application.builder().read_timeout(30).write_timeout(30). Все HTTP клиенты — с retry логикой",
     "cause": "httpx.AsyncClient создавался с таймаутом по умолчанию (5 сек), недостаточным для медленных Railway endpoints",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 9,
@@ -141,7 +141,7 @@
     "prevention": "При работе с Telethon объектами: всегда hasattr проверка перед вызовом строковых методов",
     "cause": "Telethon возвращает TextWithEntities объекты вместо str для полей типа title",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 10,
@@ -157,7 +157,7 @@
     "prevention": "Перед Telegram группвыми операциями: проверить тип через isinstance(entity, Channel)",
     "cause": "Telegram API разделяет Channel и Chat — для обычных групп (Chat) нужен AddChatUserRequest, не InviteToChannelRequest",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 11,
@@ -173,7 +173,7 @@
     "prevention": "push_file() для .py файлов: всегда ast.parse() перед отправкой. Уже реализовано в shared/github_tools.py",
     "cause": "Шаблон бота генерировался через f-string с двойными кавычками — кавычки в SYSTEM_PROMPT ломали Python синтаксис",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 12,
@@ -189,7 +189,7 @@
     "prevention": "Никогда не выводить Railway URL из Telegram username. Источник истины — BOT_URLS в filly-bot/bot.py",
     "cause": "Railway internal URL строился из bot.username (Telegram handle) вместо serviceId из Railway API",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 13,
@@ -205,7 +205,7 @@
     "prevention": "При расширении офиса (новый бот, новый проект) — обновлять CHAT_PROMPT и SYSTEM_STATE.md одновременно",
     "cause": "CHAT_PROMPT содержал только общее описание задач, без конкретного маппинга бот→репо→URL",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 14,
@@ -221,7 +221,7 @@
     "prevention": "При добавлении бота в BOT_URLS: поиск по ключу перед вставкой. Линтер (pylint W0109) ловит дубли статически",
     "cause": "Python dict при дублирующихся ключах молча перезаписывает предыдущее значение, ошибки нет",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 15,
@@ -237,7 +237,7 @@
     "prevention": "В async проектах: никогда time.sleep, requests, или другие blocking calls. Для Anthropic — AsyncAnthropic. Для HTTP — httpx.AsyncClient или aiohttp",
     "cause": "time.sleep() блокирует event loop целиком — в async контексте нужен await asyncio.sleep()",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 16,
@@ -253,7 +253,7 @@
     "prevention": "Чеклист создания бота обязателен (см. урок #3). Рассмотреть автоматическую регистрацию: при deploy нового сервиса — Силли сама добавляет в SERVICES",
     "cause": "gosling-bot был добавлен в офис без обновления SERVICES в coder.py Силли",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 17,
@@ -269,7 +269,7 @@
     "prevention": "Фильтры логов: всегда per-line, не per-block. Тест: искусственно вставить реальную ошибку рядом с ignored строкой и проверить что она не пропускается",
     "cause": "IGNORE_PATTERNS фильтровался по всему блоку лога (contains), а не построчно — один шумный лог скрывал реальный баг рядом",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 18,
@@ -285,7 +285,7 @@
     "prevention": "Перед redeploy: проверить есть ли хотя бы один SUCCESS деплой. Если нет — variableCollectionUpsert",
     "cause": "serviceInstanceRedeploy в Railway API требует существующего успешного деплоя для создания нового",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 19,
@@ -301,7 +301,7 @@
     "prevention": "push_file() для .py: ast.parse() обязателен. Уже реализовано. Дополнительно: держать backup последнего рабочего coder.py в Redis",
     "cause": "push_file() заливал Python код без синтаксической проверки — невалидный файл уходил на прод",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 20,
@@ -317,7 +317,7 @@
     "prevention": "ПРАВИЛО: никогда json.loads() на LLM ответе без try/except. Всегда извлекать JSON через поиск скобок + try/except",
     "cause": "Anthropic API иногда возвращает JSON с trailing comma или markdown-обёрткой — json.loads() без try/except роняет процесс",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 21,
@@ -333,7 +333,7 @@
     "prevention": "Для детекта имён в тексте: всегда word-boundary regex, никогда substring. Это касается всех ботов в group mode",
     "cause": "str.find() или 'name in text' матчит подстроку — 'билли' найдётся в 'дебилли' или других словах",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 22,
@@ -349,7 +349,7 @@
     "prevention": "Шаблон для группового режима: всегда guard на message.text в самом начале handler",
     "cause": "PTB Update может содержать не только текстовые сообщения — обращение к update.message.text без проверки типа роняет бот",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 23,
@@ -365,7 +365,7 @@
     "prevention": "Правило: никаких стартовых Telegram уведомлений в ботах которые могут часто рестартовать. Batch env изменения в одну операцию",
     "cause": "Стартовое уведомление в on_startup отправлялось при каждом перезапуске — каждое изменение env var триггерит Railway редеплой",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 24,
@@ -381,7 +381,7 @@
     "prevention": "В HTTP handlers использовать только claude (глобальный клиент) или process(). Функцию _call_llm вызывать только внутри process()",
     "cause": "В HTTP handler использовался _client (глобальная переменная Telethon) вместо локального anthropic.AsyncAnthropic()",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 25,
@@ -397,7 +397,7 @@
     "prevention": "Шаблон должен включать None guard для message.text. Добавить в new_bot_template.py",
     "cause": "Telegram доставляет фото/стикеры/голосовые как отдельные Update типы — message.text = None для не-текстовых сообщений",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 26,
@@ -413,7 +413,7 @@
     "prevention": "При расширении бота на группу: аудит всех side effects. Дорогие/необратимые операции — только по явному запросу, не при случайном ответе",
     "cause": "Детект wants_image() работал на основе ключевых слов — в группе любой участник мог случайно триггернуть генерацию",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 27,
@@ -429,7 +429,7 @@
     "prevention": "Для дат всегда timedelta, никогда replace(day=N+1). Schedulers тестировать с симуляцией рестарта после trigger-времени",
     "cause": "datetime.replace(day=day+1) не работает для конца месяца и не переносит месяц — нужен timedelta",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 28,
@@ -445,7 +445,7 @@
     "prevention": "Для отправки от имени конкретного бота: всегда проксировать запрос к этому боту, не использовать чужой токен. Архитектурный принцип: каждый бот владеет своим токеном",
     "cause": "/post_raw принимал bot_name параметр но игнорировал его — использовал глобальный объект бота вместо lookup по имени",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 29,
@@ -461,7 +461,7 @@
     "prevention": "Зарезервированные имена глобальных объектов (bot, redis, claude) никогда не использовать как loop variables или локальные переменные внутри функций где используется глобальный объект",
     "cause": "Python: переменная цикла for bot in [...] маскирует глобальную переменную bot в том же scope",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 30,
@@ -477,7 +477,7 @@
     "prevention": "Любое удаление чужих сообщений — только через Telethon. Bot API deleteMessage работает только для собственных сообщений бота",
     "cause": "Telegram Bot API deleteMessage работает только для сообщений самого бота — чужие сообщения может удалить только Telethon userbot (MTProto)",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 31,
@@ -490,7 +490,7 @@
     "prevention": "Перед 404 — проверить marketing-dept и trading-dept монорепо",
     "title": "dept-монорепо: боты в папках, не отдельных репозиториях",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 32,
@@ -503,7 +503,7 @@
     "prevention": "Перед GitHub API вызовом проверять: repo содержит только имя репо (без org), path не начинается с org или repo.",
     "title": "GitHub API путь: owner/repo/contents/path, не org/bot-name",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 33,
@@ -515,7 +515,7 @@
     "prevention": "Перед добавлением await проверить тип клиента: Anthropic() = sync, AsyncAnthropic() = async. Не менять await без проверки инициализации.",
     "title": "max_tokens=1024 обрезает ответ + корректный парсинг content блоков",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 34,
@@ -527,7 +527,7 @@
     "prevention": "Перед добавлением импорта в __init__.py проверить: есть ли все зависимости нового модуля в pyproject.toml пакета. Никогда не делать eager import в __init__.py для модулей с внешними зависимостями.",
     "title": "Auto-import в __init__.py роняет все боты при отсутствии зависимости",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 35,
@@ -539,7 +539,7 @@
     "prevention": "Перед поиском файла в репо — проверить этот реестр. Репо называется {bot}-bot, не {bot}-office или ai-{bot}.",
     "title": "Реестр бот→репо обязателен в CHAT_PROMPT Силли",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 36,
@@ -551,7 +551,7 @@
     "prevention": "Никогда не искать секреты/токены в GitHub репозиториях. Все токены — в env переменных Railway. Проверять через os.getenv().",
     "title": "RAILWAY_TOKEN доступен через os.getenv, не из GitHub",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 37,
@@ -563,7 +563,7 @@
     "prevention": "Правило: send_to_group() вызывать максимум 1-2 раза за задачу — в начале (если задача длинная) и в конце.",
     "title": "send_to_group() только финальный результат, не промежуточные шаги",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 38,
@@ -577,7 +577,7 @@
     "prevention": "Для любого числового поля из LLM: isinstance check + маппинг строк в числа",
     "status": "fixed",
     "tag": "cilly",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 39,
@@ -591,7 +591,7 @@
     "prevention": "При использовании tools: всегда multi-turn цикл до stop_reason=end_turn",
     "status": "fixed",
     "tag": "cilly",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "title": "HTTP сервер не стартовал — недостижимый код после return",
@@ -604,7 +604,7 @@
     "prevention": "HTTP-старт (app_http, runner, TCPSite, ptb) помещать после всей инициализации — никакого кода после их запуска",
     "status": "fixed",
     "tag": "cilly",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 41,
@@ -620,7 +620,7 @@
     "cause": "Мониторинг был завязан на захардкоженный список сервисов одного проекта",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 42,
@@ -636,7 +636,7 @@
     "cause": "Railpack/mise не смог верифицировать аттестации pinned python из runtime.txt",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 43,
@@ -652,7 +652,7 @@
     "cause": "Стартовый get_me() не оборачивался в retry/try, таймаут ронял процесс",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 44,
@@ -668,7 +668,7 @@
     "cause": "Внутренний redis.railway.internal не резолвится из другого Railway-проекта",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 45,
@@ -684,7 +684,7 @@
     "cause": "Отсутствие лимита на постинг в группу + отсутствие инструмента под задачу → бесконечная просьба о помощи",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 46,
@@ -700,7 +700,7 @@
     "cause": "md5 по сырым строкам лога нестабилен из-за номеров строк",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 47,
@@ -716,7 +716,7 @@
     "cause": "Токены были вписаны в код как строки вместо os.environ",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 48,
@@ -732,7 +732,7 @@
     "cause": "Одноразовый скрипт закоммичен поверх bot.py и задеплоен",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 49,
@@ -748,7 +748,7 @@
     "cause": "klines из BingX не сортировались, порядок был обратный ожидаемому",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 50,
@@ -764,7 +764,7 @@
     "cause": "Env-переменная SCREENER_INTERVAL_H слетела при переподключении сервиса",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 51,
@@ -780,7 +780,7 @@
     "cause": "post_lesson помечал дедуп title-хэшем, а post_lessons дедупит по числовым id — наборы разъехались; плюс Redis мог быть очищен. Запуск post_lessons выложил бы все 40 заново",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": true
+    "posted_to_group": false
   },
   {
     "id": 52,
@@ -815,5 +815,21 @@
     "tag": "system",
     "posted_to_group": true,
     "posted_at": "2026-06-20T20:20:10.388256+00:00"
+  },
+  {
+    "id": 54,
+    "date": "2026-06-20",
+    "bot": "cilly",
+    "layer": "lessons/cleanup",
+    "title": "Авто-чистка снесла все уроки вместо дублей — деструктив по умолчанию опасен",
+    "symptom": "Авто-миграция удалила в Bug Lessons все 76 сообщений уроков и оставила 2, хотя нужно было убрать только повторяющиеся",
+    "root_cause": "Чистка была спроектирована как полный wipe (режим all_bots: удалить все сообщения ботов) и запускалась автоматически при старте. Намерение пользователя было — дедуп (убрать повторы, оставить по одному уникальному уроку)",
+    "why_architecture": "Разрушительная операция стояла дефолтом и в автозапуске. Деструктив по умолчанию + автономный запуск = высокий риск необратимой потери при любом расхождении намерения и реализации",
+    "fix": "Режим all_bots убран из cleanup_group; автозапуск-чистка заменена на publish-only старт-задачу (ничего не удаляет). Чистка Bug Lessons — только дедуп (dedup_lessons, по явной команде). Сообщения восстановлены перепостом из lessons.json (источник правды в git): #1-51 помечены pending → publisher перезалил по одному, без дублей",
+    "prevention": "Деструктивные операции (массовое удаление) — НЕ дефолт и НЕ в автозапуске; только по явной команде и в самой узкой форме (дедуп, а не wipe). Раз данные durable в git — сообщения восстановимы, удалять в Telegram можно лишь дубли. Перед автоматизацией удаления — сверять с точным намерением",
+    "cause": "Полный wipe был дефолтным и автоматическим вместо узкого дедупа",
+    "status": "fixed",
+    "tag": "system",
+    "posted_to_group": false
   }
 ]
