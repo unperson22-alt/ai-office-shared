@@ -1515,7 +1515,21 @@ async def run_daily_audit() -> str:
             try:
                 r = await c.get(url)
                 if r.status_code != 200:
-                    health_fail.append(f"{name}:{r.status_code}")
+                    # Богатый /health (как у tilly-trader) кладёт в тело причину
+                    # деградации — вытаскиваем, чтобы отчёт говорил ПОЧЕМУ, а не
+                    # просто ":503". Стоп сканера трейдера теперь виден офису.
+                    detail = str(r.status_code)
+                    try:
+                        body = r.json()
+                        reason = body.get("reason") or body.get("status")
+                        if reason:
+                            detail = f"{r.status_code}/{reason}"
+                        age = body.get("last_scan_age_s")
+                        if age is not None:
+                            detail += f"(scan {age // 60}m)"
+                    except Exception:
+                        pass
+                    health_fail.append(f"{name}:{detail}")
             except Exception as e:
                 health_fail.append(f"{name}:TIMEOUT")
 
