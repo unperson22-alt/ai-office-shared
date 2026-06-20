@@ -353,7 +353,8 @@
     "prevention": "Для детекта имён в тексте: всегда word-boundary regex, никогда substring. Это касается всех ботов в group mode",
     "cause": "str.find() или 'name in text' матчит подстроку — 'билли' найдётся в 'дебилли' или других словах",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 22,
@@ -369,7 +370,8 @@
     "prevention": "Шаблон для группового режима: всегда guard на message.text в самом начале handler",
     "cause": "PTB Update может содержать не только текстовые сообщения — обращение к update.message.text без проверки типа роняет бот",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 23,
@@ -385,7 +387,8 @@
     "prevention": "Правило: никаких стартовых Telegram уведомлений в ботах которые могут часто рестартовать. Batch env изменения в одну операцию",
     "cause": "Стартовое уведомление в on_startup отправлялось при каждом перезапуске — каждое изменение env var триггерит Railway редеплой",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 24,
@@ -401,7 +404,8 @@
     "prevention": "В HTTP handlers использовать только claude (глобальный клиент) или process(). Функцию _call_llm вызывать только внутри process()",
     "cause": "В HTTP handler использовался _client (глобальная переменная Telethon) вместо локального anthropic.AsyncAnthropic()",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 25,
@@ -417,7 +421,8 @@
     "prevention": "Шаблон должен включать None guard для message.text. Добавить в new_bot_template.py",
     "cause": "Telegram доставляет фото/стикеры/голосовые как отдельные Update типы — message.text = None для не-текстовых сообщений",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 26,
@@ -433,7 +438,8 @@
     "prevention": "При расширении бота на группу: аудит всех side effects. Дорогие/необратимые операции — только по явному запросу, не при случайном ответе",
     "cause": "Детект wants_image() работал на основе ключевых слов — в группе любой участник мог случайно триггернуть генерацию",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 27,
@@ -449,7 +455,8 @@
     "prevention": "Для дат всегда timedelta, никогда replace(day=N+1). Schedulers тестировать с симуляцией рестарта после trigger-времени",
     "cause": "datetime.replace(day=day+1) не работает для конца месяца и не переносит месяц — нужен timedelta",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 28,
@@ -465,7 +472,8 @@
     "prevention": "Для отправки от имени конкретного бота: всегда проксировать запрос к этому боту, не использовать чужой токен. Архитектурный принцип: каждый бот владеет своим токеном",
     "cause": "/post_raw принимал bot_name параметр но игнорировал его — использовал глобальный объект бота вместо lookup по имени",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 29,
@@ -481,7 +489,8 @@
     "prevention": "Зарезервированные имена глобальных объектов (bot, redis, claude) никогда не использовать как loop variables или локальные переменные внутри функций где используется глобальный объект",
     "cause": "Python: переменная цикла for bot in [...] маскирует глобальную переменную bot в том же scope",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 30,
@@ -497,7 +506,8 @@
     "prevention": "Любое удаление чужих сообщений — только через Telethon. Bot API deleteMessage работает только для собственных сообщений бота",
     "cause": "Telegram Bot API deleteMessage работает только для сообщений самого бота — чужие сообщения может удалить только Telethon userbot (MTProto)",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 31,
@@ -510,7 +520,8 @@
     "prevention": "Перед 404 — проверить marketing-dept и trading-dept монорепо",
     "title": "dept-монорепо: боты в папках, не отдельных репозиториях",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 32,
@@ -523,7 +534,8 @@
     "prevention": "Перед GitHub API вызовом проверять: repo содержит только имя репо (без org), path не начинается с org или repo.",
     "title": "GitHub API путь: owner/repo/contents/path, не org/bot-name",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 33,
@@ -535,7 +547,8 @@
     "prevention": "Перед добавлением await проверить тип клиента: Anthropic() = sync, AsyncAnthropic() = async. Не менять await без проверки инициализации.",
     "title": "max_tokens=1024 обрезает ответ + корректный парсинг content блоков",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 34,
@@ -547,7 +560,8 @@
     "prevention": "Перед добавлением импорта в __init__.py проверить: есть ли все зависимости нового модуля в pyproject.toml пакета. Никогда не делать eager import в __init__.py для модулей с внешними зависимостями.",
     "title": "Auto-import в __init__.py роняет все боты при отсутствии зависимости",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 35,
@@ -559,7 +573,8 @@
     "prevention": "Перед поиском файла в репо — проверить этот реестр. Репо называется {bot}-bot, не {bot}-office или ai-{bot}.",
     "title": "Реестр бот→репо обязателен в CHAT_PROMPT Силли",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 36,
@@ -571,7 +586,8 @@
     "prevention": "Никогда не искать секреты/токены в GitHub репозиториях. Все токены — в env переменных Railway. Проверять через os.getenv().",
     "title": "RAILWAY_TOKEN доступен через os.getenv, не из GitHub",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 37,
@@ -583,7 +599,8 @@
     "prevention": "Правило: send_to_group() вызывать максимум 1-2 раза за задачу — в начале (если задача длинная) и в конце.",
     "title": "send_to_group() только финальный результат, не промежуточные шаги",
     "tag": "system",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 38,
@@ -597,7 +614,8 @@
     "prevention": "Для любого числового поля из LLM: isinstance check + маппинг строк в числа",
     "status": "fixed",
     "tag": "cilly",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 39,
@@ -611,7 +629,8 @@
     "prevention": "При использовании tools: всегда multi-turn цикл до stop_reason=end_turn",
     "status": "fixed",
     "tag": "cilly",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "title": "HTTP сервер не стартовал — недостижимый код после return",
@@ -624,7 +643,8 @@
     "prevention": "HTTP-старт (app_http, runner, TCPSite, ptb) помещать после всей инициализации — никакого кода после их запуска",
     "status": "fixed",
     "tag": "cilly",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-20T21:30:12.441034+00:00"
   },
   {
     "id": 41,
