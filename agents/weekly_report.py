@@ -23,7 +23,7 @@ import httpx
 
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 # ── Константы ────────────────────────────────────────────────────────────────
 
@@ -258,7 +258,18 @@ def register_weekly_handlers(router: Router, redis, anthropic_client):
         await msg.answer("⏳ Собираю отчёт...")
         try:
             report = await build_report(redis, anthropic_client)
-            await msg.answer(report)
+            # Если есть активное предложение — прикрепляем кнопки ✅/⏭
+            # (callback обрабатывается единым cb_approval в coder.py, домен wk).
+            kb = None
+            try:
+                if await redis.get(PENDING_KEY):
+                    kb = InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(text="✅ Применить", callback_data="wk:appr"),
+                        InlineKeyboardButton(text="⏭ Пропустить", callback_data="wk:decl"),
+                    ]])
+            except Exception:
+                kb = None
+            await msg.answer(report, reply_markup=kb)
         except Exception as e:
             await msg.answer(f"❌ Ошибка: {e}")
 

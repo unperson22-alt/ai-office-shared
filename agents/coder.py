@@ -15,7 +15,10 @@ from agents.weekly_report import register_weekly_handlers
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, MessageReactionUpdated
+from aiogram.types import (
+    Message, MessageReactionUpdated, CallbackQuery,
+    InlineKeyboardMarkup, InlineKeyboardButton,
+)
 from aiogram.filters import CommandStart
 from anthropic import AsyncAnthropic
 import redis.asyncio as aioredis
@@ -332,6 +335,57 @@ async def pop_pending(action_id: str) -> dict | None:
         except Exception as e:
             logger.warning(f"[pending] Redis pop failed: {e}")
     return pending_fixes.pop(action_id, None)
+
+
+# ── Inline-кнопки апрува (✅/⏭) ──────────────────────────────────────────────
+# callback_data: "{domain}:{verb}:{ident}". domain: pg (office:pending) | pr (PR-мерж) |
+# wk (weekly). verb: appr | decl. ident помещается в 64 байта (action_id/pr_id короткие).
+
+def _approval_kb(domain: str, ident: str = "") -> InlineKeyboardMarkup:
+    """Клавиатура ✅ Применить / ⏭ Отклонить для предложения."""
+    suffix = f":{ident}" if ident else ""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Применить", callback_data=f"{domain}:appr{suffix}"),
+        InlineKeyboardButton(text="⏭ Отклонить", callback_data=f"{domain}:decl{suffix}"),
+    ]])
+
+
+async def send_proposal(text: str, domain: str, ident: str = "", *, chat_id: int = 0) -> bool:
+    """
+    Шлёт предложение с inline-кнопками НАПРЯМУЮ (минуя буфер reply_func).
+    chat_id=0 → в офис-группу (автономные предложения). Возвращает True при успехе.
+    """
+    target = chat_id or OFFICE_CHAT_ID
+    if not target:
+        return False
+    if await outbound_paused():
+        logger.info("send_proposal: подавлено (пауза)")
+        return False
+    try:
+        sent = await bot.send_message(chat_id=target, text=text,
+                                      reply_markup=_approval_kb(domain, ident))
+        await remember_my_message(sent)
+        return True
+    except Exception as e:
+        logger.error(f"send_proposal failed (domain={domain}): {e}")
+        return False
+
+
+async def _finish_cb(cb: CallbackQuery, status_line: str):
+    """Дописывает результат к сообщению предложения и убирает кнопки."""
+    try:
+        base = cb.message.text or ""
+        await cb.message.edit_text(f"{base}\n\n{status_line}", reply_markup=None)
+    except Exception:
+        try:
+            await cb.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        try:
+            await bot.send_message(cb.message.chat.id, status_line)
+        except Exception:
+            pass
+
 
 # ── CC-like subagent: многофайловый рефактор через Sonnet ──────────────────
 
@@ -1170,13 +1224,12 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
             "fixed_code": fixed_code,
             "analysis": analysis,
         }, task_id=task_id, title=f"Фикс {service_name}")
-        await notify_office(
-            f"🤔 Cilly нашёл подозрительное в *{service_name}*:\n\n"
-            f"_{description}_\n\n"
+        await send_proposal(
+            f"🤔 Cilly нашёл подозрительное в {service_name}:\n\n"
+            f"{description}\n\n"
             f"Предлагаемый фикс: {fix_desc}\n\n"
-            f"Применить?\n"
-            f"/approve {fix_id} — да, фиксить\n"
-            f"/skip {fix_id} — пропустить"
+            f"Применить? (или текстом: /approve {fix_id})",
+            "pg", fix_id, chat_id=0,  # автономно → офис-группа
         )
 
 
@@ -2451,7 +2504,7 @@ async def railway_create_service(repo_name: str, bot_display_name: str, variable
     return {"service_id": service_id}
 
 
-async def handle_natural_language(message_text: str, chat_id: int, reply_func, history: list = None, silent: bool = False, repo_override: str = "", file_path_override: str = ""):
+async def handle_natural_language(message_text: str, chat_id: int, reply_func, history: list = None, silent: bool = False, repo_override: str = "", file_path_override: str = "", proposal_chat_id: int = 0):
     """Process any natural language request — detect intent and execute."""
     # Читаем ops.md — лог последних действий Claude и Силли
     # Это даёт Силли контекст о том что уже было сделано
@@ -3821,13 +3874,15 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                 "title": f"dev_task {dev_repo}/{dev_file_path}",
             }, task_id=board_id, title=f"deploy {dev_repo}/{dev_file_path}")
             await tb.update_status(_r_act, board_id, "awaiting_approval")
-            await publish_activity(_r_act, _task_id, "силли", "done", "код готов, ждёт /approve")
-            deploy_status = (
+            await publish_activity(_r_act, _task_id, "силли", "done", "код готов, ждёт апрува")
+            await send_proposal(
                 f"✅ Код готов и прошёл гейт (review + compile).\n"
-                f"⏳ Approval-гейт — нужно твоё подтверждение:\n"
-                f"/approve {action_id} — задеплоить в {dev_repo}/{dev_file_path}\n"
-                f"/skip {action_id} — отменить"
+                f"📦 Деплой в {dev_repo}/{dev_file_path}\n"
+                f"⏳ Approval-гейт — подтверди кнопкой ниже.\n"
+                f"(или текстом: /approve {action_id})",
+                "pg", action_id, chat_id=proposal_chat_id,
             )
+            deploy_status = "✅ Код готов — отправил предложение на деплой с кнопками ✅/⏭"
         else:
             await tb.update_status(_r_act, board_id, "blocked",
                                    result=retry_feedback or "не удалось получить рабочий код",
@@ -3891,13 +3946,14 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
         action_id = await stage_pending("update_instruction", {
             "canon": canon, "display": disp, "instruction": instruction, "mode": mode,
         }, task_id=board_id, title=f"инструкция {disp}")
-        await reply_func(
-            f"📝 Готов обновить инструкцию для *{disp}* (mode={mode}):\n"
+        await send_proposal(
+            f"📝 Обновить инструкцию для {disp} (mode={mode}):\n"
             f"«{instruction[:300]}»\n\n"
             f"Бот учтёт это в следующем ответе БЕЗ редеплоя.\n"
-            f"/approve {action_id} — применить\n"
-            f"/skip {action_id} — отменить"
+            f"(или текстом: /approve {action_id})",
+            "pg", action_id, chat_id=proposal_chat_id,
         )
+        await reply_func(f"📨 Предложение по инструкции для {disp} — подтверди кнопкой ✅/⏭")
 
     elif intent == "delegate":
         """Делегирование задачи главе отдела (через офисный роутинг) + верификация
@@ -3939,12 +3995,13 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             "task_text": task,
             "user_id": int(os.getenv("YOUR_TELEGRAM_ID", "391077101")),
         }, task_id=board_id, title=f"delegate {assignee_display}")
-        await reply_func(
-            f"🤝 Готов делегировать *{assignee_display}*:\n«{task[:300]}»\n\n"
+        await send_proposal(
+            f"🤝 Делегировать {assignee_display}:\n«{task[:300]}»\n\n"
             f"После подтверждения дёрну отдел и проверю результат (верификация).\n"
-            f"/approve {action_id} — делегировать\n"
-            f"/skip {action_id} — отменить"
+            f"(или текстом: /approve {action_id})",
+            "pg", action_id, chat_id=proposal_chat_id,
         )
+        await reply_func(f"📨 Предложение делегировать {assignee_display} — подтверди кнопкой ✅/⏭")
 
 
 # ── Telegram handlers ──────────────────────────────────────────────────────────
@@ -4421,8 +4478,9 @@ async def cmd_cc(message: Message):
         await message.answer(f"⚠️ PR-ы не созданы.\nОшибки: {'; '.join(errors) if errors else 'нет изменений'}")
         return
 
-    # Регистрируем PR-ы для /approve_pr
+    # Регистрируем PR-ы для /approve_pr + строим кнопки (по строке на PR)
     pr_lines = []
+    kb_rows = []
     for item in prs:
         pr = item["pr"]
         pr_id = f"pr_{item['repo']}_{pr['number']}"
@@ -4433,15 +4491,21 @@ async def cmd_cc(message: Message):
             "html_url": pr["html_url"],
         }
         pr_lines.append(f"• [{item['repo']} #{pr['number']}]({pr['html_url']}) — {item['files']} файл(ов)")
+        kb_rows.append([
+            InlineKeyboardButton(text=f"✅ Мержить {item['repo']} #{pr['number']}",
+                                 callback_data=f"pr:appr:{pr_id}"),
+            InlineKeyboardButton(text="⏭", callback_data=f"pr:decl:{pr_id}"),
+        ])
 
     errors_text = f"\n\n⚠️ Ошибки: {'; '.join(errors)}" if errors else ""
     await message.answer(
         f"✅ **Готово!** {result['changed_files']} файл(ов) изменено\n\n"
         f"**PR-ы:**\n" + "\n".join(pr_lines) +
         f"\n\n**Summary:** {result.get('summary','')}\n\n"
-        f"Для мержа: `/approve_pr {list(pending_prs.keys())[-1]}`" +
+        f"Мержи кнопкой ниже (или текстом `/approve_pr {list(pending_prs.keys())[-1]}`)" +
         errors_text,
-        parse_mode="Markdown"
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows) if kb_rows else None,
     )
 
 
@@ -4491,6 +4555,83 @@ async def cmd_skip(message: Message):
         await message.answer(f"⏭️ Действие `{action_id}` пропущено.")
     else:
         await message.answer(f"❌ Действие `{action_id}` не найдено.")
+
+
+@dp.callback_query(F.data.startswith("pg:") | F.data.startswith("pr:") | F.data.startswith("wk:"))
+async def cb_approval(cb: CallbackQuery):
+    """Единый обработчик кнопок ✅/⏭ для всех предложений Силли. Только Влад."""
+    owner = int(os.getenv("YOUR_TELEGRAM_ID", "0") or "0")
+    if owner and cb.from_user and cb.from_user.id != owner:
+        await cb.answer("Только Влад может подтверждать", show_alert=True)
+        return
+
+    parts = (cb.data or "").split(":")
+    domain = parts[0] if parts else ""
+    verb = parts[1] if len(parts) > 1 else ""
+    ident = parts[2] if len(parts) > 2 else ""
+
+    # ── office:pending (deploy_fix / deploy_devtask / update_instruction / delegate) ──
+    if domain == "pg":
+        entry = await pop_pending(ident)
+        if not entry:
+            await cb.answer("Уже применено или истекло", show_alert=True)
+            try:
+                await cb.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            return
+        if verb == "decl":
+            task_id = entry.get("task_id", "") if isinstance(entry, dict) else ""
+            if task_id:
+                await tb.update_status(await get_redis(), task_id, "rejected",
+                                       result="отклонено кнопкой")
+            await cb.answer("Отклонено")
+            await _finish_cb(cb, "⏭ Отклонено Владом")
+            return
+        await cb.answer("Применяю…")
+        status = await _apply_pending_action(entry)
+        await _finish_cb(cb, status)
+        return
+
+    # ── PR-мерж из /cc (pending_prs) ──
+    if domain == "pr":
+        pr_data = pending_prs.pop(ident, None)
+        if not pr_data:
+            await cb.answer("PR не найден или уже обработан", show_alert=True)
+            try:
+                await cb.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            return
+        if verb == "decl":
+            await cb.answer("Отклонено")
+            await _finish_cb(cb, f"⏭ PR {pr_data['repo']} #{pr_data['pr_number']} отклонён")
+            return
+        await cb.answer("Мержу…")
+        try:
+            ok = await merge_pull_request(pr_data["repo"], pr_data["pr_number"],
+                                          commit_msg="cc: approved by Влад")
+            line = (f"✅ Смержен: {pr_data['repo']} #{pr_data['pr_number']}" if ok
+                    else f"⚠️ Не смержен (конфликты?): {pr_data['repo']} #{pr_data['pr_number']}")
+        except Exception as e:
+            line = f"❌ Ошибка мержа {pr_data['repo']} #{pr_data['pr_number']}: {e}"
+        await _finish_cb(cb, line)
+        return
+
+    # ── weekly proposal (single, PENDING_KEY) ──
+    if domain == "wk":
+        from agents.weekly_report import apply_proposal, PENDING_KEY
+        r = await get_redis()
+        if verb == "decl":
+            if r:
+                await r.delete(PENDING_KEY)
+            await cb.answer("Пропущено")
+            await _finish_cb(cb, "↩️ Предложение пропущено")
+            return
+        await cb.answer("Применяю…")
+        result = await apply_proposal(r) if r else "⚠️ Redis недоступен"
+        await _finish_cb(cb, result)
+        return
 
 
 @dp.message(F.text.startswith("/pause"))
@@ -4601,7 +4742,8 @@ async def cmd_natural_language(message: Message):
         # Буферизуем — шлём только финальный ответ, не промежуточные статусы
         _reply_buffer.append(msg)
 
-    await handle_natural_language(text, message.chat.id, reply, history=dm_history[user_id])
+    await handle_natural_language(text, message.chat.id, reply, history=dm_history[user_id],
+                                  proposal_chat_id=message.chat.id)
 
     # Шлём только последний (финальный) ответ
     if _reply_buffer:
