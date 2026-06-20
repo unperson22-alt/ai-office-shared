@@ -1,0 +1,44 @@
+# failover_chains.yaml — человекочитаемый оверрайд лестницы замен для call_llm().
+#
+# РАНТАЙМ-ИСТОЧНИК ИСТИНЫ — DEFAULT_CHAINS в ai_office_shared/shared/failover.py
+# (anthropic + Ollama, под реальный парк ключей офиса). Этот файл — документация и
+# опциональный оверрайд: читается только если установлен pyyaml И задан путь
+# через env FAILOVER_CHAINS_PATH. В рантайм-цепочку берутся записи с provider=anthropic;
+# не-anthropic строки ниже — задокументированные точки расширения (включаются по ключам).
+#
+# Семантика: primary → backups (по порядку) → [downgrade] → Ollama(gemma3:4b) → алерт.
+# Ollama добавляется кодом всегда последним рубежом — в этом файле её указывать не нужно.
+
+strategist:                       # финальные вердикты, код-ревью (Тилли/Пророк/Силли)
+  primary:  {provider: anthropic, model: claude-opus-4-8, effort: xhigh}
+  backups:
+    - {provider: anthropic, model: claude-sonnet-4-6}
+    # точки расширения (по ключам провайдеров):
+    # - {provider: anthropic, model: claude-fable-5}
+    # - {provider: openai,    model: o3}
+
+coder:                            # dev-dept воркеры, agents/coder.py
+  primary:  {provider: anthropic, model: claude-opus-4-8, effort: xhigh}
+  backups:
+    - {provider: anthropic, model: claude-sonnet-4-6}
+    # - {provider: deepseek, model: deepseek-chat}
+
+creative:                         # тексты, реплики, маркетинг
+  primary:  {provider: anthropic, model: claude-sonnet-4-6}
+  backups:
+    - {provider: anthropic, model: claude-haiku-4-5-20251001}
+    # - {provider: openai,  model: gpt-4o}
+    # - {provider: google,  model: gemini-1.5-pro}
+
+data:                             # парсинг, извлечение, vision-графики
+  primary:  {provider: anthropic, model: claude-sonnet-4-6}
+  backups:
+    - {provider: anthropic, model: claude-haiku-4-5-20251001}
+
+operator:                         # короткие реплики, классификация, роутинг-хелперы
+  primary:  {provider: anthropic, model: claude-haiku-4-5-20251001}
+  backups: []
+  # - {provider: google, model: gemini-1.5-flash}
+  # - {provider: openai, model: gpt-4o-mini}
+
+# Параметры ретраев/эскалации задаются в call_llm() (retries, backoff, owner_alert).
