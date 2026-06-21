@@ -11,11 +11,15 @@ NEW BOT TEMPLATE — базовый шаблон для нового бота AI
   ✅ Реакции 👍/👎 → quality scores
   ✅ Логирование через shared.logging
   ✅ Структурные логи ошибок
+  ✅ Устойчивая отправка в Telegram (safe_send/safe_reply) — ретраи на NetworkError/
+     Bad Gateway/TimedOut с backoff, без краша бота (урок #8/#43)
 
 ЧТОБЫ ИСПОЛЬЗОВАТЬ:
   1. Замените BOT_NAME, BOT_NAME_LOWER, системный промпт
   2. Добавьте специфичные handlers если нужны
   3. requirements.txt — взять из kriss-bot (уже с актуальным SHA ai-office-shared)
+  4. Для отправки в Telegram ВСЕГДА используйте safe_send/safe_reply/safe_edit
+     (не голые reply_text/send_message) — иначе вернётся баг с Bad Gateway.
 """
 
 import os, logging, asyncio, re
@@ -30,6 +34,7 @@ from anthropic import AsyncAnthropic
 import redis.asyncio as aioredis
 
 from ai_office_shared.shared.logging import log_event
+from ai_office_shared.shared.telegram_safe import safe_send, safe_reply, safe_edit
 from ai_office_shared.shared.redis_helpers import (
     redis_get_history, redis_save_history,
     redis_get_notes, redis_add_note,
@@ -133,11 +138,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await remove_scheduled_task(redis_client, BOT_NAME_LOWER, user.id, tag["index"])
         elif tag["action"] == "list":
             tasks = await list_scheduled_tasks(redis_client, BOT_NAME_LOWER, user.id)
-            await update.message.reply_text(await format_task_list(tasks))
+            await safe_reply(update.message, await format_task_list(tasks))
             return
         response = re.sub(r'\[(?:SCHEDULE|CANCEL_SCHEDULE|LIST_SCHEDULES)[^\]]*\]', '', response).strip()
 
-    await update.message.reply_text(response)
+    await safe_reply(update.message, response)
 
 
 async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -157,7 +162,7 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"Привет! Я {BOT_NAME}. Чем могу помочь?")
+    await safe_reply(update.message, f"Привет! Я {BOT_NAME}. Чем могу помочь?")
 
 
 # ── HTTP endpoints ────────────────────────────────────────────────────────────
@@ -193,7 +198,7 @@ async def handle_send(request):
         text    = str(data["text"])
     except (KeyError, ValueError) as e:
         return web.json_response({"error": f"bad request: {e}"}, status=400)
-    await _ptb_bot.send_message(chat_id=chat_id, text=text)
+    await safe_send(_ptb_bot, chat_id, text)
     return web.json_response({"ok": True})
 
 # ── Main ──────────────────────────────────────────────────────────────────────
