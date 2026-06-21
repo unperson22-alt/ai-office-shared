@@ -3,10 +3,12 @@ github_tools.py — общий модуль для работы с GitHub API
 Репо: unperson22-alt/ai-office-shared
 
 АУТЕНТИФИКАЦИЯ (важно — корень бага «401 Unauthorized при деплое фикса»):
-  Для ЗАПИСИ в репозитории нужен креденшел с правами Contents: write (+ Pull
-  requests: write, если используются PR). Раньше использовался только GH_PAT,
-  выданный «для чтения кода» — чтение работало, а push_file падал с 401, и Силли
-  не могла применить собственный фикс.
+  Для ЗАПИСИ в репозитории нужен ВАЛИДНЫЙ креденшел с правами Contents: write
+  (+ Pull requests: write для PR). Историческая причина инцидента: GitHub-write-
+  креденшел (`GITHUB_TOKEN`/`GH_PAT`) стал НЕВАЛИДЕН (протух/битый → 401, а не 403).
+  Чтение в coder.py идёт напрямую через GH_PAT (работало), запись — через этот
+  модуль (`GITHUB_TOKEN or GH_PAT`) → 401. ВНИМАНИЕ: `RAILWAY_TOKEN_VLAD` — это
+  токен Railway (редеплой/checkvar), НЕ годится для GitHub-записи. Это разные ключи.
 
   Поддерживаются два режима (выбирается автоматически):
     1) GitHub App (рекомендуется) — задать в окружении:
@@ -16,7 +18,7 @@ github_tools.py — общий модуль для работы с GitHub API
        Модуль сам минтит installation-token (через JWT) и кэширует его (~55 мин).
        Токен не истекает «насовсем», права узкие — самый надёжный путь.
     2) Личный токен (fallback) — GITHUB_TOKEN или GH_PAT. Для записи токен ОБЯЗАН
-       иметь scope Contents: write. read-only токен → 401.
+       быть валиден и иметь scope Contents: write. Протухший токен → 401.
 
   Проверить доступ на запись на старте: await verify_write_access(repo).
 """
@@ -123,7 +125,8 @@ async def verify_write_access(repo: str = "ai-office-shared") -> Tuple[bool, str
     Возвращает (ok, detail). Не бросает — чтобы вызывающий сам решил, что делать.
 
     Проверяем permissions.push на репо: точный индикатор того, что креденшел
-    реально сможет push_file/PR, а не только читать.
+    реально сможет push_file/PR, а не только читать. Различает 401 (токен невалиден/
+    протух) и read-only (push=false) — это разные причины с разным фиксом.
     """
     mode = _auth_mode()
     if mode == "none":
@@ -134,7 +137,7 @@ async def verify_write_access(repo: str = "ai-office-shared") -> Tuple[bool, str
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             r = await client.get(url, headers=headers)
         if r.status_code in (401, 403):
-            return False, f"{mode}: {r.status_code} — нет доступа (токен невалиден/протух)"
+            return False, f"{mode}: {r.status_code} — токен невалиден/протух или отозван (нужна ротация)"
         if r.status_code == 404:
             return False, f"{mode}: репо {repo} не найдено или нет доступа к нему"
         r.raise_for_status()
@@ -154,10 +157,11 @@ async def verify_write_access(repo: str = "ai-office-shared") -> Tuple[bool, str
 def _raise_auth(status: int):
     """Единый понятный текст при auth-сбое — чтобы Силли отличала это от обычной ошибки."""
     raise PermissionError(
-        f"GitHub auth failed ({status}): нет прав на запись. "
-        f"Режим={_auth_mode()}. Это НЕ ошибка задачи — нужен write-креденшел: настрой "
+        f"GitHub auth failed ({status}): креденшел невалиден или без прав на запись. "
+        f"Режим={_auth_mode()}. Это НЕ ошибка задачи — нужен ВАЛИДНЫЙ write-креденшел: настрой "
         f"GitHub App (GITHUB_APP_ID/PRIVATE_KEY/INSTALLATION_ID, Contents+PR: write) либо "
-        f"замени GH_PAT на токен с Contents: write в Railway Variables."
+        f"положи валидный токен с Contents: write в GITHUB_TOKEN (RAILWAY_TOKEN_VLAD — это "
+        f"Railway-токен, для GitHub-записи НЕ годится)."
     )
 
 
