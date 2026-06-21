@@ -2,6 +2,7 @@
 
 Доступные модули:
     logging      — log_event()
+    telegram_safe — safe_send/safe_reply/safe_edit/with_tg_retry (ретраи на NetworkError/Bad Gateway)
     redis_helpers — redis_get_history, redis_save_history, redis_get_notes, redis_add_note
     tasks        — auto_extract_interests, schedule_loop, ...
     routing      — forward_to_filly, make_reply_handler, is_routed
