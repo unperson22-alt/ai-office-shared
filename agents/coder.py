@@ -736,7 +736,7 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
 
 
 INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
-{"intent":"push_code|fix_bot|create_bot|create_cron|add_external_bot|get_bot_token|deploy|read_file|list_files|redis_query|dev_task|delegate|update_bot_instruction|answer","repo":"repo_name_or_null","path":"file_path_or_null","task":"task_description","bot":"имя_бота_или_null","instruction":"текст_инструкции_или_null","mode":"append|set|clear","confidence":0.0-1.0}
+{"intent":"push_code|fix_bot|create_bot|create_cron|add_external_bot|get_bot_token|deploy|read_file|list_files|redis_query|trader_winrate|dev_task|delegate|update_bot_instruction|answer","repo":"repo_name_or_null","path":"file_path_or_null","task":"task_description","bot":"имя_бота_или_null","instruction":"текст_инструкции_или_null","mode":"append|set|clear","confidence":0.0-1.0}
 
 ГЛАВНОЕ ПРАВИЛО — различай вопрос и команду:
 - ВОПРОС о процессе ("как создать бота?", "что нужно для деплоя?", "какой стек?", "как задеплоить?", "с чего начать?") → intent=answer
@@ -746,6 +746,7 @@ INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
 
 push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не расписание!), create_cron=создать расписание/напоминание/cron для пользователя ("напоминай каждый день", "отправляй каждое утро", "напоминалка в X время") — создаёт Railway cron-сервис, add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon, cleanup_dm=удалить сообщения с ключами/секретами в личке (gsk_, GROQ, токен) через Telethon — ищет в диалоге с user_id=int(BOT_TOKEN.split(':')[0]) (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), edit_file=точечная замена строки в файле без чтения всего файла (сигналы: замени в файле, вставь после строки, patch, добавь в начало функции — когда указан repo+path+old+new), agentic_task=многошаговая задача из 2+ шагов: читай+делай, исправь+задеплой, залей+проверь, прочитай+перепиши. Сигналы: исправь и задеплой, залей код и задеплой, прочитай X и отправь, прочитай X и перепиши, пройдись по всем, для каждого, рефакторинг, аудит. ВАЖНО: если задача содержит И (исправить код И задеплоить) — это agentic_task. При чтении большого файла (bot.py 800+ строк) — не читать целиком в цикле, читать один раз и искать нужную функцию по имени, dev_task=делегировать задачу КОМАНДЕ разработки (Девви→Рикки→Тести→Секки→Скрибби). ТОЛЬКО когда речь о новой фиче/модуле/компоненте для продукта — НЕ о правке одного файла. Требует ВЫСОКОЙ уверенности (confidence>=0.85). Чёткие сигналы: "реализуй фичу", "разработай модуль", "напиши новый компонент", "сделай PR для", "задача для команды", "отдай команде", "dev-dept", "через цепочку". НЕЯСНЫЙ запрос ("сделай что-нибудь", "напиши функцию" без контекста) → confidence<0.85 → Силли переспрашивает. Если задача про правку существующего файла/бота — это push_code или agentic_task, НЕ dev_task. delegate=поручить задачу ГЛАВЕ ОТДЕЛА и проверить результат (НЕ написание кода). Сигналы: "спроси у Тилли", "пусть Милли посчитает", "делегируй Доктору", "поручи отделу", "узнай у <бот>". Заполни "bot" именем отдела. confidence>=0.85, иначе Силли переспросит. update_bot_instruction=изменить поведение бота на лету через инструкцию в системном промпте (БЕЗ редеплоя). Сигналы: "научи <бота>", "пусть <бот> всегда/больше не", "добавь <боту> правило", "обнови инструкцию <бота>", "запомни для <бота>". Заполни "bot" (кого учим), "instruction" (что добавить), "mode" (append по умолчанию; set=заменить; clear=сбросить). answer=ответить словами.
 ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis" → redis_query.
+ВАЖНО trader_winrate: "винрейт трейдера", "посчитай winrate", "проверь винрейт сигналов", "какой winrate у трейдера", "винрейт по сигналам", "статистика трейдера WR" → trader_winrate (читает signals:list/signal:* трейдера, считает WR по свечам, отдаёт за 7 дней и за всё время).
 ВАЖНО: "подключить бота", "добавить чужого бота" → add_external_bot, НЕ create_bot.
 Репо: billy-bot,tilly-bot,filly-bot,dilly-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard,mama-bot,gosling-bot,villy-bot,prophet-bot,kriss-bot,pilly-bot,doctor-bot,marketing-dept.
 билли→billy, тилли→tilly, макс/милли→milly, доктор/дилли→dilly, филли→filly, силли→ai-office-shared."""
@@ -2812,6 +2813,134 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         if len(out) > 3000:
             out = out[:3000] + "\n... (обрезано)"
         await reply_func(f"```json\n{out}\n```")
+
+    elif intent == "trader_winrate":
+        """Винрейт трейдера: читает signals:list/signal:* и считает TP/SL по 1h-свечам.
+
+        Свечи берём фолбэк-цепочкой binance→bybit→okx (BingX пропускаем — гео-бан IP).
+        Закрытие консервативное: если в одной свече задеты и TP, и SL — считаем SL.
+        Отдаёт WR за 7 дней и за всё время + краткую разбивку.
+        """
+        r = await get_redis()
+        if not r:
+            await reply_func("❌ Redis недоступен")
+            return
+        SIGNAL_TTL = 259200  # 72h — как в tilly-trader
+        now_ts = int(time.time())
+        _cache: dict = {}
+
+        async def _tw_fetch(symbol: str) -> list:
+            if symbol in _cache:
+                return _cache[symbol]
+            if "-" in symbol:
+                base, quote = symbol.split("-", 1)
+            else:
+                quote = "USDT"; base = symbol[:-len(quote)] if symbol.endswith(quote) else symbol
+            base, quote = base.upper(), quote.upper()
+            concat = f"{base}{quote}"
+            rows: list = []
+            async with httpx.AsyncClient(timeout=10) as c:
+                try:
+                    resp = await c.get("https://fapi.binance.com/fapi/v1/klines",
+                                       params={"symbol": concat, "interval": "1h", "limit": 1000})
+                    if resp.status_code == 200:
+                        rows = [(int(k[0]), float(k[2]), float(k[3])) for k in (resp.json() or [])]
+                except Exception:
+                    rows = []
+                if len(rows) < 20:
+                    try:
+                        resp = await c.get("https://api.bybit.com/v5/market/kline",
+                                           params={"category": "linear", "symbol": concat,
+                                                   "interval": "60", "limit": 1000})
+                        if resp.status_code == 200:
+                            lst = ((resp.json().get("result") or {}).get("list")) or []
+                            rows = [(int(k[0]), float(k[2]), float(k[3])) for k in lst]
+                    except Exception:
+                        pass
+                if len(rows) < 20:
+                    try:
+                        resp = await c.get("https://www.okx.com/api/v5/market/candles",
+                                           params={"instId": f"{base}-{quote}-SWAP", "bar": "1H", "limit": 300})
+                        if resp.status_code == 200:
+                            lst = resp.json().get("data") or []
+                            rows = [(int(k[0]), float(k[2]), float(k[3])) for k in lst]
+                    except Exception:
+                        pass
+            rows.sort(key=lambda x: x[0])
+            _cache[symbol] = rows
+            return rows
+
+        def _tw_outcome(direction: str, sl: float, tp: float, window: list):
+            for (_tms, high, low) in window:
+                if direction == "LONG":
+                    sl_hit = low <= sl; tp_hit = high >= tp
+                else:
+                    sl_hit = high >= sl; tp_hit = low <= tp
+                if sl_hit:      # покрывает и (sl_hit and tp_hit) → sl
+                    return "sl"
+                if tp_hit:
+                    return "tp"
+            return None
+
+        sids = await r.lrange("signals:list", 0, -1)
+        raw_signals = []
+        for sid in sids:
+            sid = sid if isinstance(sid, str) else sid.decode()
+            rawj = await r.get("signal:" + sid)
+            if rawj:
+                try:
+                    raw_signals.append(json.loads(rawj))
+                except Exception:
+                    pass
+
+        async def _tw_calc(days: int):
+            cutoff = now_ts - days * 86400 if days > 0 else 0
+            tot = op = w = l = ex = nodata = 0
+            lines = []
+            for s in raw_signals:
+                if s.get("ts", 0) < cutoff:
+                    continue
+                tot += 1
+                ts = s["ts"]; end_ts = min(now_ts, ts + SIGNAL_TTL)
+                sl = float(s.get("sl") or 0)
+                tp = float(s.get("tp1") or s.get("tp") or 0)
+                direction = s.get("direction", "LONG")
+                candles = await _tw_fetch(s.get("symbol", ""))
+                window = [c for c in candles if ts * 1000 <= c[0] <= end_ts * 1000]
+                if not candles:
+                    nodata += 1; mark = "⚠️"
+                elif tp and window and (hit := _tw_outcome(direction, sl, tp, window)):
+                    if hit == "tp":
+                        w += 1; mark = "✅"
+                    else:
+                        l += 1; mark = "❌"
+                elif now_ts >= ts + SIGNAL_TTL:
+                    ex += 1; mark = "⌛"
+                else:
+                    op += 1; mark = "⏳"
+                lines.append(f"{mark} {s.get('symbol','?')} {direction}")
+            closed = w + l
+            wr = f"{round(w / closed * 100, 1)}%" if closed else "нет закрытых"
+            return {"tot": tot, "open": op, "win": w, "loss": l, "exp": ex,
+                    "nodata": nodata, "wr": wr, "lines": lines}
+
+        d7 = await _tw_calc(7)
+        da = await _tw_calc(0)
+
+        def _tw_fmt(tag, d):
+            extra = f", ⚠️нет свечей {d['nodata']}" if d["nodata"] else ""
+            return (f"{tag}: всего {d['tot']}, закрыто {d['win'] + d['loss']} "
+                    f"(✅{d['win']}/❌{d['loss']}), ⌛{d['exp']}, ⏳{d['open']}{extra} → WR {d['wr']}")
+
+        out_lines = [
+            "📊 Винрейт трейдера",
+            _tw_fmt("7 дней", d7),
+            _tw_fmt("Всё время", da),
+            "",
+            "Разбивка (всё время):",
+            *da["lines"][:40],
+        ]
+        await reply_func("\n".join(out_lines))
 
     elif intent in ("push_code", "fix_bot"):
         if not repo or not path:
