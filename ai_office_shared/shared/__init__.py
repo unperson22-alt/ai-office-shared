@@ -7,6 +7,7 @@
     routing      — forward_to_filly, make_reply_handler, is_routed
     quality      — реакции 👍/👎
     ollama       — try_ollama(), OllamaResult (local LLM fallback)
+    failover     — call_llm() единый вход с лестницей замен (primary→backup→Ollama→алерт)
     web_search   — web_search(), web_search_text()
     impact_client — get_campaigns(), get_ads(), get_tracking_link()
     voice        — transcribe_voice(file_url) → (text, error)
