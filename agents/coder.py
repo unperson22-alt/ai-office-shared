@@ -1406,9 +1406,28 @@ async def run_daily_audit() -> str:
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
     lines.append(f"📋 Ежедневный аудит офиса — {ts}\n")
 
+    # 0. Early Railway API auth check — prevents 14 fake AUTH_ERRORs on expired token
+    _railway_auth_ok = True
+    try:
+        await railway_query("{ me { id } }")
+    except RuntimeError as e:
+        if "Not Authorized" in str(e) or "Unauthorized" in str(e):
+            _railway_auth_ok = False
+            alert = (
+                "🔴 RAILWAY_TOKEN истёк или отозван — Railway API недоступен.\n"
+                "❌ Деплои: проверить невозможно (AUTH_ERROR на все запросы).\n"
+                "🛠 Нужно: сгенерировать новый токен на railway.app → Settings → Tokens\n"
+                "   и обновить RAILWAY_TOKEN_VLAD в переменных Силли на Railway."
+            )
+            lines.append(alert)
+            logger.error(f"[audit] Railway API auth failed: {e}")
+            await notify_office(alert)
+    except Exception:
+        pass  # network/timeout — не прерываем аудит
+
     # 1. Deployment status
     deploy_ok, deploy_fail = [], []
-    for service_id, (repo, _) in SERVICES.items():
+    for service_id, (repo, _) in (SERVICES.items() if _railway_auth_ok else []):
         try:
             data = await railway_query(
                 """query($sid: String!) {
@@ -1443,6 +1462,9 @@ async def run_daily_audit() -> str:
         for entry in deploy_fail:
             svc_name = entry.split(":")[0]
             svc_status = entry.split(":", 1)[1] if ":" in entry else "UNKNOWN"
+            # AUTH_ERROR = Railway API недоступен, авто-фикс невозможен — пропускаем
+            if svc_status == "AUTH_ERROR":
+                continue
             svc_id = next(
                 (sid for sid, (repo_n, _) in SERVICES.items() if repo_n == svc_name),
                 None
