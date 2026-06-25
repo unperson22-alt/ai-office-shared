@@ -1033,6 +1033,7 @@
     "prevention": "notify_office() внутри цикла по сервисам — красный флаг. Уведомления в группу должны отправляться только один раз (сводным отчётом), никогда не per-service в loop",
     "status": "fixed",
     "tag": "notification",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-06-25T11:00:58.013820+00:00"
   }
 ]
