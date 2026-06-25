@@ -1019,5 +1019,20 @@
     "tag": "system",
     "posted_to_group": true,
     "posted_at": "2026-06-25T07:12:33.421434+00:00"
+  },
+  {
+    "id": 63,
+    "date": "2026-06-25",
+    "bot": "cilly",
+    "layer": "audit",
+    "title": "run_daily_audit — двойной notify_office → спам на каждый упавший сервис",
+    "symptom": "Office group залило 4 отдельными crash-уведомлениями (logger-bot, tilly-bot, filly-bot, dilly-bot) + сводный отчёт сверху — итого N+1 сообщений вместо одного",
+    "root_cause": "В run_daily_audit() два пути (delegation-failure и escalate+not_code_issue) вызывали notify_office() PER SERVICE прямо в цикле, ДО финального сводного отчёта, который daily_audit_loop всегда отправляет в конце",
+    "why_architecture": "Информация о проблемных ботах уже копится в lines[] и попадает в единый отчёт — отдельный notify_office() внутри цикла был избыточен и превращал каждый Railway FAILED-статус в отдельное сообщение",
+    "fix": "Убраны 2 вызова await notify_office() (8 строк) из run_daily_audit(). Данные в lines[] сохранены — попадают в финальный сводный отчёт. Группа почищена: 17 спам-сообщений удалено через cleanup_group intent. Commit 2505b86, main.",
+    "prevention": "notify_office() внутри цикла по сервисам — красный флаг. Уведомления в группу должны отправляться только один раз (сводным отчётом), никогда не per-service в loop",
+    "status": "fixed",
+    "tag": "notification",
+    "posted_to_group": false
   }
 ]
