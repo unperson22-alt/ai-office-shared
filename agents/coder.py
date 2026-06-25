@@ -1524,19 +1524,11 @@ async def run_daily_audit() -> str:
                         )
                     except Exception as ex:
                         lines.append(f"⚠️ *{svc_name}* — не смогла делегировать: {ex}")
-                        await notify_office(
-                            f"⚠️ *{svc_name}* упал, нужна помощь\n"
-                            f"Причина: {crash_reason}\nНужно: {fix_description}"
-                        )
                 else:
                     lines.append(
                         f"⚠️ *{svc_name}* — требует ручного вмешательства\n"
                         f"   📍 Причина: {crash_reason[:120]}\n"
                         f"   🛠 Рекомендация: {fix_description[:120]}"
-                    )
-                    await notify_office(
-                        f"⚠️ *{svc_name}* упал, не смогла починить автоматически\n"
-                        f"Причина: {crash_reason}\nНужно: {fix_description}"
                     )
     else:
         lines.append(f"✅ Деплои ({len(deploy_ok)}): все SUCCESS")
