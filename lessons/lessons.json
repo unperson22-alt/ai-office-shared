@@ -897,7 +897,9 @@
     "prevention": "Один источник правды для сигналов; при добавлении нового keyspace сразу подключать к трекеру исходов и к статистике. Тест: сигнал с заведомо сработавшим TP → status=win",
     "cause": "Скринер пишет сигналы в signals:list/signal:{sid}, а outcome_tracker закрывал только старый keyspace tilly:signals:{asset} (BTC/ETH/SOL). Скринерные сигналы (~20 монет) никто не закрывал → status навсегда open",
     "status": "fixed",
-    "tag": "system"
+    "tag": "system",
+    "posted_to_group": true,
+    "posted_at": "2026-06-25T07:12:33.421434+00:00"
   },
   {
     "id": 56,
@@ -912,7 +914,9 @@
     "prevention": "Префиксные фильтры в инструментах диагностики делать настраиваемыми, а не хардкодить один namespace",
     "cause": "В redis_query регэксп ограничен префиксом office:*, вывод режется на 3000 символах",
     "status": "fixed",
-    "tag": "system"
+    "tag": "system",
+    "posted_to_group": true,
+    "posted_at": "2026-06-25T07:12:33.421434+00:00"
   },
   {
     "id": 57,
@@ -927,7 +931,9 @@
     "prevention": "Перед оптимизацией — доверенный baseline на чистых данных; не тюнить по live-числу с известным смещением фида",
     "cause": "Старые сигналы генерировались на устаревших ценах входа (протухший фид) → почти все в лосс. Реальное качество логики ~47-50% (бэктест-реплей)",
     "status": "fixed",
-    "tag": "system"
+    "tag": "system",
+    "posted_to_group": true,
+    "posted_at": "2026-06-25T07:12:33.421434+00:00"
   },
   {
     "id": 58,
@@ -942,7 +948,9 @@
     "prevention": "У любого бота — хотя бы fallback на неизвестный ввод; не оставлять пользователя в тишине",
     "cause": "В main() только CallbackQueryHandler + /stats + /signals; нет MessageHandler(TEXT) и нет нужной команды. Любой текст молча отбрасывался, а drop_pending_updates=True дропал пришедшее при рестарте",
     "status": "fixed",
-    "tag": "system"
+    "tag": "system",
+    "posted_to_group": true,
+    "posted_at": "2026-06-25T07:12:33.421434+00:00"
   },
   {
     "id": 59,
@@ -957,7 +965,9 @@
     "prevention": "CRITICAL от ревьюера = стоп-фактор, не предупреждение. Перед subprocess-фичей — проверка наличия целевых файлов и авторизации",
     "cause": "Цепочка не сверила целевой репозиторий; Секки пометил CRITICAL «нет авторизации — любой может запустить subprocess», но цепочка всё равно закоммитила",
     "status": "fixed",
-    "tag": "system"
+    "tag": "system",
+    "posted_to_group": true,
+    "posted_at": "2026-06-25T07:12:33.421434+00:00"
   },
   {
     "id": 60,
@@ -972,7 +982,9 @@
     "prevention": "После настройки сервиса проверять repoTriggers; деплой подтверждать по факту (новый /health/рестарт), а не по факту merge",
     "cause": "repoTriggers сервиса пуст (GitHub-связь/авто-деплой отключены). serviceInstanceRedeploy пересобирает СТАРЫЙ коммит — для нового кода не годится",
     "status": "fixed",
-    "tag": "railway"
+    "tag": "railway",
+    "posted_to_group": true,
+    "posted_at": "2026-06-25T07:12:33.421434+00:00"
   },
   {
     "id": 61,
@@ -987,7 +999,9 @@
     "prevention": "Любая массовая операция, шлющая сообщения, — за флагом/throttle; backfill отделять от нотификаций",
     "cause": "screener_outcome_tracker при первом проходе закрыл все open-сигналы и на каждый слал сообщение в группу",
     "status": "fixed",
-    "tag": "system"
+    "tag": "system",
+    "posted_to_group": true,
+    "posted_at": "2026-06-25T07:12:33.421434+00:00"
   },
   {
     "id": 62,
@@ -1002,6 +1016,8 @@
     "prevention": "Параметры тюнить только по доверенному бэктесту; per-symbol whitelist не хардкодить по короткой истории (overfit)",
     "cause": "Логика шорт-режима даёт много слабых GENERAL-сигналов; отсев худших символов (worst5) по WR нестабилен между прогонами (малые выборки)",
     "status": "known",
-    "tag": "system"
+    "tag": "system",
+    "posted_to_group": true,
+    "posted_at": "2026-06-25T07:12:33.421434+00:00"
   }
 ]
