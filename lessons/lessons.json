@@ -1052,5 +1052,21 @@
     "tag": "resilience",
     "posted_to_group": true,
     "posted_at": "2026-06-26T02:35:19.057143+00:00"
+  },
+  {
+    "id": 65,
+    "date": "2026-06-26",
+    "bot": "cilly",
+    "layer": "audit",
+    "title": "Аудит флудит группу повторяющимися health-ошибками внешних сервисов",
+    "symptom": "Каждый ежедневный аудит (09:00/18:00 UTC) Силли постит в группу одну и ту же ❌ Health failed: office-dashboard:503/degraded — известную внешнюю проблему (Telegram reconnect), которую команда починить не может.",
+    "root_cause": "В run_daily_audit() блок health-check репортил все текущие 503 безусловно — без памяти между запусками и без классификации внешних зависимостей. Для лог-ошибок есть IGNORE_LOG, для health-фейлов — ничего. office-dashboard отдаёт 503 когда его Telegram-polling в состоянии reconnecting (NetworkError backoff), причина на стороне Telegram API.",
+    "why_architecture": "Силли — единственный слой, решающий что доходит до офис-группы. Health-check без дедупликации и severity-классификации превращает мониторинг в шум: команда перестаёт реагировать на ❌, видя её каждый день по неустранимой причине (alert fatigue).",
+    "fix": "agents/coder.py: EXTERNAL_HEALTH_DEPS={office-dashboard} + HEALTH_FAIL_THRESHOLD=3. Health-фейлы трекаются в Redis (office:health_fail_count:{svc}, TTL 7d). После 3 подряд: внешние deps → тишина, внутренние → 🔕. Первое появление по-прежнему ❌. Восстановление → счётчик удаляется + ✅ восстановлен. Ветка claude/audit-errors-team-coordination-l7mxte, commit 0a0ed87.",
+    "status": "fixed",
+    "prevention": "Любой повторяющийся алерт обязан иметь память (счётчик подряд) и severity-деградацию. Внешние зависимости классифицировать отдельно и глушить после порога. Не репортить то, что команда не может починить — это шум, не сигнал.",
+    "cause": "Health-check репортил без дедупликации и без классификации внешних причин",
+    "tag": "audit",
+    "posted_to_group": false
   }
 ]
