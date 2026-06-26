@@ -1384,6 +1384,11 @@ HEALTH_URLS = {
     "tilly-trader":     "https://tilly-trader-production.up.railway.app/health",
 }
 
+# Services where health 503 = external dependency (Telegram API), not our code.
+# Persistent failures here are silenced after HEALTH_FAIL_THRESHOLD consecutive audits.
+EXTERNAL_HEALTH_DEPS = {"office-dashboard"}
+HEALTH_FAIL_THRESHOLD = 3  # consecutive audit failures before downgrading from ❌ to 🔕
+
 async def _all_office_services() -> list:
     """[(service_id, name)] по ВСЕМ проектам-отделам (для аудита/скана логов на баги).
     Фолбэк на статический SERVICES, если Railway API недоступен."""
@@ -1614,9 +1619,39 @@ async def run_daily_audit() -> str:
             except Exception as e:
                 health_fail.append(f"{name}:TIMEOUT")
 
-    if health_fail:
-        lines.append(f"❌ Health failed: {', '.join(health_fail)}")
-    else:
+    # Classify failures by persistence to avoid flooding with known/external issues
+    _rdb = await get_redis()
+    _new_fails = []
+    _known_fails = []
+    for _entry in health_fail:
+        _svc = _entry.split(":")[0]
+        if _rdb:
+            _cnt_key = f"office:health_fail_count:{_svc}"
+            _cnt = await _rdb.incr(_cnt_key)
+            await _rdb.expire(_cnt_key, 86400 * 7)
+            _is_ext = _svc in EXTERNAL_HEALTH_DEPS
+            _is_old = _cnt >= HEALTH_FAIL_THRESHOLD
+            if _is_old and _is_ext:
+                pass  # silent — external + recurring, not actionable
+            elif _is_old:
+                _known_fails.append(f"{_svc}(×{_cnt})")
+            else:
+                _new_fails.append(_entry)
+        else:
+            _new_fails.append(_entry)  # no Redis — report everything
+    # Detect recoveries: clear counters for services that came back online
+    if _rdb:
+        _failing_svcs = {e.split(":")[0] for e in health_fail}
+        for _svc in HEALTH_URLS:
+            _cnt_key = f"office:health_fail_count:{_svc}"
+            if _svc not in _failing_svcs and await _rdb.exists(_cnt_key):
+                await _rdb.delete(_cnt_key)
+                lines.append(f"✅ {_svc}: восстановлен")
+    if _new_fails:
+        lines.append(f"❌ Health failed: {', '.join(_new_fails)}")
+    if _known_fails:
+        lines.append(f"🔕 Деградация (известно): {', '.join(_known_fails)}")
+    if not _new_fails and not health_fail:
         lines.append(f"✅ HTTP health ({len(HEALTH_URLS)}): все OK")
 
     # 3. Scan logs for new errors (last 2 hours)
