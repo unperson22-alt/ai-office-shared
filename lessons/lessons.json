@@ -1035,5 +1035,21 @@
     "tag": "notification",
     "posted_to_group": true,
     "posted_at": "2026-06-25T11:00:58.013820+00:00"
+  },
+  {
+    "id": 64,
+    "ts": "2025-01-14",
+    "bot": "telegram-bot",
+    "layer": "network",
+    "title": "Обработка нестабильности сети в Telegram Bot API",
+    "symptom": "telegram.error.NetworkError: Bad Gateway — бот крашится при недоступности Telegram серверов",
+    "root_cause": "Telegram Bot API временно недоступен (проблемы на стороне Telegram, проблемы сети, rate-limiting). Текущая логика retry срабатывает только 5 раз (макс 80 сек), затем бот падает.",
+    "why_architecture": "Фиксированное количество попыток retry не учитывает, что Telegram может быть недоступен 5+ минут. Отсутствует exponential backoff с максимальным потолком и jitter, что приводит к thundering herd и полному крешу бота.",
+    "fix": "1) Увеличить количество попыток или сделать бесконечный retry с максимальным интервалом; 2) Добавить jitter чтобы избежать thundering herd; 3) Логировать каждую попытку с timestamp; 4) Использовать exponential backoff с максимальным потолком (например, 5 минут)",
+    "status": "open",
+    "prevention": "Не полагайтесь на фиксированное количество retry — Telegram может быть недоступен 5+ минут. Всегда добавляйте максимальный интервал между попытками и логируйте для мониторинга.",
+    "cause": "Недостаточная обработка временной недоступности Telegram API",
+    "tag": "resilience",
+    "posted_to_group": false
   }
 ]
