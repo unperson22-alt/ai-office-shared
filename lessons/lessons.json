@@ -1052,5 +1052,35 @@
     "tag": "resilience",
     "posted_to_group": true,
     "posted_at": "2026-06-26T02:35:19.057143+00:00"
+  },
+  {
+    "id": 65,
+    "date": "2026-06-27",
+    "bot": "office-dashboard",
+    "layer": "audit/health",
+    "status": "fixed",
+    "tag": "observability",
+    "title": "/health врёт 503 после 120с аптайма — last_poll не обновляется во время run_polling()",
+    "symptom": "Ежедневный аудит Силли: 'Health failed: office-dashboard:503/degraded', при этом деплои SUCCESS и логов ошибок нет — сервис на самом деле живой.",
+    "root_cause": "Прошлый фикс добавил health-gate healthy = status=='running' AND age<120s, где age = now - last_poll. last_poll ставился ОДИН раз перед app.run_polling(), который блокирует поток навсегда и timestamp больше никогда не обновлялся. Через 120с любой живой инстанс уходил в 503.",
+    "why_architecture": "Health-чек измерял не живость, а возраст одноразовой метки времени. Liveness-сигнал должен генерироваться периодически из того же event-loop, что обрабатывает апдейты, иначе он измеряет момент старта, а не текущее состояние.",
+    "fix": "Heartbeat-задача внутри polling event-loop (post_init): каждые 30с обновляет last_poll + status='running'. Жив loop → честный 200, завис/умер → честная деградация. Коммит 2917af2, ветка claude/debug-buttons-503-errors-fhke7r.",
+    "prevention": "Health на основе timestamp ОБЯЗАН иметь периодический updater в том же loop, что и рабочая нагрузка. Метка, выставленная один раз перед блокирующим вызовом — антипаттерн: гарантированно протухнет.",
+    "posted_to_group": false
+  },
+  {
+    "id": 66,
+    "date": "2026-06-27",
+    "bot": "tilly-trader",
+    "layer": "network/telegram",
+    "status": "fixed",
+    "tag": "resilience",
+    "title": "Кнопки сигналов 'светят' — Telegram-updater мёртв, но /health врёт 200 (слепое пятно)",
+    "symptom": "Inline-кнопки на сигналах в ЛС бесконечно крутятся ('светят'), нажатия не отрабатывают. При этом сигналы продолжают приходить и /health отдаёт 200 ok.",
+    "root_cause": "Скринер (исходящие send_message) и Telegram-updater (входящие getUpdates/callback'и) независимы. При смерти updater'а бот становится зомби: сигналы шлёт, на кнопки не отвечает (q.answer не вызывается). /health мерил ТОЛЬКО свежесть скана (исходящее) → врал 200 → watchdog не редеплоил.",
+    "why_architecture": "Health должен покрывать ВСЕ критичные подсистемы. Liveness исходящего канала не доказывает liveness входящего. Одна метрика на многокомпонентный процесс = слепое пятно, в котором зомби живёт незаметно.",
+    "fix": "1) /health отдаёт 503 reason=updater_down при app.updater.running==False; 2) updater_supervisor: при смерти updater'а алерт в офис + os._exit(1) → Railway поднимает заново. Коммит 7b8460d. Отдельно по запросу убраны кнопки входа/пропуска сделки (22efe43) — сигналы это симуляция, винрейт считается автоматически по цене и от кнопок не зависит.",
+    "prevention": "Для процесса с несколькими подсистемами health должен агрегировать liveness каждой (входящее + исходящее + фоновые задачи). Проверять только одну ветку — значит не замечать смерть остальных.",
+    "posted_to_group": false
   }
 ]
