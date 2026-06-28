@@ -629,8 +629,8 @@
     "prevention": "When using tools: always a multi-turn loop until stop_reason=end_turn",
     "status": "fixed",
     "tag": "cilly",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "title": "HTTP server didn't start — unreachable code after return",
@@ -643,8 +643,8 @@
     "prevention": "Start the HTTP layer (app_http, runner, TCPSite, ptb) after all init — no code after they launch",
     "status": "fixed",
     "tag": "cilly",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 41,
@@ -660,8 +660,8 @@
     "cause": "Monitoring was tied to a hardcoded list of one project's services",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 42,
@@ -677,8 +677,8 @@
     "cause": "Railpack/mise couldn't verify attestations for the pinned python from runtime.txt",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 43,
@@ -694,8 +694,8 @@
     "cause": "Startup get_me() wasn't wrapped in retry/try, a timeout killed the process",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 44,
@@ -711,8 +711,8 @@
     "cause": "Internal redis.railway.internal doesn't resolve from another Railway project",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 45,
@@ -728,8 +728,8 @@
     "cause": "No limit on posting to the group + no tool for the task → endless requests for help",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 46,
@@ -745,8 +745,8 @@
     "cause": "md5 over raw log lines is unstable because of line numbers",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 47,
@@ -762,8 +762,8 @@
     "cause": "Tokens were written into the code as strings instead of os.environ",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 48,
@@ -779,8 +779,8 @@
     "cause": "A one-off script was committed over bot.py and deployed",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 49,
@@ -796,8 +796,8 @@
     "cause": "klines from BingX weren't sorted, the order was the reverse of what was expected",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 50,
@@ -813,8 +813,8 @@
     "cause": "The env var SCREENER_INTERVAL_H was lost when the service reconnected",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 51,
@@ -830,8 +830,8 @@
     "cause": "post_lesson marked dedup with a title hash, while post_lessons dedups by numeric ids — the sets diverged; plus Redis could have been cleared. Running post_lessons would re-post all 40",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 52,
@@ -847,8 +847,8 @@
     "prevention": "In ALL bots: 'no data' and 'all ok, empty' must be distinguishable; sending an alert must not depend on persistence/logging; critical data — at least 2 providers with fallback; if a service produces health telemetry, someone must read it and react (503, not 200)",
     "cause": "single-point-of-failure + silent-failure",
     "tag": "trading,resilience,observability,data-source",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 53,
@@ -864,8 +864,8 @@
     "cause": "The dedup state in Redis desynced from the lesson history in git",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 54,
@@ -881,8 +881,8 @@
     "cause": "A full wipe was the default and automatic instead of a narrow dedup",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 55,
@@ -898,8 +898,8 @@
     "cause": "The screener writes signals to signals:list/signal:{sid}, but outcome_tracker closed only the old keyspace tilly:signals:{asset} (BTC/ETH/SOL). The screener signals (~20 coins) were closed by nobody → status forever open",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 56,
@@ -915,8 +915,8 @@
     "cause": "In redis_query the regex is limited to the office:* prefix, output is cut at 3000 chars",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 57,
@@ -932,8 +932,8 @@
     "cause": "Old signals were generated on stale entry prices (a stale feed) → almost all losses. Real logic quality ~47-50% (backtest replay)",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 58,
@@ -949,8 +949,8 @@
     "cause": "main() had only CallbackQueryHandler + /stats + /signals; no MessageHandler(TEXT) and no needed command. Any text was silently dropped, and drop_pending_updates=True dropped what arrived during a restart",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:43:57.767180+00:00"
   },
   {
     "id": 59,
