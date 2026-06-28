@@ -88,3 +88,10 @@
   NEXT: компонент №1 — `ai-office-shared` (после явного OK Влада).
 - 2026-06-28: Закрыт открытый вопрос #1 — канон Эллис/Мама-бот = `mama-bot` (`family-dept` никогда
   не деплоился на Railway). `family-dept` исключён из волны. STATE: ждём OK на компонент №1.
+- 2026-06-28: **Компонент №1 DONE** (на ветке, без тега/деплоя). Добавлены `shared/models.py`
+  (MODEL_SONNET/HAIKU/OPUS + env-override) и `shared/prompt.py` (`enhance_prompt`, каноник из
+  Крисса, fail-silent); `__init__` реестр дополнен; версия 0.1.18→**0.1.19**. Верификация:
+  импорт-чек + env-override + функциональный smoke (длинный без изменений, fail-silent, enhance) —
+  всё зелёное. NEXT: Компонент №2 — `kriss-bot`: удалить инлайн-дубль `_call_office` (46-57,
+  постит без `source`!) и `_enhance_prompt`, импортировать из shared, пин на v0.1.19.
+  ⚠️ Тег v0.1.19 + деплой shared (90с даунтайма) — батчим после готовности Крисса.
