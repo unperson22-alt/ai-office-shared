@@ -966,8 +966,8 @@
     "cause": "The chain didn't verify the target repository; Sekky flagged CRITICAL 'no authorization — anyone can run subprocess', but the chain committed anyway",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:46:37.222501+00:00"
   },
   {
     "id": 60,
@@ -983,8 +983,8 @@
     "cause": "The service's repoTriggers were empty (GitHub link/auto-deploy disabled). serviceInstanceRedeploy rebuilds the OLD commit — no good for new code",
     "status": "fixed",
     "tag": "railway",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:46:37.222501+00:00"
   },
   {
     "id": 61,
@@ -1000,8 +1000,8 @@
     "cause": "screener_outcome_tracker on its first pass closed all open signals and sent a message to the group for each",
     "status": "fixed",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:46:37.222501+00:00"
   },
   {
     "id": 62,
@@ -1017,8 +1017,8 @@
     "cause": "The short-mode logic yields many weak GENERAL signals; pruning the worst symbols (worst5) by WR is unstable across runs (small samples)",
     "status": "known",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:46:37.222501+00:00"
   },
   {
     "id": 63,
@@ -1033,8 +1033,8 @@
     "prevention": "notify_office() inside a per-service loop is a red flag. Group notifications should be sent only once (as a summary report), never per-service in a loop",
     "status": "fixed",
     "tag": "notification",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:46:37.222501+00:00"
   },
   {
     "id": 64,
@@ -1050,8 +1050,8 @@
     "prevention": "Don't rely on a fixed retry count — Telegram can be down 5+ minutes. Always add a max interval between attempts and log for monitoring.",
     "cause": "Insufficient handling of temporary Telegram API unavailability",
     "tag": "resilience",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:46:37.222501+00:00"
   },
   {
     "id": 65,
@@ -1066,8 +1066,8 @@
     "why_architecture": "The health check measured not liveness but the age of a one-time timestamp. A liveness signal must be generated periodically from the same event loop that processes updates, otherwise it measures the start moment, not the current state.",
     "fix": "A heartbeat task inside the polling event loop (post_init): every 30s updates last_poll + status='running'. Loop alive → honest 200, hung/dead → honest degradation. Commit 2917af2, branch claude/debug-buttons-503-errors-fhke7r.",
     "prevention": "A timestamp-based health check MUST have a periodic updater in the same loop as the workload. A mark set once before a blocking call is an antipattern: guaranteed to go stale.",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:46:37.222501+00:00"
   },
   {
     "id": 66,
@@ -1082,8 +1082,8 @@
     "why_architecture": "Health must cover ALL critical subsystems. Liveness of the outbound channel doesn't prove liveness of the inbound one. One metric for a multi-component process = a blind spot where a zombie lives unnoticed.",
     "fix": "1) /health returns 503 reason=updater_down when app.updater.running==False; 2) updater_supervisor: on updater death, alert the office + os._exit(1) → Railway brings it back up. Commit 7b8460d. Separately, on request, the trade enter/skip buttons were removed (22efe43) — signals are a simulation, winrate is computed automatically from price and doesn't depend on buttons.",
     "prevention": "For a process with several subsystems, health must aggregate the liveness of each (inbound + outbound + background tasks). Checking only one branch means missing the death of the rest.",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:46:37.222501+00:00"
   },
   {
     "id": 67,
@@ -1099,7 +1099,7 @@
     "prevention": "Classify faults positively (external service vs our code) and stay silent on what isn't ours; a known lesson must BLOCK a repeat proposal, not just annotate; audit fixes go through the parallel team review gate before any office proposal; never claim 'applying a fix' unless it was actually applied.",
     "cause": "Brittle substring fault filter + cosmetic lesson match + solo un-reviewed fix generation in monitor_loop/handle_bug.",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:46:37.222501+00:00"
   }
 ]
