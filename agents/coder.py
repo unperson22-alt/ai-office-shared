@@ -670,7 +670,8 @@ office:decisions в Redis — твои ограничения.
 ANALYZER_PROMPT = """Анализатор багов Python/Telegram/Railway. JSON без markdown:
 {"is_bug":bool,"confidence":"high|low","bug_type":"crash|logic|config|network|external|unknown","description":"1-2 предл","affected_file":"path|null","fix_description":"конкретно","lesson_title":"","lesson_symptom":"","lesson_cause":"","lesson_fix":"","lesson_avoid":""}
 high=явный crash/NameError/ImportError/SyntaxError/KeyError→автофикс. low=логика→спросить.
-ВНЕШНЕЕ (НЕ наш баг): если корневая причина — недоступность СТОРОННЕГО сервиса (Telegram/Railway API, DNS, сеть: NetworkError, ConnectError, RemoteProtocolError, Bad Gateway, 502/503/504), а наш код её просто пробрасывает → is_bug=false, bug_type="external". Баг — ТОЛЬКО если НАШ код не обрабатывает сбой и крашится в цикле (CrashLoop)."""
+ВНЕШНЕЕ (НЕ наш баг): если корневая причина — недоступность СТОРОННЕГО сервиса (Telegram/Railway API, DNS, сеть: NetworkError, ConnectError, RemoteProtocolError, Bad Gateway, 502/503/504), а наш код её просто пробрасывает → is_bug=false, bug_type="external". Баг — ТОЛЬКО если НАШ код не обрабатывает сбой и крашится в цикле (CrashLoop).
+Поля lesson_* (lesson_title/lesson_symptom/lesson_cause/lesson_fix/lesson_avoid) — ВСЕГДА на английском (English), даже если логи/контекст на русском."""
 
 FIXER_PROMPT = """Фиксер Python кода. Верни ТОЛЬКО полный исправленный файл целиком. Минимум изменений — только то что нужно для фикса. Сохраняй стиль оригинала. Без markdown, без объяснений.
 
@@ -719,6 +720,8 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
             f"title: {title}\nsymptom: {symptom}\ncause: {cause}\n"
             f"context: {context}\nfix: {fix}\navoid: {avoid}\n\n"
             f"Existing format example: {json.dumps(lessons[0]) if lessons else '{}'}\n\n"
+            f"Write ALL text fields (title/symptom/root_cause/why_architecture/fix/prevention/cause) "
+            f"in ENGLISH — translate if the input is in Russian. Keep code/identifiers/commit hashes as-is.\n"
             f"Return ONLY the JSON object, no markdown. Add id:{new_id} and ts field with today's date."
         )
         compact = await ask_claude(prompt, system="Return only valid JSON, no markdown.", model="claude-haiku-4-5-20251001")
