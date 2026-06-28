@@ -5093,6 +5093,35 @@ async def migrate_lessons_to_english(reply_func, confirm: bool) -> None:
         await reply_func(f"❌ Ошибка миграции уроков: {e}")
 
 
+async def _lessons_en_migration_once():
+    """Одноразовый авто-перепост Bug Lessons на английском (явная авторизация владельца).
+
+    At-most-once: ставит Redis-флаг `cilly:lessons_en_migrated` ДО удаления, поэтому
+    деструктивный шаг НЕ повторится при рестартах/редеплоях (защита от флуда, урок #54).
+    При частичном сбое владелец дозапустит `/migrate_lessons_en confirm` (idempotent).
+    """
+    try:
+        await asyncio.sleep(40)  # дать боту, HTTP и Telethon подняться
+        r = await get_redis()
+        if not r:
+            logger.warning("[lessons_en_migration] Redis недоступен — пропускаю one-shot")
+            return
+        if await r.get("cilly:lessons_en_migrated"):
+            return  # уже выполнено ранее
+        await r.set("cilly:lessons_en_migrated", "1")  # фиксируем ДО удаления (at-most-once)
+        logger.info("[lessons_en_migration] одноразовый перепост уроков на английском")
+
+        async def _log(msg: str):
+            try:
+                await notify_office(msg)
+            except Exception:
+                pass
+
+        await migrate_lessons_to_english(_log, confirm=True)
+    except Exception as e:
+        logger.error(f"[lessons_en_migration] failed: {e}")
+
+
 @dp.message(F.text.startswith("/migrate_lessons_en"))
 async def cmd_migrate_lessons_en(message: Message):
     """Перепост Bug Lessons на английском. По умолчанию dry-run; `confirm` — выполнить.
@@ -5696,6 +5725,7 @@ async def main():
     asyncio.create_task(vietnam_cron_loop())
     asyncio.create_task(management_loop())
     asyncio.create_task(publish_pending_on_startup())  # дозалить pending-уроки (без удалений)
+    asyncio.create_task(_lessons_en_migration_once())   # одноразовый перепост уроков на английском
     # HTTP server for Filly routing
     app = web.Application()
     app.router.add_post("/task", handle_cilly_task)
