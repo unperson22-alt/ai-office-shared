@@ -67,7 +67,16 @@
 - Перед бампом версии бота — smoke-импорт новых символов shared.
 
 ## Открытые вопросы
-1. **mama vs elliss** — какой реально задеплоен на Railway? Определить канон, второй — к выводу.
+1. **mama vs elliss — РЕШЕНО (2026-06-28).** Канон = **`mama-bot`**. Доказательства:
+   `mama-bot` активен (коммиты 19–20 июня, shared **v0.1.18**, PTB 21.5, office:instructions —
+   фича v0.1.18), полный деплой-конфиг. `family-dept/elliss` застыл 28 мая, shared **v0.1.9**;
+   `family-dept/README.md` «Статус миграции» — все чекбоксы пустые, вкл. «[ ] Создать Railway
+   project family-dept» → `family-dept` на Railway **никогда не разворачивался**. Реестр Notion:
+   Эллис = Мама-бот = один бот `@ellice_mom_bot` (Service ID «—»); Рэй/Нелли — в `marketing-dept`.
+   **Итог:** живой `@ellice_mom_bot` деплоится из `mama-bot`; весь `family-dept` — заброшенная
+   незавершённая миграция. **Действие:** рефакторим только `mama-bot`; `family-dept/elliss`
+   исключён из волны, к удалению/deprecated (решение об удалении — за Владом). Хардкод
+   `chat_id=391077101` правим в `mama-bot:802` и `kriss-bot:814` (строку в elliss игнорируем).
 2. Делегирование Силли: массовые бампы/redeploy — один компактный self-contained промпт Силли
    через `POST /task` (`source: "CLAUDE"`).
 
@@ -77,3 +86,5 @@
 ## HANDOFF LOG (дополнять в конце каждой сессии: done / next / state)
 - 2026-06-28: Проведён AUDIT, план одобрен. Создан REFACTOR_PLAN.md + Notion. Кода ещё нет.
   NEXT: компонент №1 — `ai-office-shared` (после явного OK Влада).
+- 2026-06-28: Закрыт открытый вопрос #1 — канон Эллис/Мама-бот = `mama-bot` (`family-dept` никогда
+  не деплоился на Railway). `family-dept` исключён из волны. STATE: ждём OK на компонент №1.
