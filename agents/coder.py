@@ -668,8 +668,9 @@ office:decisions в Redis — твои ограничения.
 ПРАВИЛО ВЫВОДА: технические результаты (аудиты, таблицы, диагностика, списки) — отправляй ТОЛЬКО в личку user_id=391077101. В офисную группу (-5194783850) ТОЛЬКО: алерты о падениях, краткий ежедневный аудит, еженедельный отчёт."""
 
 ANALYZER_PROMPT = """Анализатор багов Python/Telegram/Railway. JSON без markdown:
-{"is_bug":bool,"confidence":"high|low","bug_type":"crash|logic|config|network|unknown","description":"1-2 предл","affected_file":"path|null","fix_description":"конкретно","lesson_title":"","lesson_symptom":"","lesson_cause":"","lesson_fix":"","lesson_avoid":""}
-high=явный crash/NameError/ImportError/SyntaxError/KeyError→автофикс. low=логика/сеть→спросить."""
+{"is_bug":bool,"confidence":"high|low","bug_type":"crash|logic|config|network|external|unknown","description":"1-2 предл","affected_file":"path|null","fix_description":"конкретно","lesson_title":"","lesson_symptom":"","lesson_cause":"","lesson_fix":"","lesson_avoid":""}
+high=явный crash/NameError/ImportError/SyntaxError/KeyError→автофикс. low=логика→спросить.
+ВНЕШНЕЕ (НЕ наш баг): если корневая причина — недоступность СТОРОННЕГО сервиса (Telegram/Railway API, DNS, сеть: NetworkError, ConnectError, RemoteProtocolError, Bad Gateway, 502/503/504), а наш код её просто пробрасывает → is_bug=false, bug_type="external". Баг — ТОЛЬКО если НАШ код не обрабатывает сбой и крашится в цикле (CrashLoop)."""
 
 FIXER_PROMPT = """Фиксер Python кода. Верни ТОЛЬКО полный исправленный файл целиком. Минимум изменений — только то что нужно для фикса. Сохраняй стиль оригинала. Без markdown, без объяснений.
 
@@ -1124,13 +1125,13 @@ def _format_lesson(l: dict) -> str:
     status_emoji = {"fixed": "✅", "still_relevant": "⚠️", "outdated": "🗄", "documented": "📝"}
     se = status_emoji.get(l.get("status", ""), "❓")
     return (
-        f"🐛 Урок #{l.get('id')} — {l.get('title', '?')}\n\n"
+        f"🐛 Lesson #{l.get('id')} — {l.get('title', '?')}\n\n"
         f"📍 {l.get('bot', '?')} | {l.get('layer', '?')}\n\n"
-        f"👁 Симптом:\n{l.get('symptom', '?')}\n\n"
-        f"🔍 Причина:\n{l.get('root_cause', l.get('cause', '?'))}\n\n"
-        f"✅ Фикс:\n{l.get('fix', '?')}\n\n"
-        f"🛡 Профилактика:\n{l.get('prevention', '?')}\n\n"
-        f"{se} Статус: {l.get('status', '?')}"
+        f"👁 Symptom:\n{l.get('symptom', '?')}\n\n"
+        f"🔍 Root cause:\n{l.get('root_cause', l.get('cause', '?'))}\n\n"
+        f"✅ Fix:\n{l.get('fix', '?')}\n\n"
+        f"🛡 Prevention:\n{l.get('prevention', '?')}\n\n"
+        f"{se} Status: {l.get('status', '?')}"
     )
 
 
@@ -1270,33 +1271,110 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
         logger.error(f"Can't read {repo}/{affected}: {e}")
         return
 
-    fixed_code = await generate_fix(source_code, fix_desc)
+    # ── Фикс генерит НЕ соло-Opus, а параллельная команда dev-dept с ревью ──
+    # Девви → [Рикки ‖ Тести ‖ Секки] → Скрибби. Предложение в офис уходит
+    # ТОЛЬКО после прохождения гейта (вердикт Рикки ≠ NEEDS_FIX + compile()).
+    # Так аудит становится командным, а в чат не попадает неотревьюенный код.
+    from ai_office_shared.shared.dev_pipeline import run_dev_pipeline
+    from ai_office_shared.shared.dev_activity import publish_activity
+    import uuid as _uuid
 
-    if False:  # Автофикс ОТКЛЮЧЁН — всегда требуем /approve
-        pass
-    else:
-        # Всегда спрашиваем /approve — автофикс отключён во избежание цепных реакций.
-        # Заводим задачу на доске + стейджим действие в Redis-backed pending (переживает рестарт).
-        r_tb = await get_redis()
-        task_id = await tb.create_task(
-            r_tb, f"Фикс {service_name}: {fix_desc[:80]}",
-            created_by="силли", assignee=repo.replace("-bot", ""),
-            status="awaiting_approval",
-        ) or ""
+    uid      = int(os.getenv("YOUR_TELEGRAM_ID", "391077101"))
+    r_tb     = await get_redis()
+    _task_id = _uuid.uuid4().hex[:12]
+    board_id = await tb.create_task(
+        r_tb, f"Фикс {service_name}: {fix_desc[:80]}",
+        created_by="силли", assignee="dev-dept",
+        status="in_progress", task_id=_task_id,
+    ) or _task_id
+
+    devvy_task = (
+        f"Исправь баг в боте {service_name} ({repo}/{affected}).\n"
+        f"Симптом: {description}\n"
+        f"Что нужно сделать: {fix_desc}\n"
+        f"Верни ПОЛНЫЙ исправленный файл целиком, минимум изменений."
+    )
+
+    MAX_DEV_ATTEMPTS = 3
+    final_code = ""
+    review_ok = compile_ok = False
+    commit_msg = ""
+    retry_feedback = ""
+    attempt = 0
+    ricky_result = ""
+
+    while attempt < MAX_DEV_ATTEMPTS:
+        attempt += 1
+        cur_task = devvy_task if not retry_feedback else (
+            f"{devvy_task}\n\n[ПОВТОР #{attempt}] Предыдущая попытка отклонена:\n{retry_feedback}"
+        )
+        await publish_activity(r_tb, _task_id, "силли", "plan",
+                               f"аудит-фикс попытка {attempt}/{MAX_DEV_ATTEMPTS}: {repo}/{affected}")
+        pipe = await run_dev_pipeline(
+            cur_task, repo=repo, file_path=affected,
+            context=source_code, user_id=uid,
+            redis_client=r_tb, task_id=_task_id,
+        )
+        ricky_result = pipe.get("final_code_artifact", "") or pipe.get("ricky", "")
+        commit_msg = pipe.get("commit_msg", "")
+        final_code = ""
+        if "```python" in ricky_result:
+            cs = ricky_result.find("```python") + 9
+            ce = ricky_result.find("```", cs)
+            if ce > cs:
+                final_code = ricky_result[cs:ce].strip()
+
+        review_ok = "NEEDS_FIX" not in (ricky_result or "").upper()
+        compile_ok = True
+        _se_info = ""
+        if final_code and affected.endswith(".py"):
+            try:
+                compile(final_code, affected, "exec")
+            except SyntaxError as _se:
+                compile_ok = False
+                _se_info = f"{_se.msg}, строка {_se.lineno}"
+
+        if final_code and review_ok and compile_ok:
+            break
+        await tb.incr_attempts(r_tb, board_id)
+        if not final_code:
+            retry_feedback = "Рикки не вернул финальный код (блок ```python отсутствует/пуст)."
+        elif not review_ok:
+            retry_feedback = "Рикки вернул NEEDS_FIX — код требует доработки. " + ricky_result[:600]
+        else:
+            retry_feedback = f"Финальный код не компилируется: {_se_info}. Похоже воркер обрезал код."
+
+    if final_code and review_ok and compile_ok:
+        # Гейт пройден — стейджим деплой на /approve (контракт deploy_fix без изменений).
         fix_id = await stage_pending("deploy_fix", {
             "service_id": service_id,
             "service_name": service_name,
             "repo": repo,
             "affected": affected,
-            "fixed_code": fixed_code,
+            "fixed_code": final_code,
             "analysis": analysis,
-        }, task_id=task_id, title=f"Фикс {service_name}")
+        }, task_id=board_id, title=f"Фикс {service_name}")
+        await tb.update_status(r_tb, board_id, "awaiting_approval")
+        _testi = (pipe.get("testi") or "")[:120].replace("\n", " ")
+        _sekky = (pipe.get("sekky") or "")[:120].replace("\n", " ")
         await send_proposal(
-            f"🤔 Cilly нашёл подозрительное в {service_name}:\n\n"
+            f"🤔 Cilly нашёл баг в {service_name}:\n\n"
             f"{description}\n\n"
             f"Предлагаемый фикс: {fix_desc}\n\n"
+            f"✅ Прошёл ревью команды (Рикки OK + compile).\n"
+            f"🧪 Тести: {_testi or '—'}\n"
+            f"🔐 Секки: {_sekky or '—'}\n\n"
             f"Применить? (или текстом: /approve {fix_id})",
             "pg", fix_id, chat_id=0,  # автономно → офис-группа
+        )
+    else:
+        # Гейт НЕ пройден — НЕ предлагаем неотревьюенный код, эскалируем владельцу.
+        await tb.update_status(r_tb, board_id, "blocked",
+                               result=retry_feedback or "рабочий код не получен", escalated=True)
+        await notify_office(
+            f"⛔ Cilly: баг в *{service_name}* — команда за {MAX_DEV_ATTEMPTS} попыток "
+            f"не дала код, прошедший ревью. Нужен твой разбор.\n"
+            f"Симптом: {description[:160]}\nПричина провала: {retry_feedback[:200]}"
         )
 
 
@@ -1320,6 +1398,57 @@ IGNORE_PATTERNS = [
     "TelegramConflictError",                     # конфликт polling при рестарте
     "Failed to fetch updates",                   # временный сбой polling
 ]
+
+# Внешние/транзиентные сбои — НЕ наш баг. Если корневая причина в недоступности
+# стороннего сервиса (Telegram/Railway API, DNS, сеть), а бот жив — Силли МОЛЧИТ
+# (по требованию владельца), а не предлагает фикс. Список шире IGNORE_PATTERNS:
+# ловит сбои не только на polling/getUpdates, но и при отправке/любых POST.
+EXTERNAL_FAULT_PATTERNS = [
+    "telegram.error.NetworkError",
+    "NetworkError",
+    "httpx.ConnectError",
+    "httpx.ConnectTimeout",
+    "httpx.ReadTimeout",
+    "httpx.RemoteProtocolError",
+    "httpcore.RemoteProtocolError",
+    "ConnectTimeout",
+    "ReadTimeout",
+    "RemoteProtocolError",
+    "Server disconnected",
+    "Bad Gateway",
+    " 502",
+    " 503",
+    " 504",
+    "getaddrinfo failed",
+    "Temporary failure in name resolution",
+    "Connection reset by peer",
+    "Connection aborted",
+]
+
+
+def classify_fault(error_logs: list[str]) -> str:
+    """Внешний транзиентный сбой vs наш баг.
+
+    Возвращает "external" если корневая причина — недоступность стороннего
+    сервиса (Telegram/Railway API, DNS, сеть) И в логах НЕТ признаков нашего
+    структурного бага (NameError/ImportError/SyntaxError/KeyError/AttributeError).
+    Иначе "internal".
+    """
+    text = "\n".join(error_logs)
+    OUR_BUG_MARKERS = (
+        "NameError", "ImportError", "ModuleNotFoundError", "SyntaxError",
+        "IndentationError", "KeyError", "AttributeError", "TypeError",
+        "ValueError", "IndexError", "UnboundLocalError",
+    )
+    if any(m in text for m in OUR_BUG_MARKERS):
+        return "internal"
+    if any(p in text for p in EXTERNAL_FAULT_PATTERNS):
+        return "external"
+    return "internal"
+
+
+# Cooldown для внешних/известных-урочных сбоев — не дёргаемся по кругу (секунды).
+EXTERNAL_FAULT_COOLDOWN = 6 * 3600  # 6 часов тишины по сигнатуре
 
 # Игнорировать ошибки старше этого времени (секунды) — стартовый шум редеплоя
 ERROR_MAX_AGE = 120  # 2 минуты
@@ -1528,6 +1657,13 @@ async def run_daily_audit() -> str:
                 )
                 if not ok:
                     await notify_office(f"⚠️ *{svc_name}* — редеплой не удался, нужен ручной разбор")
+            elif classify_fault(crash_logs or [crash_reason]) == "external":
+                # Внешний/сетевой сбой (Telegram/Railway API, DNS) — НЕ наш баг,
+                # команду не дёргаем. Тихая строка в отчёт, без делегирования.
+                lines.append(
+                    f"🌐 *{svc_name}* — внешний/сетевой сбой (не наш баг), молчу\n"
+                    f"   📍 Причина: {crash_reason[:120]}"
+                )
             else:
                 # Пробуем делегировать команде если это код-проблема
                 code_keywords = ["import", "syntax", "error", "exception", "attribute", "module"]
@@ -2006,6 +2142,35 @@ async def monitor_loop():
                     continue
                 error_logs = filtered_errors
 
+                # === Filter Layer 3: внешний/транзиентный сбой — НЕ наш баг → МОЛЧИМ.
+                # Telegram/Railway API, DNS, сеть (NetworkError/ConnectError/
+                # RemoteProtocolError/Bad Gateway/5xx) при живом боте: предлагать фикс
+                # нельзя — это не наша вина. Тихо логируем раз в EXTERNAL_FAULT_COOLDOWN,
+                # в офис ничего не шлём. Watchdog поднимет бота, если он реально лёг.
+                if classify_fault(error_logs) == "external":
+                    import hashlib as _h3
+                    _ext_sig = _h3.md5(
+                        "\n".join(error_logs)[:500].encode()
+                    ).hexdigest()[:12]
+                    _ext_key = f"external_fault_seen:{service_id}:{_ext_sig}"
+                    _r_ext = await get_redis()
+                    _seen = bool(await _r_ext.get(_ext_key)) if _r_ext else False
+                    if not _seen:
+                        if _r_ext:
+                            await _r_ext.setex(_ext_key, EXTERNAL_FAULT_COOLDOWN, "1")
+                        try:
+                            await log_event(
+                                _r_ext, BOT_NAME_LOWER, "external_fault_ignored",
+                                service=repo, sample="\n".join(error_logs[:3])[:300],
+                            )
+                        except Exception:
+                            pass
+                        logger.info(
+                            f"[monitor] {repo}: внешний/сетевой сбой (не наш баг) — молчу, "
+                            f"cooldown {EXTERNAL_FAULT_COOLDOWN//3600}ч"
+                        )
+                    continue
+
                 # Дедупликация: УСТОЙЧИВАЯ сигнатура (тип ошибки + файл + сообщение
                 # без чисел), чтобы один и тот же баг не пере-детектился из-за разных
                 # номеров строк/динамики и не обнулял fix_count по кругу.
@@ -2098,19 +2263,41 @@ async def monitor_loop():
                 if redis_log_context:
                     source_code = source_code + "\n\n" + redis_log_context
 
-                # Check known bugs first — saves Opus tokens on repeated issues
+                # Check known bugs first — урок РЕАЛЬНО гейтит, а не украшает текст.
+                # Раньше high-confidence матч лишь менял уведомление, но дальше всё
+                # равно шёл analyze_logs → handle_bug → новое предложение. Это и был
+                # «бред»: «применяю известный фикс» и тут же «нашёл подозрительное».
                 known = await search_lessons(error_logs)
                 if known.get("match") and known.get("confidence") == "high":
-                    logger.info(f"[monitor] known bug match in {repo}: lesson #{known.get('lesson_id')}")
+                    lesson_id = known.get("lesson_id")
+                    logger.info(f"[monitor] known bug match in {repo}: lesson #{lesson_id}")
+                    # Дедуп: один разбор известного урока на сервис за cooldown —
+                    # не открываем то же предложение каждый цикл.
+                    _r_les = await get_redis()
+                    _les_key = f"lesson_applied:{service_id}:{lesson_id}"
+                    _already = bool(await _r_les.get(_les_key)) if _r_les else False
+                    if _already:
+                        logger.info(f"[monitor] {repo}: урок #{lesson_id} уже разобран недавно — молчу")
+                        continue
+                    if _r_les:
+                        await _r_les.setex(_les_key, EXTERNAL_FAULT_COOLDOWN, "1")
+                    # Известный урок = разбор уже есть. Не пере-генерируем фикс Opus-ом
+                    # и НЕ открываем повторное предложение. Тихая заметка один раз.
                     await notify_office(
-                        f"📚 Cilly узнал баг в *{repo}* — это уже было (урок #{known.get('lesson_id')})\n"
-                        f"_{known.get('reason', '')}_\n\nПрименяю известный фикс..."
+                        f"📚 Cilly: повтор известной проблемы в *{repo}* — урок #{lesson_id}.\n"
+                        f"_{known.get('reason', '')}_\n"
+                        f"Новых действий не требуется (фикс уже задокументирован)."
                     )
+                    continue
 
                 analysis = await analyze_logs(repo, error_logs, source_code)
 
-                if analysis.get("is_bug"):
-                    await handle_bug(service_id, repo, repo, main_file, analysis)
+                # Второй слой: анализатор сам мог распознать внешний сбой → молчим.
+                if analysis.get("bug_type") == "external" or not analysis.get("is_bug"):
+                    logger.info(f"[monitor] {repo}: анализатор — не наш баг ({analysis.get('bug_type')}), молчу")
+                    continue
+
+                await handle_bug(service_id, repo, repo, main_file, analysis)
 
             except Exception as e:
                 logger.error(f"[monitor] error checking {repo}: {e}")
@@ -3603,7 +3790,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                 elif cutoff_mode == "dedup_lessons":
                     import re as _re
                     if msg.text:
-                        _m = _re.search(r'Урок #(\S+)', msg.text)
+                        _m = _re.search(r'(?:Урок|Lesson) #(\S+)', msg.text)
                         if _m:
                             lesson_key = _m.group(1)
                             if lesson_key not in _lesson_map:
@@ -4849,6 +5036,73 @@ async def cmd_lesson(message: Message):
         return
     await post_lesson(*parts[:6])
     await message.answer("📚 Урок отправлен в Bug Lessons")
+
+
+async def migrate_lessons_to_english(reply_func, confirm: bool) -> None:
+    """Контролируемый перепост Bug Lessons на английском.
+
+    dry-run (confirm=False): только считает существующие сообщения-уроки в группе,
+    НИЧЕГО не трогает. Реальный прогон (confirm=True): удаляет старые сообщения-уроки
+    (русские «Урок #» и английские «Lesson #»), сбрасывает posted_to_group у всех
+    уроков в lessons.json и перепубликовывает английские версии через
+    publish_pending_lessons. Идемпотентно, лимит на партию — анти-флуд (урок #54).
+    НЕ автозапуск: только по явной команде владельца.
+    """
+    import re as _re
+    try:
+        tg_cl = await get_telethon_client()
+        messages = await tg_cl.get_messages(BUG_LESSONS_CHAT, limit=3000)
+        lesson_msg_ids = [
+            m.id for m in messages
+            if m and m.text and _re.search(r'(?:Урок|Lesson) #\S+', m.text)
+        ]
+        if not confirm:
+            await tg_cl.disconnect()
+            await reply_func(
+                f"🔎 Dry-run: в Bug Lessons найдено {len(lesson_msg_ids)} сообщений-уроков.\n"
+                f"Будут удалены и перепощены на английском. Подтверди: "
+                f"`/migrate_lessons_en confirm`"
+            )
+            return
+
+        # 1. Удаляем существующие сообщения-уроки (батчами по 100)
+        deleted = 0
+        for i in range(0, len(lesson_msg_ids), 100):
+            await tg_cl.delete_messages(BUG_LESSONS_CHAT, lesson_msg_ids[i:i + 100])
+            deleted += len(lesson_msg_ids[i:i + 100])
+            await asyncio.sleep(0.5)
+        await tg_cl.disconnect()
+        await reply_func(f"🧹 Удалено {deleted} старых сообщений-уроков. Перепубликую на английском...")
+
+        # 2. Сбрасываем posted_to_group у всех уроков (durable, в git) + коммит
+        raw = await read_file("ai-office-shared", LESSONS_FILE)
+        lessons = json.loads(raw)
+        for l in lessons:
+            l["posted_to_group"] = False
+            l["posted_at"] = None
+        await push_file(
+            "ai-office-shared", LESSONS_FILE,
+            json.dumps(lessons, ensure_ascii=False, indent=2),
+            "chore(lessons): reset posted flags for English re-post",
+        )
+
+        # 3. Перепост английских версий (publish_pending_lessons постит непомеченные)
+        posted = await publish_pending_lessons(reply_func=reply_func)
+        await reply_func(f"✅ Миграция завершена: перепощено {posted} уроков на английском.")
+    except Exception as e:
+        await reply_func(f"❌ Ошибка миграции уроков: {e}")
+
+
+@dp.message(F.text.startswith("/migrate_lessons_en"))
+async def cmd_migrate_lessons_en(message: Message):
+    """Перепост Bug Lessons на английском. По умолчанию dry-run; `confirm` — выполнить.
+    Только владелец (YOUR_TELEGRAM_ID)."""
+    owner = int(os.getenv("YOUR_TELEGRAM_ID", "0") or "0")
+    if owner and message.from_user and message.from_user.id != owner:
+        await message.answer("⛔ Только владелец может запускать миграцию уроков.")
+        return
+    confirm = "confirm" in (message.text or "").lower()
+    await migrate_lessons_to_english(message.answer, confirm)
 
 
 
