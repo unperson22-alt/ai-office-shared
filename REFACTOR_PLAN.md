@@ -95,3 +95,10 @@
   всё зелёное. NEXT: Компонент №2 — `kriss-bot`: удалить инлайн-дубль `_call_office` (46-57,
   постит без `source`!) и `_enhance_prompt`, импортировать из shared, пин на v0.1.19.
   ⚠️ Тег v0.1.19 + деплой shared (90с даунтайма) — батчим после готовности Крисса.
+- 2026-06-28: **Компонент №2 (kriss-bot) DONE** — ветка `claude/ai-office-kriss-bot-refactor-u5f9o3`,
+  коммит kriss-bot `c123d13`. Удалён мёртвый инлайн `_call_office` v2 (постил `/task` без `source`);
+  остался делегирующий v1 → shared `call_office` (шлёт `source`). Удалён локальный `_enhance_prompt`
+  → импорт `enhance_prompt` из shared. Хардкод моделей → `MODEL_SONNET` (3×) / `MODEL_HAIKU` (1×).
+  `requirements.txt` пин `@v0.1.19`. Верификация: `py_compile` зелёный, нет остаточных хардкодов/дублей.
+  Решение Влада: компонент №1 слит в `u5f9o3` (тегаем оттуда); тег v0.1.19 + деплой shared + redeploy
+  Крисса — выполняются в этой сессии. NEXT: после деплоя — Компонент №3 (форки: mama → billy/tilly/…).
