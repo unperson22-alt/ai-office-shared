@@ -1099,7 +1099,7 @@
     "prevention": "Classify faults positively (external service vs our code) and stay silent on what isn't ours; a known lesson must BLOCK a repeat proposal, not just annotate; audit fixes go through the parallel team review gate before any office proposal; never claim 'applying a fix' unless it was actually applied.",
     "cause": "Brittle substring fault filter + cosmetic lesson match + solo un-reviewed fix generation in monitor_loop/handle_bug.",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:38:51.928266+00:00"
   }
 ]
