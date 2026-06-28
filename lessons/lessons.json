@@ -13,8 +13,8 @@
     "prevention": "When adding a new bot: take UUIDs only from the Railway API, never copy by hand. Add a SERVICES liveness check at Cilly startup",
     "cause": "Service UUIDs in SERVICES were hardcoded by hand and went stale after a Railway restart",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 2,
@@ -30,8 +30,8 @@
     "prevention": "All Railway operations: always use UUIDs (projectId, environmentId, serviceId). Store them in constants, not strings",
     "cause": "The Railway GraphQL API requires environmentId as a UUID, not a string alias",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 3,
@@ -47,8 +47,8 @@
     "prevention": "Bot creation checklist: 1) BotFather 2) Railway service 3) GitHub repo 4) SERVICES in coder.py 5) BOT_URLS in filly-bot. Without step 4 — monitoring is blind",
     "cause": "The bot-creation checklist did not include the mandatory step of adding service_id to SERVICES",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 4,
@@ -64,8 +64,8 @@
     "prevention": "For technical content: always HTML parse_mode or plain text. Markdown — only for controlled content without special chars",
     "cause": "Telegram Bot API parse_mode=MarkdownV2 requires escaping special chars; LLM-generated code doesn't escape them",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 5,
@@ -81,8 +81,8 @@
     "prevention": "Rule: no side effects at module level. Anything reading env or opening connections — only inside functions",
     "cause": "Calling os.getenv() or validation at module level runs at import, before env vars are loaded",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 6,
@@ -98,8 +98,8 @@
     "prevention": "In a bot template: declare all globals at the top of the file as None, init in main() with explicit global. Or move to dependency injection",
     "cause": "Python: if a variable is used with global inside a function, it becomes local across the whole function scope",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 7,
@@ -115,8 +115,8 @@
     "prevention": "In a bot template: all of main() in try/except. Log every unhandled exception before exit",
     "cause": "PTB app.run_polling() wasn't wrapped in try/except, an unhandled exception killed the main thread without a traceback",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 8,
@@ -132,8 +132,8 @@
     "prevention": "In the template: Application.builder().read_timeout(30).write_timeout(30). All HTTP clients — with retry logic",
     "cause": "httpx.AsyncClient was created with the default timeout (5s), insufficient for slow Railway endpoints",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 9,
@@ -149,8 +149,8 @@
     "prevention": "When working with Telethon objects: always hasattr-check before calling string methods",
     "cause": "Telethon returns TextWithEntities objects instead of str for fields like title",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 10,
@@ -166,8 +166,8 @@
     "prevention": "Before Telegram group operations: check the type via isinstance(entity, Channel)",
     "cause": "The Telegram API separates Channel and Chat — plain groups (Chat) need AddChatUserRequest, not InviteToChannelRequest",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 11,
@@ -183,8 +183,8 @@
     "prevention": "push_file() for .py files: always ast.parse() before sending. Already implemented in shared/github_tools.py",
     "cause": "The bot template was generated via an f-string with double quotes — quotes in SYSTEM_PROMPT broke Python syntax",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 12,
@@ -200,8 +200,8 @@
     "prevention": "Never derive a Railway URL from a Telegram username. Source of truth — BOT_URLS in filly-bot/bot.py",
     "cause": "The Railway internal URL was built from bot.username (Telegram handle) instead of serviceId from the Railway API",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 13,
@@ -217,8 +217,8 @@
     "prevention": "When expanding the office (new bot, new project) — update CHAT_PROMPT and SYSTEM_STATE.md together",
     "cause": "CHAT_PROMPT held only a general task description, without a concrete bot→repo→URL mapping",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 14,
@@ -234,8 +234,8 @@
     "prevention": "When adding a bot to BOT_URLS: search by key before inserting. A linter (pylint W0109) catches dups statically",
     "cause": "A Python dict with duplicate keys silently overwrites the previous value, no error",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 15,
@@ -251,8 +251,8 @@
     "prevention": "In async projects: never time.sleep, requests, or other blocking calls. For Anthropic — AsyncAnthropic. For HTTP — httpx.AsyncClient or aiohttp",
     "cause": "time.sleep() blocks the entire event loop — in async context you need await asyncio.sleep()",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 16,
@@ -268,8 +268,8 @@
     "prevention": "The bot-creation checklist is mandatory (see lesson #3). Consider auto-registration: on deploy of a new service Cilly adds it to SERVICES herself",
     "cause": "gosling-bot was added to the office without updating SERVICES in Cilly's coder.py",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 17,
@@ -285,8 +285,8 @@
     "prevention": "Log filters: always per-line, not per-block. Test: artificially insert a real error next to an ignored line and check it's not dropped",
     "cause": "IGNORE_PATTERNS was filtered across the whole log block (contains), not per line — one noisy log hid a real bug next to it",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 18,
@@ -302,8 +302,8 @@
     "prevention": "Before redeploy: check there is at least one SUCCESS deploy. If not — variableCollectionUpsert",
     "cause": "serviceInstanceRedeploy in the Railway API requires an existing successful deploy to create a new one",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 19,
@@ -319,8 +319,8 @@
     "prevention": "push_file() for .py: ast.parse() mandatory. Already implemented. Also: keep a backup of the last working coder.py in Redis",
     "cause": "push_file() pushed Python code without a syntax check — an invalid file went to prod",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:39:09.371482+00:00"
   },
   {
     "id": 20,
