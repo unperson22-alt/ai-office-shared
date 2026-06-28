@@ -336,8 +336,8 @@
     "prevention": "RULE: never json.loads() an LLM response without try/except. Always extract JSON by finding brackets + try/except",
     "cause": "The Anthropic API sometimes returns JSON with a trailing comma or markdown wrapper — json.loads() without try/except kills the process",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 21,
@@ -353,8 +353,8 @@
     "prevention": "To detect names in text: always word-boundary regex, never substring. Applies to all bots in group mode",
     "cause": "str.find() or 'name in text' matches a substring — 'billy' is found inside 'debilly' and other words",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 22,
@@ -370,8 +370,8 @@
     "prevention": "Group-mode template: always guard on message.text at the very start of the handler",
     "cause": "A PTB Update may contain non-text messages — accessing update.message.text without a type check kills the bot",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 23,
@@ -387,8 +387,8 @@
     "prevention": "Rule: no startup Telegram notifications in bots that may restart often. Batch env changes into one operation",
     "cause": "The startup notification in on_startup was sent on every restart — each env var change triggers a Railway redeploy",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 24,
@@ -404,8 +404,8 @@
     "prevention": "In HTTP handlers use only claude (the global client) or process(). Call _call_llm only inside process()",
     "cause": "The HTTP handler used _client (a Telethon global) instead of a local anthropic.AsyncAnthropic()",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 25,
@@ -421,8 +421,8 @@
     "prevention": "The template must include a None guard for message.text. Add to new_bot_template.py",
     "cause": "Telegram delivers photos/stickers/voices as separate Update types — message.text = None for non-text messages",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 26,
@@ -438,8 +438,8 @@
     "prevention": "When extending a bot into a group: audit all side effects. Expensive/irreversible ops — only on explicit request, not a random reply",
     "cause": "wants_image() detection was keyword-based — in a group any member could accidentally trigger generation",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 27,
@@ -455,8 +455,8 @@
     "prevention": "For dates always timedelta, never replace(day=N+1). Test schedulers by simulating a restart after the trigger time",
     "cause": "datetime.replace(day=day+1) fails at month end and doesn't roll the month — use timedelta",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 28,
@@ -472,8 +472,8 @@
     "prevention": "To send on behalf of a specific bot: always proxy the request to that bot, never use someone else's token. Architectural principle: each bot owns its token",
     "cause": "/post_raw took a bot_name param but ignored it — it used the global bot object instead of a name lookup",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 29,
@@ -489,8 +489,8 @@
     "prevention": "Reserved global object names (bot, redis, claude) never used as loop variables or locals inside functions that use the global",
     "cause": "Python: a for-loop variable for bot in [...] shadows the global bot in the same scope",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 30,
@@ -506,8 +506,8 @@
     "prevention": "Any deletion of others' messages — only via Telethon. Bot API deleteMessage works only for the bot's own messages",
     "cause": "Telegram Bot API deleteMessage works only for the bot's own messages — others' messages can be deleted only by a Telethon userbot (MTProto)",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 31,
@@ -520,8 +520,8 @@
     "prevention": "Before a 404 — check the marketing-dept and trading-dept monorepos",
     "title": "dept monorepos: bots live in folders, not separate repositories",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 32,
@@ -534,8 +534,8 @@
     "prevention": "Before a GitHub API call check: repo holds only the repo name (no org), path doesn't start with org or repo.",
     "title": "GitHub API path: owner/repo/contents/path, not org/bot-name",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 33,
@@ -547,8 +547,8 @@
     "prevention": "Before adding await, check the client type: Anthropic() = sync, AsyncAnthropic() = async. Don't change await without checking the init.",
     "title": "max_tokens=1024 truncates the response + correct parsing of content blocks",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 34,
@@ -560,8 +560,8 @@
     "prevention": "Before adding an import to __init__.py check: are all of the new module's deps in the package pyproject.toml? Never do an eager import in __init__.py for modules with external deps.",
     "title": "Auto-import in __init__.py takes down all bots when a dependency is missing",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 35,
@@ -573,8 +573,8 @@
     "prevention": "Before searching for a file in a repo — check this registry. The repo is named {bot}-bot, not {bot}-office or ai-{bot}.",
     "title": "A bot→repo registry is mandatory in Cilly's CHAT_PROMPT",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 36,
@@ -586,8 +586,8 @@
     "prevention": "Never search for secrets/tokens in GitHub repos. All tokens — in Railway env vars. Check via os.getenv().",
     "title": "RAILWAY_TOKEN is available via os.getenv, not from GitHub",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 37,
@@ -599,8 +599,8 @@
     "prevention": "Rule: call send_to_group() at most 1-2 times per task — at the start (if the task is long) and at the end.",
     "title": "send_to_group() only the final result, not intermediate steps",
     "tag": "system",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 38,
@@ -614,8 +614,8 @@
     "prevention": "For any numeric field from the LLM: isinstance check + map strings to numbers",
     "status": "fixed",
     "tag": "cilly",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-06-28T10:41:28.223176+00:00"
   },
   {
     "id": 39,
