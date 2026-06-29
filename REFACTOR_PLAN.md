@@ -122,3 +122,25 @@
   без регрессий. (2) **Компонент №3 — собственно рефактор форков** (mama → billy/tilly/milly/doctor/
   gosling/villy): у них всё ещё инлайн-дубли `_call_office`/`_enhance_prompt` + хардкод моделей —
   в этой волне их ТОЛЬКО перепинили на shared, код НЕ трогали. Канон = `mama-bot` (см. вопрос #1).
+- 2026-06-29: **SECURITY-ВОЛНА (Влад: «Ебош 1 и 2»).** Повод: в окружении другой сессии найдены
+  staged-payload'ы `silli_*.json` (`source:CLAUDE`, сбор GitHub PAT+Railway-токенов, `cleanup_dm`),
+  Влад их НЕ создавал → враждебные. Корень: **RPC-меш офиса не аутентифицирован** — `/task`,`/reply`,
+  `/send*` ботов открыты из интернета (публичные Railway URL), у Силли `/task`/`/promote_bots`/`/envcheck`
+  без auth, `source:CLAUDE` подделываем. Также: теги shared >v0.1.15 не существуют (агент не пушит
+  теги, 403) → перешли на SHA-пины.
+  **Фикс (shared v0.1.20, SHA `bf3fb46`):** новый модуль `shared/auth.py` — `office_headers()` (исходящий
+  `X-Office-Token`), `office_auth_middleware` (закрывает все маршруты кроме `/health`), `check_office_token`.
+  Двухфазный выкат БЕЗ даунтайма: warn-режим пока не выставлены `OFFICE_RPC_TOKEN`+`OFFICE_RPC_STRICT`.
+  Покрыт ВЕСЬ живой меш: Силли + kriss,billy,doctor,gosling,mama,milly,tilly,villy + devvy,ricky,scribbi,
+  sekky,testi + prophet,filly(роутер,+7 исходящих),ray,marketing-dept(marty/nelli/lex) + vietnam,pilly,
+  railway-deployer,pilly-bot-bot,trading-dept (+добавлена shared-зависимость и git в Dockerfile) +
+  new_bot_template (будущие боты). Все на ветке `claude/ai-office-kriss-bot-refactor-u5f9o3`, SHA-пин `bf3fb46`.
+  Исключены: `family-dept/*` (заброшен), `marty/bot.py` (мёртв, entrypoint main.py).
+  **РОЛЛАУТ (env-first, без даунтайма):** (0) контейнмент: закрыть публичный `/task` Силли + ротация его
+  секретов. (1) выставить `OFFICE_RPC_TOKEN=<секрет>` на ВСЕ сервисы. (2) задеплоить новый код везде.
+  (3) проверить логи `[office-auth] WARN` — кто ещё не шлёт токен. (4) когда WARN чисто → `OFFICE_RPC_STRICT=1`
+  на всех → enforcement (401).
+  **Flip-time гэпы (закрыть до STRICT):** (a) Силли провижинит Railway-cron, который POST'ит `/send_scheduled`
+  без `X-Office-Token` (embedded-команда в cron) → расписания упадут при STRICT; (b) `/secrets`,`/redis` Силли
+  теперь под middleware → их вызыватели (Claude-тулинг) должны слать `X-Office-Token`. Dead double-brace
+  `{{filly}}/task` в ray/lex/nelli main.py — пре-существующий баг, НЕ трогали.
