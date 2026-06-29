@@ -1115,6 +1115,8 @@
     "status": "fixed",
     "prevention": "Every signal status MUST have an icon in STATUS_ICONS, otherwise it renders as open again. Keep the user-facing validity text in sync with the real tracking window. Unit test data/test_evaluate_trade.py covers all scenarios (LONG/SHORT, stop-before-TP1, TP1→BE, TP1+TP2→trail, same-candle conservatism).",
     "cause": "Outcome tracker did binary single-touch TP/SL with a 72h TTL and no trade management; 'expired' status lacked an icon.",
-    "tag": "trader"
+    "tag": "trader",
+    "posted_to_group": true,
+    "posted_at": "2026-06-29T16:27:56.274882+00:00"
   }
 ]
