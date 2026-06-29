@@ -1101,5 +1101,20 @@
     "tag": "system",
     "posted_to_group": true,
     "posted_at": "2026-06-28T10:46:37.222501+00:00"
+  },
+  {
+    "id": 68,
+    "date": "2026-06-29",
+    "bot": "tilly-trader",
+    "layer": "trader/logic",
+    "title": "Trader signals stuck '⏳ open' for days; no trade management and 'expired' had no icon",
+    "symptom": "In the Trader bot's 'Последние сигналы' list, signals from 26.06 were still showing the ⏳ hourglass on 29.06, looking permanently open.",
+    "root_cause": "Three issues in tilly-trader/bot.py: (1) the outcome tracker only checked a single TP1/SL touch inside a 72h window and did NOT manage the trade (no TP1→breakeven→TP2→trail); (2) the /signals icon map was {open,win,loss} so status 'expired' fell through to the default ⏳, making timed-out signals look open; (3) the signal card said 'Действует 1 час' while the tracker actually held positions for 72h.",
+    "why_architecture": "The screener already produced tp1/tp2/sl, but the tracker ignored tp2 and any management, so signals never resolved cleanly and the list/stats disagreed (stats excluded 'expired', the list rendered it as open).",
+    "fix": "Added evaluate_trade() state machine: TP1→stop to breakeven→TP2→trailing stop to TP1→close on stop/timeout (statuses open/running/win/be/loss/expired), explicit Telegram notifications on each taken profit and on close. Close an open signal on an opposite signal for the same coin (reversal) and on a strategy-aligned EMA20/50 reversal on 4h. Single STATUS_ICONS map for every outcome. Stats gained 'breakeven' and 'profit_taken (≥1 TP)' counters. Card text now describes the management.",
+    "status": "fixed",
+    "prevention": "Every signal status MUST have an icon in STATUS_ICONS, otherwise it renders as open again. Keep the user-facing validity text in sync with the real tracking window. Unit test data/test_evaluate_trade.py covers all scenarios (LONG/SHORT, stop-before-TP1, TP1→BE, TP1+TP2→trail, same-candle conservatism).",
+    "cause": "Outcome tracker did binary single-touch TP/SL with a 72h TTL and no trade management; 'expired' status lacked an icon.",
+    "tag": "trader"
   }
 ]
