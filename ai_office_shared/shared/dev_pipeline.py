@@ -111,8 +111,10 @@ async def _call_worker(
     last_err = ""
     for attempt in range(_MAX_RETRIES + 1):
         try:
+            from .auth import office_headers
             async with _SEMAPHORE:
-                resp = await client.post(f"{url}/task", json=payload, timeout=_TIMEOUT)
+                resp = await client.post(f"{url}/task", json=payload, timeout=_TIMEOUT,
+                                         headers=office_headers())
             resp.raise_for_status()
             out = resp.json().get("response", "")
             await publish_activity(redis_client, task_id, name, "done",

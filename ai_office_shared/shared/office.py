@@ -56,10 +56,12 @@ async def call_office(
         logger.warning(f"[office] Unknown agent: {agent_name}")
         return ""
     try:
+        from .auth import office_headers
         async with httpx.AsyncClient(timeout=timeout) as c:
             r = await c.post(
                 f"{info['url']}/task",
                 json={"message": message, "user_id": user_id, "source": source},
+                headers=office_headers(),
             )
         if r.status_code == 200:
             return r.json().get("response", "")

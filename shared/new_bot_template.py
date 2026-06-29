@@ -20,6 +20,7 @@ NEW BOT TEMPLATE — базовый шаблон для нового бота AI
 
 import os, logging, asyncio, re
 from aiohttp import web
+from ai_office_shared.shared.auth import office_auth_middleware
 from telegram import Update
 from telegram.ext import (
     Application, MessageHandler, MessageReactionHandler,
@@ -213,7 +214,7 @@ async def main():
         await ptb.updater.start_polling(drop_pending_updates=True,
             allowed_updates=["message", "edited_message", "message_reaction"])
 
-        app_http = web.Application()
+        app_http = web.Application(middlewares=[office_auth_middleware])
         app_http.router.add_get("/health", handle_health)
         app_http.router.add_post("/health", handle_health)
         app_http.router.add_post("/task",   handle_task)
