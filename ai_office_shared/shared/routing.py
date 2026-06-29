@@ -59,8 +59,9 @@ async def forward_to_filly(
         "reply_chat_id": reply_chat_id,
     }
     try:
+        from .auth import office_headers
         async with httpx.AsyncClient(timeout=timeout) as c:
-            r = await c.post(f"{FILLY_URL}/task", json=payload)
+            r = await c.post(f"{FILLY_URL}/task", json=payload, headers=office_headers())
             if r.status_code == 200:
                 logger.info(f"forward_to_filly: ok → filly routed for user={user_id}")
                 return True

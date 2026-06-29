@@ -24,6 +24,7 @@ from anthropic import AsyncAnthropic
 import redis.asyncio as aioredis
 from ai_office_shared.shared.logging import log_event, read_logs
 from ai_office_shared.shared import taskboard as tb
+from ai_office_shared.shared.auth import office_auth_middleware, office_headers
 
 from shared.github_tools import (
     push_file, read_file, list_files, create_repo,
@@ -5440,7 +5441,7 @@ async def handle_post_raw(request):
                 r = await client.post(
                     f"{bot_url}/send",
                     json={"chat_id": int(chat_id), "text": text},
-                    headers={"X-Secret-Token": HTTP_SECRET_BOTS},
+                    headers=office_headers({"X-Secret-Token": HTTP_SECRET_BOTS}),
                 )
                 return web.json_response(r.json())
         except Exception as e:
@@ -5532,7 +5533,8 @@ async def vietnam_cron_loop():
             async with httpx.AsyncClient(timeout=30) as c:
                 r = await c.post(
                     "https://vietnam-bot-production.up.railway.app/generate",
-                    json={"send": True}
+                    json={"send": True},
+                    headers=office_headers(),
                 )
             result = r.json()
             count = result.get("count", 0)
@@ -5729,8 +5731,8 @@ async def main():
     asyncio.create_task(management_loop())
     asyncio.create_task(publish_pending_on_startup())  # дозалить pending-уроки (без удалений)
     asyncio.create_task(_lessons_en_migration_once())   # одноразовый перепост уроков на английском
-    # HTTP server for Filly routing
-    app = web.Application()
+    # HTTP server for Filly routing (office RPC auth via middleware — Layer 1/2)
+    app = web.Application(middlewares=[office_auth_middleware])
     app.router.add_post("/task", handle_cilly_task)
     app.router.add_get("/secrets", handle_secrets)
     app.router.add_post("/post_raw", handle_post_raw)

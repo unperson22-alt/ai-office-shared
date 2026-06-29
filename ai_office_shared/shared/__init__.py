@@ -13,6 +13,7 @@
     office       — OFFICE_AGENTS, call_office(), parse_office_tag()
     models       — MODEL_SONNET, MODEL_HAIKU, MODEL_OPUS (id моделей + env-override)
     prompt       — enhance_prompt() — уточнение запроса лёгкой моделью
+    auth         — office_auth_middleware, office_headers(), check_office_token() — auth RPC-меша
     crypto       — get_price(), get_prices(), get_prices_text()
     currency     — get_rate(), get_rates(), get_rates_text()
     wiki         — wiki_summary(), wiki_search(), wiki_text()
