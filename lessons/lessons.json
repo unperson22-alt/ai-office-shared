@@ -1118,5 +1118,22 @@
     "tag": "trader",
     "posted_to_group": true,
     "posted_at": "2026-06-29T16:27:56.274882+00:00"
+  },
+  {
+    "id": 69,
+    "date": "2026-07-01",
+    "bot": "tilly-trader",
+    "layer": "trader/tracker",
+    "title": "Outcome tracker went blind after BingX outage: no ✅/❌/➖/⌛, signals stuck ⏳ past 72h TTL",
+    "symptom": "From 30.06 ~17:29, tilly-trader kept sending new screener signals normally, but no signal ever got a final status again — even signals older than the 72h TTL stayed ⏳ instead of resolving or expiring.",
+    "root_cause": "fetch_ohlcv_window() (used only by screener_outcome_tracker/batch_verify_screener) fetched candles from BingX ONLY, unlike screener.py which already fell back across BingX→Bybit→Binance→OKX→Crypto.com via connectors.fetch_klines. Any BingX outage/geo-ban made candles=[] for every symbol on every tick. Worse, the tracker loop did \"if not candles: continue\" BEFORE the TTL-expiry check (now >= ts+SIGNAL_TTL), which lives inside _apply_eval_to_signal — so on empty candles the expiry branch was never reached either, and old signals could never even time out.",
+    "why_architecture": "The screener and the outcome tracker were built at different times and never shared the same data-source abstraction, so a fix that made the screener resilient to BingX outages (multi-source connectors.py) silently left the tracker as a single point of failure. Also /health only measured screener scan freshness and the Telegram updater — it had no heartbeat for screener_outcome_tracker, so a fully-blind tracker still reported 200 OK.",
+    "fix": "fetch_ohlcv_window() now calls connectors.fetch_klines(interval=\"1h\", limit=100) — same multi-source fallback as the screener — and filters the returned candles to [start_ts, end_ts] so evaluate_trade never sees candles from before the signal existed. In screener_outcome_tracker and batch_verify_screener, when candles is empty a neutral ev (preserving tp1_done/tp2_done/stop_cur, result=None) is now still passed into _apply_eval_to_signal, so the TTL-expiry branch runs regardless of data availability. Added _last_tracker_ts heartbeat, updated every tracker loop tick and exposed as last_tracker_age_s in /health, factored into the ok/reason logic (tracker_stale) so watchdog-bot can catch a fully-blind tracker even if scan/updater look fine.",
+    "status": "fixed",
+    "prevention": "Any new OHLCV consumer in tilly-trader must go through connectors.fetch_klines (multi-source), never call a single exchange endpoint directly. Any state machine with a time-based expiry must run the expiry check unconditionally, not gated behind a data-availability short-circuit (a \"continue\"/\"return\" before the expiry check silently disables it). /health should carry a heartbeat for every independent background task, not just the most visible one.",
+    "cause": "fetch_ohlcv_window was BingX-only and the outcome tracker checked TTL expiry after (not before/independent of) the empty-candles short-circuit.",
+    "tag": "trader",
+    "posted_to_group": false,
+    "posted_at": null
   }
 ]
