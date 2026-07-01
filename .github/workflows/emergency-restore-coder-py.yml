@@ -1,17 +1,23 @@
 name: emergency-restore-coder-py
 on:
-  workflow_dispatch: {}
+  push:
+    branches: [emergency-restore-coder-py]
 permissions:
   contents: write
 jobs:
   restore:
     runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.head_commit.message, 'assemble agents/coder.py') }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: emergency-restore-coder-py
       - name: Concatenate parts into coder.py
         run: |
+          if [ ! -f agents/_restore_part1.py ]; then
+            echo "parts already assembled, skipping"
+            exit 0
+          fi
           cat agents/_restore_part1.py agents/_restore_part2.py agents/_restore_part3.py \
               agents/_restore_part4.py agents/_restore_part5.py agents/_restore_part6.py \
               agents/_restore_part7.py agents/_restore_part8.py agents/_restore_part9.py \
@@ -23,5 +29,6 @@ jobs:
           git config user.email "actions@github.com"
           git config user.name "Emergency Restore Bot"
           git add -A
+          git diff --cached --quiet && echo "nothing to commit" && exit 0
           git commit -m "chore: assemble agents/coder.py from restore parts"
           git push origin emergency-restore-coder-py
