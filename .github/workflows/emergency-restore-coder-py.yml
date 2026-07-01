@@ -1,0 +1,27 @@
+name: emergency-restore-coder-py
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: emergency-restore-coder-py
+      - name: Concatenate parts into coder.py
+        run: |
+          cat agents/_restore_part1.py agents/_restore_part2.py agents/_restore_part3.py \
+              agents/_restore_part4.py agents/_restore_part5.py agents/_restore_part6.py \
+              agents/_restore_part7.py agents/_restore_part8.py agents/_restore_part9.py \
+              agents/_restore_part10.py > agents/coder.py
+          rm -f agents/_restore_part*.py
+          wc -l agents/coder.py
+      - name: Commit and push
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "Emergency Restore Bot"
+          git add -A
+          git commit -m "chore: assemble agents/coder.py from restore parts"
+          git push origin emergency-restore-coder-py
