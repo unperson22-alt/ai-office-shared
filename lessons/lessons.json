@@ -1152,5 +1152,20 @@
     "tag": "pipeline",
     "posted_to_group": true,
     "posted_at": "2026-07-02T01:43:23.248384+00:00"
+  },
+  {
+    "id": 71,
+    "date": "2026-07-02",
+    "bot": "cilly-bot",
+    "layer": "audit/health",
+    "title": "Daily audit reported 'Health failed' (mama-bot:404) but took no action — auto-fix pipeline was wired only to failed deployments, and a hidden TypeError starved it of logs",
+    "symptom": "Morning audit posted '❌ Health failed: mama-bot:404/error' and set office status to REQUIRES ATTENTION with no fix, no delegation to the team, no work report, and no dismissal of external faults. Chronic pattern in ops.md: office-dashboard:404 four times, kriss-bot:TIMEOUT — always without consequences.",
+    "root_cause": "run_daily_audit() contained the full auto-fix pipeline (read logs -> Haiku analysis -> redeploy / delegate fix_bot / classify_fault for external faults) only inside the failed-deployments branch. The health-check section merely appended a report line, so the class 'deployment SUCCESS but service dead over HTTP' had no handler at all. The check was also one-shot with no retry, so a transient blip (bot restarting at 09:00; mama-bot answered 200 OK minutes later) immediately flipped the office to yellow. Bonus latent bug: both call sites invoked get_service_logs(svc_id, limit=30) although the function takes no 'limit' kwarg — the TypeError was swallowed by a broad except, so crash analysis in the deploy branch had been running on empty logs ('reason: unknown') the whole time.",
+    "why_architecture": "New audit checks (health) were added as visibility-only lines instead of being routed through the existing react-and-report pipeline, and wide try/except blocks hid a signature mismatch that silently degraded the one pipeline that did exist.",
+    "fix": "_handle_health_failures() in agents/coder.py, called from the health section of run_daily_audit(): (1) retry 2x45s — transient failures get a 'recovered by itself' note and do not color office status; (2) classify_fault on service logs — external/network faults are dismissed as 'not our bug'; (3) our bugs -> Haiku analysis -> redeploy_service (can_autofix) or delegation to the team via fix_bot, with every action reported in the audit body; (4) Redis cooldown 6h per failure signature so the evening audit does not duplicate the morning escalation. Both get_service_logs calls fixed to slice [:30] instead of passing limit=. Branch claude/cilly-audit-error-handling-qlfmbd, verified by py_compile + a mocked harness (transient/external/autofix/delegate/cooldown, 14/14).",
+    "status": "fixed",
+    "prevention": "Every new problem class in the audit (deploys, health, logs, metrics) must go through the single pipeline retry -> classify (ours/not ours) -> fix/delegate -> report -> cooldown, never just a line in the report. Critical except branches must log the exception type — a TypeError inside a broad try/except is invisible and can disable a whole subsystem.",
+    "cause": "audit health section had no reaction code; get_service_logs called with nonexistent limit= kwarg",
+    "tag": "audit"
   }
 ]
