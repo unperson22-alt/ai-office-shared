@@ -1133,8 +1133,8 @@
     "prevention": "Any new OHLCV consumer in tilly-trader must go through connectors.fetch_klines (multi-source), never call a single exchange endpoint directly. Any state machine with a time-based expiry must run the expiry check unconditionally, not gated behind a data-availability short-circuit (a \"continue\"/\"return\" before the expiry check silently disables it). /health should carry a heartbeat for every independent background task, not just the most visible one.",
     "cause": "fetch_ohlcv_window was BingX-only and the outcome tracker checked TTL expiry after (not before/independent of) the empty-candles short-circuit.",
     "tag": "trader",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-07-02T01:43:23.248384+00:00"
   },
   {
     "id": 70,
@@ -1150,6 +1150,7 @@
     "prevention": "A gate for generated code must compare the candidate to what it replaces (size/structure sanity), not just validate it in isolation — 'compiles + reviewer said OK' passes catastrophically incomplete files. Never let an agent's pipeline auto-deploy modifications to its own core file (coder.py): self-modification goes through a human-reviewed branch+PR only, no auto-deploy, because the failure destroys the rollback tooling itself.",
     "cause": "Quality gate checked validity (compile + review verdict) but never completeness (new file vs old file size), and self-modification of coder.py was allowed into the auto-deploy path.",
     "tag": "pipeline",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-07-02T01:43:23.248384+00:00"
   }
 ]
