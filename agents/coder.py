@@ -3869,8 +3869,9 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             # 3. Cron schedule
             _rql(f'mutation {{ serviceInstanceUpdate(serviceId: "{svc_id}", environmentId: "{ENV_ID}", input: {{ cronSchedule: "{schedule}" }}) }}')
 
-            # 4. startCommand без кавычек внутри — payload через env var $P
-            start_cmd = f"curl -sf -X POST {bot_url} -H Content-Type:application/json -d $P"
+            # 4. startCommand без кавычек внутри — payload через env var $P,
+            #    office-токен через env var $T (иначе при OFFICE_RPC_STRICT=1 cron получит 401)
+            start_cmd = f"curl -sf -X POST {bot_url} -H Content-Type:application/json -H X-Office-Token:$T -d $P"
             _rql(f'mutation {{ serviceInstanceUpdate(serviceId: "{svc_id}", environmentId: "{ENV_ID}", input: {{ startCommand: "{start_cmd}" }}) }}')
 
             # 5. Env var P = payload JSON
@@ -3882,6 +3883,19 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                     "serviceId": svc_id,
                     "name": "P",
                     "value": payload_data
+                }}
+            )
+
+            # 5b. Env var T = OFFICE_RPC_TOKEN (значение из окружения Силли на момент создания;
+            #     пустое допустимо в warn-режиме, при ротации токена — обновить var у cron-сервисов)
+            _rql(
+                'mutation Upsert($input: VariableUpsertInput!) { variableUpsert(input: $input) }',
+                variables={"input": {
+                    "projectId": PROJECT_ID,
+                    "environmentId": ENV_ID,
+                    "serviceId": svc_id,
+                    "name": "T",
+                    "value": os.getenv("OFFICE_RPC_TOKEN", "")
                 }}
             )
 
