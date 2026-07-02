@@ -1557,6 +1557,152 @@ async def _all_office_services() -> list:
         return [(sid, repo) for sid, (repo, _) in SERVICES.items()]
 
 
+async def _handle_health_failures(health_fail: list[str], lines: list[str]) -> list[str]:
+    """Реакция аудита на упавшие health-чеки — тот же конвейер, что для деплоев.
+
+    1. Retry (2 раунда по 45с) — транзиентные сбои (рестарт/сеть в момент
+       проверки) не эскалируем: сервис ожил → тихая пометка в отчёт.
+    2. classify_fault по логам — внешний сбой (Telegram/Railway/DNS) = не наш
+       баг, молчим без делегирования.
+    3. Наш баг → анализ Haiku → редеплой (can_autofix) или делегирование
+       команде через fix_bot; действия попадают в отчёт аудита.
+    4. Redis-cooldown по сигнатуре — вечерний аудит не дублирует эскалацию
+       утреннего.
+
+    Возвращает список стойких сбоев: только они окрашивают статус офиса.
+    """
+    import hashlib
+
+    # ── 1. Retry: отсеиваем транзиентные сбои ────────────────────────────────
+    still_failing = {e.partition(":")[0]: e for e in health_fail}
+    for _round in range(2):
+        if not still_failing:
+            break
+        await asyncio.sleep(45)
+        async with httpx.AsyncClient(timeout=10) as c:
+            for name in list(still_failing):
+                url = HEALTH_URLS.get(name)
+                if not url:
+                    continue
+                try:
+                    r = await c.get(url)
+                    if r.status_code == 200:
+                        detail = still_failing.pop(name).partition(":")[2]
+                        lines.append(
+                            f"🌐 *{name}* — был недоступен в момент проверки ({detail}), "
+                            f"восстановился сам (transient), не эскалирую"
+                        )
+                except Exception:
+                    pass
+
+    persistent: list[str] = []
+    repo_to_sid = {repo: sid for sid, (repo, _) in SERVICES.items()}
+    try:
+        r_cd = await get_redis()
+    except Exception:
+        r_cd = None
+
+    for name, entry in still_failing.items():
+        detail = entry.partition(":")[2]
+        persistent.append(entry)
+
+        # ── 2. Cooldown: этот сбой уже эскалирован (утро → вечер) ────────────
+        sig = hashlib.sha256(f"{name}:{detail.split('(')[0]}".encode()).hexdigest()[:12]
+        cd_key = f"audit_health_fix:{name}:{sig}"
+        try:
+            if r_cd and await r_cd.get(cd_key):
+                lines.append(
+                    f"⏳ *{name}* — health всё ещё {detail}, "
+                    f"уже эскалировано в прошлом аудите, жду фикс"
+                )
+                continue
+        except Exception:
+            pass
+
+        # ── 3. Диагностика: логи + классификация наш/не наш ──────────────────
+        svc_id = repo_to_sid.get(name)
+        svc_logs: list[str] = []
+        if svc_id:
+            try:
+                svc_logs = (await get_service_logs(svc_id))[:30]
+            except Exception as ex:
+                logger.warning(f"[audit_health] logs failed for {name}: {ex}")
+        crash_text = "\n".join(svc_logs[:20])
+
+        if svc_logs and classify_fault(svc_logs) == "external":
+            lines.append(
+                f"🌐 *{name}* — health {detail}, в логах внешний/сетевой сбой "
+                f"(не наш баг), молчу"
+            )
+            continue
+
+        # ── 4. Анализ причины и действие ─────────────────────────────────────
+        crash_reason, fix_description, prevention = "неизвестна", "", ""
+        can_autofix = False
+        try:
+            analysis_raw = await ask_claude(
+                f"Бот {name} деплоится со статусом SUCCESS, но HTTP health-check "
+                f"вернул {detail}. Логи:\n{crash_text}\n\n"
+                f"Определи: 1) точную причину, 2) можно ли починить автоматически "
+                f"редеплоем (да/нет), 3) что именно исправить. Ответь JSON без markdown:\n"
+                f'{{"reason": "...", "can_autofix": true/false, "fix": "...", "prevention": "..."}}',
+                system="Ты senior DevOps. Анализируй логи и давай конкретный диагноз. JSON только.",
+                model="claude-haiku-4-5-20251001",
+            )
+            s, e = analysis_raw.find("{"), analysis_raw.rfind("}") + 1
+            analysis = json.loads(analysis_raw[s:e]) if s != -1 else {}
+            crash_reason = analysis.get("reason", "неизвестна")
+            can_autofix = analysis.get("can_autofix", False)
+            fix_description = analysis.get("fix", "")
+            prevention = analysis.get("prevention", "")
+        except Exception as ex:
+            logger.warning(f"[audit_health] analysis failed for {name}: {ex}")
+
+        if can_autofix and svc_id:
+            ok = await redeploy_service(svc_id)
+            lines.append(
+                f"🔄 *{name}* — health {detail}, редеплой запущен автоматически\n"
+                f"   📍 Причина: {crash_reason[:120]}\n"
+                f"   🛠 Действие: {'редеплой запущен' if ok else 'редеплой не удался'}"
+                + (f"\n   🛡 Предотвращение: {prevention[:120]}" if prevention else "")
+            )
+            if not ok:
+                await notify_office(f"⚠️ *{name}* — health {detail}, редеплой не удался, нужен ручной разбор")
+        else:
+            code_keywords = ["import", "syntax", "error", "exception", "attribute", "module", "port", "route", "handler"]
+            is_code_issue = any(kw in crash_reason.lower() for kw in code_keywords)
+            if is_code_issue:
+                try:
+                    await handle_natural_language(
+                        f"[audit_autofix] fix_bot {name}: health check {detail}. "
+                        f"Причина: {crash_reason}. Logs: {crash_text[:500]}. "
+                        f"Fix needed: {fix_description}",
+                        0, lambda x: None
+                    )
+                    lines.append(
+                        f"🤖 *{name}* — health {detail}, делегировала фикс команде\n"
+                        f"   📍 Причина: {crash_reason[:120]}\n"
+                        f"   🛠 Задача: {fix_description[:120]}"
+                    )
+                except Exception as ex:
+                    lines.append(f"⚠️ *{name}* — health {detail}, не смогла делегировать: {ex}")
+            else:
+                lines.append(
+                    f"⚠️ *{name}* — health {detail}, требует ручного вмешательства\n"
+                    f"   📍 Причина: {crash_reason[:120]}"
+                    + (f"\n   🛠 Рекомендация: {fix_description[:120]}" if fix_description else "")
+                )
+
+        # Cooldown после принятого действия — не эскалировать повторно
+        try:
+            if r_cd:
+                await r_cd.set(cd_key, "1", ex=EXTERNAL_FAULT_COOLDOWN)
+        except Exception:
+            pass
+
+    return persistent
+
+
 async def run_daily_audit() -> str:
     """Полный аудит офиса: деплои, логи, health. Возвращает текст отчёта."""
     import datetime
@@ -1640,7 +1786,7 @@ async def run_daily_audit() -> str:
             prevention = ""
             fix_action = "escalate"
             try:
-                crash_logs = await get_service_logs(svc_id, limit=30)
+                crash_logs = (await get_service_logs(svc_id))[:30]
                 crash_text = "\n".join(crash_logs[:20])
 
                 # 2. Анализируем причину через Claude Haiku
@@ -1781,6 +1927,13 @@ async def run_daily_audit() -> str:
 
     if health_fail:
         lines.append(f"❌ Health failed: {', '.join(health_fail)}")
+        # Auto-fix: retry (transient) → classify (external = молчим) →
+        # редеплой/делегирование команде. Статус офиса окрашивают только
+        # стойкие сбои — их возвращает обработчик.
+        try:
+            health_fail = await _handle_health_failures(health_fail, lines)
+        except Exception as e:
+            logger.error(f"[audit_health] handler failed: {e}")
     else:
         lines.append(f"✅ HTTP health ({len(HEALTH_URLS)}): все OK")
 
