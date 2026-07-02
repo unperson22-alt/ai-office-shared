@@ -338,6 +338,26 @@ async def pop_pending(action_id: str) -> dict | None:
     return pending_fixes.pop(action_id, None)
 
 
+# ── Гейт против схлопывания файла (инцидент coder.py: 5766 → 8 строк) ───────
+# compile() + отсутствие NEEDS_FIX пропускают валидный, но катастрофически
+# неполный файл. Перед стейджем и перед пушем сравниваем размер нового кода
+# со старым: усадка сверх порога на непустом файле — блок + эскалация.
+
+SHRINK_GUARD_RATIO = 0.7      # новый файл обязан сохранить ≥70% строк старого
+SHRINK_GUARD_MIN_LINES = 50   # маленькие файлы не гейтим — там усадка легальна
+
+
+def file_shrink_guard(old_src: str, new_src: str) -> str:
+    """Возвращает описание проблемы, если новый код подозрительно меньше
+    старого (признак обрезанного огрызка вместо полного файла), иначе ''."""
+    old_lines = (old_src or "").count("\n") + 1 if (old_src or "").strip() else 0
+    new_lines = (new_src or "").count("\n") + 1 if (new_src or "").strip() else 0
+    if old_lines >= SHRINK_GUARD_MIN_LINES and new_lines < old_lines * SHRINK_GUARD_RATIO:
+        return (f"новый файл схлопнулся: {old_lines} → {new_lines} строк "
+                f"(порог {int(SHRINK_GUARD_RATIO * 100)}% от старого) — похоже на обрезанный код")
+    return ""
+
+
 # ── Inline-кнопки апрува (✅/⏭) ──────────────────────────────────────────────
 # callback_data: "{domain}:{verb}:{ident}". domain: pg (office:pending) | pr (PR-мерж) |
 # wk (weekly). verb: appr | decl. ident помещается в 64 байта (action_id/pr_id короткие).
@@ -1302,6 +1322,7 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
     MAX_DEV_ATTEMPTS = 3
     final_code = ""
     review_ok = compile_ok = False
+    shrink_info = ""
     commit_msg = ""
     retry_feedback = ""
     attempt = 0
@@ -1337,18 +1358,22 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
             except SyntaxError as _se:
                 compile_ok = False
                 _se_info = f"{_se.msg}, строка {_se.lineno}"
+        shrink_info = file_shrink_guard(source_code, final_code) if final_code else ""
 
-        if final_code and review_ok and compile_ok:
+        if final_code and review_ok and compile_ok and not shrink_info:
             break
         await tb.incr_attempts(r_tb, board_id)
         if not final_code:
             retry_feedback = "Рикки не вернул финальный код (блок ```python отсутствует/пуст)."
         elif not review_ok:
             retry_feedback = "Рикки вернул NEEDS_FIX — код требует доработки. " + ricky_result[:600]
-        else:
+        elif not compile_ok:
             retry_feedback = f"Финальный код не компилируется: {_se_info}. Похоже воркер обрезал код."
+        else:
+            retry_feedback = (f"Гейт размера: {shrink_info}. "
+                              f"Верни ПОЛНЫЙ файл целиком, ничего не выбрасывая.")
 
-    if final_code and review_ok and compile_ok:
+    if final_code and review_ok and compile_ok and not shrink_info:
         # Гейт пройден — стейджим деплой на /approve (контракт deploy_fix без изменений).
         fix_id = await stage_pending("deploy_fix", {
             "service_id": service_id,
@@ -4163,6 +4188,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
         MAX_DEV_ATTEMPTS = 3
         final_code = ""
         review_ok = compile_ok = False
+        shrink_info = ""
         commit_msg = ""
         results: dict = {}
         retry_feedback = ""
@@ -4199,7 +4225,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                 if ce > cs:
                     final_code = ricky_result[cs:ce].strip()
 
-            # Гейт качества: вердикт Рикки + компиляция
+            # Гейт качества: вердикт Рикки + компиляция + размер файла
             review_ok = "NEEDS_FIX" not in (ricky_result or "").upper()
             compile_ok = True
             _se_info = ""
@@ -4209,8 +4235,10 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                 except SyntaxError as _se:
                     compile_ok = False
                     _se_info = f"{_se.msg}, строка {_se.lineno}"
+            # Валидный, но схлопнувшийся файл (инцидент 5766 → 8 строк) не проходит
+            shrink_info = file_shrink_guard(file_context, final_code) if final_code else ""
 
-            if final_code and review_ok and compile_ok:
+            if final_code and review_ok and compile_ok and not shrink_info:
                 break  # успех — выходим из цикла ретраев
 
             # Провал гейта: считаем попытку, формируем фидбек на следующий заход
@@ -4219,8 +4247,11 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                 retry_feedback = "Рикки не вернул финальный код (блок ```python отсутствует/пуст)."
             elif not review_ok:
                 retry_feedback = "Рикки вернул NEEDS_FIX — код требует доработки. " + ricky_result[:600]
-            else:
+            elif not compile_ok:
                 retry_feedback = f"Финальный код не компилируется: {_se_info}. Похоже воркер обрезал код."
+            else:
+                retry_feedback = (f"Гейт размера: {shrink_info}. "
+                                  f"Верни ПОЛНЫЙ файл целиком, ничего не выбрасывая.")
             await tb.update_status(_r_act, board_id, "needs_fix", result=retry_feedback)
             await reply_func(f"🛠 Попытка {attempt}/{MAX_DEV_ATTEMPTS} отклонена: {retry_feedback[:160]}")
 
@@ -4232,7 +4263,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                                  assignee=_name.lower(), status=_st)
 
         # ── 3. Гейт: успех → стейджим деплой на /approve; провал → эскалация ─
-        if final_code and review_ok and compile_ok and dev_repo and dev_file_path:
+        if final_code and review_ok and compile_ok and not shrink_info and dev_repo and dev_file_path:
             action_id = await stage_pending("deploy_devtask", {
                 "repo": dev_repo, "path": dev_file_path, "code": final_code,
                 "commit_msg": commit_msg or f"feat: {devvy_task[:60]}",
@@ -4717,6 +4748,23 @@ async def _apply_pending_action(entry: dict) -> str:
             return f"✅ Фикс применён ({payload['service_name']}), {status}"
 
         if atype == "deploy_devtask":
+            # Последний рубеж: даже заапрувленный код не пушим, если он
+            # схлопывает существующий файл (см. инцидент coder.py 5766 → 8 строк).
+            try:
+                _old_src = await read_file(payload["repo"], payload["path"])
+            except Exception:
+                _old_src = ""
+            _shrink = file_shrink_guard(_old_src, payload.get("code", ""))
+            if _shrink:
+                if task_id:
+                    await tb.update_status(r, task_id, "blocked",
+                                           result=f"пуш заблокирован: {_shrink}", escalated=True)
+                asyncio.create_task(append_ops_log(
+                    "dev_task push BLOCKED (shrink guard)", payload["repo"],
+                    f"{payload['path']}: {_shrink}",
+                ))
+                return (f"⛔ Пуш в {payload['repo']}/{payload['path']} ЗАБЛОКИРОВАН: {_shrink}.\n"
+                        f"Нужна ручная проверка кода (ветка+PR, без автодеплоя).")
             res = await push_file(
                 payload["repo"], payload["path"], payload["code"],
                 payload.get("commit_msg") or f"feat: {payload.get('title', 'dev task')[:60]}",
