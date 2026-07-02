@@ -144,3 +144,29 @@
   без `X-Office-Token` (embedded-команда в cron) → расписания упадут при STRICT; (b) `/secrets`,`/redis` Силли
   теперь под middleware → их вызыватели (Claude-тулинг) должны слать `X-Office-Token`. Dead double-brace
   `{{filly}}/task` в ray/lex/nelli main.py — пре-существующий баг, НЕ трогали.
+- 2026-07-02: **ENFORCEMENT-PREP + КОМПОНЕНТ №3 DONE** (ветка `claude/ai-office-refactor-enforcement-gn78go`,
+  9 репо, shared-либа НЕ менялась → перепин ботов НЕ нужен, все остаются на `bf3fb46`).
+  **Коррекция хендофа (проверено грепом):** инлайн-дубли `_call_office`/`_enhance_prompt` остались ТОЛЬКО
+  в mama-bot; у billy/tilly/milly/doctor/gosling/villy `_call_office` уже тонкий делегат в shared —
+  security-волна попутно их дедуплила. У форков оставались только хардкоды моделей.
+  **Enforcement-prep (flip-time гэпы закрыты кодом):** (a) `agents/coder.py` create_cron: env var
+  `T=OFFICE_RPC_TOKEN` + `-H X-Office-Token:$T` в startCommand cron-сервиса (СТАРЫЕ cron'ы патчить руками —
+  шаг 4 роллаута); (b) найдены и закрыты НЕзадокументированные гэпы: billy `route_to_gosling`,
+  tilly `_forward_to_marty` — `office_headers()`; nelli `call_office` — `office_headers({X-Secret-Token})`
+  по паттерну ray. (c) Новый `ENFORCEMENT_ROLLOUT.md` — пошаговый флип для Влада (контейнмент → токен
+  через Railway UI (НЕ через чат Силли!) → WARN-мониторинг → патч старых cron'ов → STRICT).
+  **Компонент №3:** mama-bot дедуплен до канона kriss: инлайн `OFFICE_AGENTS`/`_enhance_prompt`/`_call_office`
+  (слал `/task` БЕЗ source и БЕЗ токена!)/`_parse_office_tag` удалены → импорт из shared; добавлен
+  `claude_async` (AsyncAnthropic) для `enhance_prompt`; попутно починен стейл-URL ДОКТОРА (был без `-4a9b`).
+  Behavior-деляты mama: office-вызовы теперь `source:"BOT"` + токен, реестр агентов = shared.
+  Все 7 ботов (mama,billy,tilly,milly,doctor,gosling,villy): хардкоды моделей → `MODEL_SONNET`/`MODEL_HAIKU`
+  (+`MODEL_OPUS` tilly). Итог: `model="claude-` в 7 ботах = 0.
+  Верификация: py_compile 9 файлов; smoke `import bot` всех 7 ботов с мок-env; функциональный smoke
+  shared `enhance_prompt` (длинный/enhance/fail-silent) и формат `start_cmd` (кавычки не текут в GraphQL);
+  свип: все исходящие `/task|/reply|/send`-POST'ы живых репо — с `office_headers`.
+  lessons.json +2 урока (гэпы контрактов в недедуплённых копиях; хендоф проверять грепом).
+  NEXT: (1) Влад мержит PR (порядок свободный, перепина нет; мерж shared = 90с даунтайма Силли);
+  (2) роллаут по `ENFORCEMENT_ROLLOUT.md` (токен сгенерён, передан в чате); (3) смоук после мержа —
+  mama `/health` 200, межбот-вызовы живы; (4) остаток рефактора: хардкод `chat_id=391077101`
+  (mama/kriss, задача 4 порядка EXECUTION), департаменты+резилентность (🟡/🟢), пре-существующие баги D
+  (`{{filly}}/task`, kriss SYSTEM_PROMPT/is_routed/random) — вне этой волны.
