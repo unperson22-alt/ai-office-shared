@@ -1135,5 +1135,21 @@
     "tag": "trader",
     "posted_to_group": false,
     "posted_at": null
+  },
+  {
+    "id": 70,
+    "date": "2026-07-02",
+    "bot": "cilly-bot",
+    "layer": "dev-dept/pipeline",
+    "title": "dev_task gate (compile + no-NEEDS_FIX) approved an 8-line stub replacing a 5766-line production file and auto-deployed it to main — full cilly-bot outage",
+    "symptom": "After a delegated dev_task ('add railway_logs action + widen redis_query regex') passed the Devvy->Ricky->Testi->Sekky pipeline and was deployed, cilly-bot went down completely: /health timed out, Railway Watchdog kept reporting 'Силли не отвечает', and Railway API auto-redeploy could not help because main itself contained the broken file.",
+    "root_cause": "The dev_task quality gate only checked two things: compile(final_code) succeeds and Ricky's review does not contain 'NEEDS_FIX'. An 8-line stub of agents/coder.py is perfectly valid Python and got an OK review, so the gate passed a file that had lost 99.9% of its content. The pipeline then pushed it straight to main (agents/coder.py, 5766 -> 8 lines), and Railway auto-deployed the amputated service.",
+    "why_architecture": "The gate validated syntactic correctness, not completeness: none of the checks compared the candidate against the file it was replacing. Worse, the task was self-modification — Cilly's own pipeline rewriting Cilly's own coder.py — so the deployed bug destroyed the very agent (and its railway/redis tooling) that would normally diagnose and roll it back.",
+    "fix": "Restored agents/coder.py from pre-incident commit 9cb79e8 via emergency-restore-coder-py branch (PR #19). Added file_shrink_guard(): new code must keep >=70% of the old file's line count (files under 50 lines exempt). Wired it into both pipeline gates (dev_task and autonomous deploy_fix) as a retry-with-feedback condition, and as a last-resort check inside _apply_pending_action('deploy_devtask') that re-reads the current file and refuses to push even approved code that shrinks it.",
+    "status": "fixed",
+    "prevention": "A gate for generated code must compare the candidate to what it replaces (size/structure sanity), not just validate it in isolation — 'compiles + reviewer said OK' passes catastrophically incomplete files. Never let an agent's pipeline auto-deploy modifications to its own core file (coder.py): self-modification goes through a human-reviewed branch+PR only, no auto-deploy, because the failure destroys the rollback tooling itself.",
+    "cause": "Quality gate checked validity (compile + review verdict) but never completeness (new file vs old file size), and self-modification of coder.py was allowed into the auto-deploy path.",
+    "tag": "pipeline",
+    "posted_to_group": false
   }
 ]
