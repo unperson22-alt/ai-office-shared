@@ -2927,9 +2927,12 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         result: dict = {}
 
         # ── 0. DEL — обрабатывается первым и возвращает сразу ────────────
+        # Ключ ищем в оригинальном task (регистр важен) и без хардкода 'office:' —
+        # любой namespace вида prefix:..., кроме URL-схем (https://...)
         if any(w in task_lower for w in ["del ", "delete ", "удали ключ"]):
             import re as _re_del
-            del_match = _re_del.search(r'(office:[a-z:_0-9]+)', task_lower)
+            del_match = _re_del.search(
+                r'\b(?!https?:)([A-Za-z][A-Za-z0-9_.\-]*:(?!//)[A-Za-zа-яА-ЯёЁ0-9:_.\-]+)', task)
             if del_match:
                 del_key = del_match.group(1)
                 deleted = await r.delete(del_key)
@@ -2973,8 +2976,11 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             result["routing_misses"] = [json.loads(m) for m in raw_misses]
 
         # ── 5. произвольный scan pattern ─────────────────────────────────
+        # Без хардкода 'office:' — любой namespace (fix_count:*, board:*, …),
+        # регистр сохраняем, URL-схемы (https://...) отсекаем
         import re as _re
-        pattern_match = _re.search(r'(office:[a-z:*_]+)', task_lower)
+        pattern_match = _re.search(
+            r'\b(?!https?:)([A-Za-z][A-Za-z0-9_.\-]*:(?!//)[A-Za-zа-яА-ЯёЁ0-9:*_.\-]+)', task)
         if pattern_match and not result:
             pattern_str = pattern_match.group(1)
             if not pattern_str.endswith("*"):
@@ -3915,6 +3921,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
 - read_file: {"action":"read_file","repo":"...","path":"..."}
 - push_file: {"action":"push_file","repo":"...","path":"...","content":"...","message":"..."}
 - check_var: {"action":"check_var","service":"billy-bot","name":"REDIS_PROXY_TOKEN","expected":"опц. ожидаемая строка"} — читает переменную окружения сервиса в Railway (значение вернётся ЗАМАСКИРОВАННЫМ)
+- railway_logs: {"action":"railway_logs","service":"billy-bot","lines":30} — последние строки логов последнего деплоя сервиса в Railway (lines ≤ 100)
 - send_message: {"action":"send_message","chat_id":-5194783850,"text":"..."} — в ОФИС ГРУППУ (-5194783850)
 - send_messages: {"action":"send_messages","chat_id":-5194783850,"texts":["msg1","msg2",...]} — батч до 5
 - done: {"action":"done","result":"итог для пользователя"}
@@ -4062,6 +4069,56 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                         steps_log.append({"action": f"send_message({a_chat})", "result": "OK"})
                     except Exception as e:
                         steps_log.append({"action": f"send_message({a_chat})", "result": f"ERROR: {e}"})
+
+            elif action == "railway_logs":
+                a_service = action_data.get("service", "")
+                try:
+                    a_lines = max(1, min(int(action_data.get("lines", 30) or 30), 100))
+                except (TypeError, ValueError):
+                    a_lines = 30
+                try:
+                    svc_id = next((sid for sid, (r, _) in SERVICES.items() if r == a_service), None)
+                    if not svc_id:
+                        svc_id = await railway_get_service_id(a_service)
+                    if not svc_id:
+                        raise Exception(f"сервис '{a_service}' не найден")
+                    dep_data = await railway_query("""
+                        query($id: String!) {
+                          deployments(input: { serviceId: $id }) {
+                            edges { node { id status createdAt } }
+                          }
+                        }
+                    """, {"id": svc_id})
+                    edges = (dep_data.get("data") or {}).get("deployments", {}).get("edges", [])
+                    if not edges:
+                        raise Exception(f"у '{a_service}' нет деплоев")
+                    dep_node = edges[0]["node"]
+                    log_data = await railway_query("""
+                        query($id: String!) {
+                          deploymentLogs(deploymentId: $id) { message timestamp }
+                        }
+                    """, {"id": dep_node["id"]})
+                    logs = (log_data.get("data") or {}).get("deploymentLogs", []) or []
+                    tail = [f"{l.get('timestamp', '')} {l.get('message', '')}" for l in logs[-a_lines:]]
+                    res = (f"деплой {dep_node['id'][:8]} ({dep_node.get('status', '?')}): "
+                           + (f"{len(tail)} строк логов" if tail else "логи пусты"))
+                    steps_log.append({"action": f"railway_logs({a_service})", "result": res})
+                    if tail:
+                        context += (f"\n\n[Логи {a_service}, последние {len(tail)} строк]:\n"
+                                    + "\n".join(tail)[-4000:])
+                    consecutive_failures = 0
+                    last_error = None
+                except Exception as e:
+                    err_str = str(e)
+                    steps_log.append({"action": f"railway_logs({a_service})", "result": f"ERROR: {err_str}"})
+                    if err_str == last_error:
+                        consecutive_failures += 1
+                    else:
+                        consecutive_failures = 1
+                        last_error = err_str
+                    if consecutive_failures >= 3:
+                        await reply_func(f"❌ Задача остановлена: повторяющаяся ошибка — {err_str}")
+                        break
 
             elif action == "check_var":
                 a_service  = action_data.get("service", "")
