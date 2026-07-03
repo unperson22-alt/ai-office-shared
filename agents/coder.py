@@ -1730,35 +1730,52 @@ async def run_daily_audit() -> str:
         pass  # network/timeout — не прерываем аудит
 
     # 1. Deployment status
-    deploy_ok, deploy_fail = [], []
+    # deploy_fail — РЕАЛЬНЫЙ статус деплоя от Railway (FAILED/CRASHED/...).
+    # check_fail — сбой самой ПРОВЕРКИ (HTTPStatusError/таймаут/GraphQL от
+    # Railway API): бот при этом может быть полностью здоров, поэтому такие
+    # записи не попадают в конвейер авто-фикса и не красят статус офиса.
+    deploy_ok, deploy_fail, check_fail = [], [], []
     for service_id, (repo, _) in (SERVICES.items() if _railway_auth_ok else []):
-        try:
-            data = await railway_query(
-                """query($sid: String!) {
-                     deployments(first:1, input:{serviceId:$sid}) {
-                       edges { node { status } }
-                     }
-                   }""",
-                {"sid": service_id}
-            )
-            deps = (data.get("data") or {}).get("deployments", {}).get("edges") or []
-            status = deps[0]["node"]["status"] if deps else "NO_DEPLOY"
-            name = repo
-            if status == "SUCCESS":
-                deploy_ok.append(name)
-            else:
-                deploy_fail.append(f"{name}:{status}")
-        except RuntimeError as e:
-            # GraphQL auth/permission error — критично, Railway API недоступен
-            err_msg = str(e)
-            if "Not Authorized" in err_msg or "Unauthorized" in err_msg:
-                deploy_fail.append(f"{repo}:AUTH_ERROR")
-            else:
-                deploy_fail.append(f"{repo}:GQL_ERROR")
-            logger.error(f"[audit] Railway API error for {repo}: {e}")
-        except Exception as e:
-            deploy_fail.append(f"{repo}:ERROR({type(e).__name__})")
-            logger.error(f"[audit] deploy check failed for {repo}: {e}")
+        status, check_err = None, None
+        for attempt in range(3):
+            try:
+                data = await railway_query(
+                    """query($sid: String!) {
+                         deployments(first:1, input:{serviceId:$sid}) {
+                           edges { node { status } }
+                         }
+                       }""",
+                    {"sid": service_id}
+                )
+                deps = (data.get("data") or {}).get("deployments", {}).get("edges") or []
+                status = deps[0]["node"]["status"] if deps else "NO_DEPLOY"
+                check_err = None
+                break
+            except RuntimeError as e:
+                # GraphQL auth/permission error — не транзиентно, ретрай бесполезен
+                err_msg = str(e)
+                logger.error(f"[audit] Railway API error for {repo}: {e}")
+                if "Not Authorized" in err_msg or "Unauthorized" in err_msg:
+                    check_err = "AUTH_ERROR"
+                    break
+                check_err = "GQL_ERROR"
+            except Exception as e:
+                check_err = f"ERROR({type(e).__name__})"
+                logger.error(f"[audit] deploy check failed for {repo} (attempt {attempt + 1}): {e}")
+            if attempt < 2:
+                await asyncio.sleep(15)
+        if status == "SUCCESS":
+            deploy_ok.append(repo)
+        elif status is not None:
+            deploy_fail.append(f"{repo}:{status}")
+        else:
+            check_fail.append(f"{repo}:{check_err}")
+
+    if check_fail:
+        lines.append(
+            f"🌐 Статус деплоя не проверить (сбой Railway API при опросе, не баг ботов, "
+            f"авто-фикс пропущен): {', '.join(check_fail)}"
+        )
 
     if deploy_fail:
         lines.append(f"❌ Деплои упали: {', '.join(deploy_fail)}")
@@ -1766,9 +1783,6 @@ async def run_daily_audit() -> str:
         for entry in deploy_fail:
             svc_name = entry.split(":")[0]
             svc_status = entry.split(":", 1)[1] if ":" in entry else "UNKNOWN"
-            # AUTH_ERROR = Railway API недоступен, авто-фикс невозможен — пропускаем
-            if svc_status == "AUTH_ERROR":
-                continue
             svc_id = next(
                 (sid for sid, (repo_n, _) in SERVICES.items() if repo_n == svc_name),
                 None
@@ -1788,6 +1802,16 @@ async def run_daily_audit() -> str:
             try:
                 crash_logs = (await get_service_logs(svc_id))[:30]
                 crash_text = "\n".join(crash_logs[:20])
+
+                # Классификация ДО анализа/редеплоя (как в _handle_health_failures):
+                # внешний/сетевой сбой (Telegram/Railway, DNS) — не наш баг, молчим.
+                # Иначе can_autofix от Haiku редеплоит бот по чужому сбою.
+                if crash_logs and classify_fault(crash_logs) == "external":
+                    lines.append(
+                        f"🌐 *{svc_name}* — {svc_status}, в логах внешний/сетевой сбой "
+                        f"(не наш баг), молчу"
+                    )
+                    continue
 
                 # 2. Анализируем причину через Claude Haiku
                 analysis_raw = await ask_claude(
