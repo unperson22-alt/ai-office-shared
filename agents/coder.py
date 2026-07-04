@@ -92,6 +92,29 @@ SERVICES = {
     "ed03c9d3-e83f-4675-9f0a-a4d4fc622365": ("gosling-bot",      "bot.py"),
 }
 
+def _render_railway_ids_block() -> str:
+    """Блок RAILWAY IDs для системного промпта — генерируется из SERVICES.
+
+    Единый источник истины: список всегда сходится с рабочим dict SERVICES,
+    по которому аудит успешно ходит в Railway API. Раньше ID дублировались в
+    промпте вручную и галлюцинировались (верные первые 8 hex, выдуманные хвосты)
+    → Силли слала неверный serviceId → «Not Authorized». Больше руками не пишем.
+    """
+    lines = [
+        "== RAILWAY IDs ==",
+        "RAILWAY_TOKEN: из env RAILWAY_TOKEN_VLAD",
+        "serviceId бери ТОЛЬКО из списка ниже или через deployments-запрос — "
+        "НИКОГДА не вспоминай и не достраивай ID по памяти.",
+        "Список сервисов (repo → serviceId), сгенерирован из SERVICES:",
+    ]
+    for sid, (repo, _main) in SERVICES.items():
+        lines.append(f"  {repo}: {sid}")
+    lines.append(
+        "ВАЖНО: variableCollectionUpsert требует специальные права — "
+        "наш токен НЕ ИМЕЕТ их. Не пытаться."
+    )
+    return "\n".join(lines)
+
 bot    = Bot(token=BOT_TOKEN) if BOT_TOKEN else None
 _GLOBAL_BOT = bot  # глобальная ссылка для использования в handlers
 dp     = Dispatcher()
@@ -580,23 +603,7 @@ CHAT_PROMPT = """Ты — Силли, технический мозг AI-офи�
 — ЗАПРЕЩЕНО писать в группу: запросы данных, объяснения ограничений, "не удалось найти репозиторий", просьбы уточнить. Если что-то не получается — верни ошибку ТОЛЬКО через ответ на /task. В группу — МОЛЧАТЬ.
 — АНТИ-ГАЛЛЮЦИНАЦИЯ (КРИТИЧНО): никогда не утверждай, что создала файл, запушила/задеплоила код, отправила сообщение или выполнила любое действие, если ты ФАКТИЧЕСКИ не выполнила его в этом ответе. Не выдумывай коммиты и статусы «закинул/задеплоил/готово». Если действие не выполнено — скажи об этом прямо и коротко. Реальные деплои подтверждаются деплой-шагом (commit), а не твоим текстом.
 
-== RAILWAY IDs (используй всегда) ==
-RAILWAY_TOKEN: из env RAILWAY_TOKEN_VLAD
-awake-happiness: projectId=271b40b7-199a-429a-88ef-ca417f26a638, envId=2efaaf60-3568-4462-8b77-f4a7e3c65b49
-  filly:   5d61d403-feee-455e-9c0d-523f0e7c79d5
-  cilly:   efa6bd21-91d8-467f-8250-60f8a3853791
-  billy:   b441ce93-9736-49b3-9b5d-d0c82e715b28
-  tilly:   367e25d7-896d-4b68-a85d-9db4108ef1b2
-  milly:   db277aff-6638-4b4a-970e-b016bd753608
-  villy:   a5e37cc4-0c92-4c87-b4d1-f3e2a1d9c8b7
-  gosling: ed03c9d3-e035-4a66-b823-6badb57085c5
-  prophet: 9db4108e-f7b7-4f89-b7ba-3c2d1e0f9a8b
-  kriss:   92f70bbb-1234-5678-90ab-cdef01234567
-  mama:    fa7c87cf-abcd-efgh-ijkl-mnopqrstuvwx
-marketing-dept: projectId=ed4c408f-29f4-481a-aff1-b5bdbe0fc62e, envId=e987a790-e2e5-47a7-89cb-b0e8a6e8c9b3
-  marty: 8fb51207, nelli: (nelli-bot service), ray: (ray-bot service)
-vietnam-bot: projectId=d538d675-e29a-4b5a-a1ae-39d36be06c1d, envId=f2498bbf-c5e0-4cb3-b4a9-8f3d2a1e9c7b
-ВАЖНО: variableCollectionUpsert требует специальные права — наш токен НЕ ИМЕЕТ их. Не пытаться.
+""" + _render_railway_ids_block() + """
 — ЧИСТОТА: после выполнения задачи с промежуточными статусами в группе — подчищаешь свои служебные сообщения (⏸, ▶️, 🤖, прогресс-апдейты). В группе остаётся только финальный результат.
 — Если что-то неясно — задаёшь ОДИН уточняющий вопрос, не несколько.
 — Честна: если не знаешь — говоришь об этом прямо.
