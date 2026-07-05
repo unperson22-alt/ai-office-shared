@@ -89,6 +89,13 @@ def try_ollama(
                 return None
             text = r.json().get("message", {}).get("content", "")
             if text:
+                # Мелкая локальная модель иногда отдаёт офф-персонажную заглушку
+                # «идут техработы / я недоступен». Не пускаем это к пользователю —
+                # возвращаем None, чтобы бот упал на Anthropic (нормальный ответ).
+                from .phantom import looks_like_phantom
+                if looks_like_phantom(text):
+                    logger.warning("Ollama phantom reply suppressed → fallback to Anthropic")
+                    return None
                 logger.debug("Ollama OK: %d chars", len(text))
                 return OllamaResult(text)
             return None
