@@ -29,6 +29,7 @@ from ai_office_shared.shared.auth import office_auth_middleware, office_headers
 from shared.github_tools import (
     push_file, read_file, list_files, create_repo,
     create_branch, push_file_to_branch, create_pull_request, merge_pull_request, get_pr_by_url,
+    commit_exists,
 )
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -378,6 +379,54 @@ def file_shrink_guard(old_src: str, new_src: str) -> str:
     if old_lines >= SHRINK_GUARD_MIN_LINES and new_lines < old_lines * SHRINK_GUARD_RATIO:
         return (f"новый файл схлопнулся: {old_lines} → {new_lines} строк "
                 f"(порог {int(SHRINK_GUARD_RATIO * 100)}% от старого) — похоже на обрезанный код")
+    return ""
+
+
+# ── Гейт против битого пина зависимости (инцидент filly-bot: ai-office-shared@af0bd71) ──
+# compile()/shrink НЕ ловят семантическую порчу requirements.txt: несуществующий SHA
+# (например HEAD ЧУЖОГО репо) валиден синтаксически, но роняет `pip install` → build FAILED.
+# Перед пушем резолвим каждый git+…@<ref> в НУЖНОМ репозитории через GitHub API.
+import re as _re_pins
+
+# git+https://github.com/<owner>/<name>(.git)@<ref>  (egg/подкаталог/пробелы — хвост игнорим)
+_PIN_RE = _re_pins.compile(
+    r"github\.com[/:]([\w.-]+)/([\w.-]+?)(?:\.git)?@([^\s#&]+)"
+)
+
+
+async def validate_requirements_pins(content: str) -> str:
+    """Возвращает описание проблемы, если хотя бы один git-пин в requirements
+    ссылается на несуществующий коммит/ref в СВОЁМ репозитории, иначе ''.
+
+    Закрывает Дефект 1 (порча зависимости) и Дефект 2 (SHA взят из чужого репо:
+    HEAD filly-bot не резолвится в ai-office-shared → блок). Проверяем только репо
+    владельца (unperson22-alt) — сторонние пины (PyPI, чужие GitHub) не трогаем.
+    """
+    problems = []
+    for line in (content or "").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        m = _PIN_RE.search(s)
+        if not m:
+            continue
+        owner, name, ref = m.group(1), m.group(2), m.group(3).rstrip("/")
+        # Пин на репо-владельца сверяем через API текущего токена; чужих владельцев пропускаем.
+        if owner != "unperson22-alt":
+            continue
+        ref_clean = ref.split("#", 1)[0].split("&", 1)[0]
+        try:
+            exists = await commit_exists(name, ref_clean)
+        except Exception as e:
+            problems.append(f"{name}@{ref_clean}: не удалось проверить ({e})")
+            continue
+        if not exists:
+            problems.append(
+                f"{name}@{ref_clean}: коммит/ref НЕ найден в репозитории {owner}/{name} "
+                f"(битый пин → pip install упадёт, build FAILED)"
+            )
+    if problems:
+        return "битый пин зависимости: " + "; ".join(problems)
     return ""
 
 
@@ -1073,6 +1122,197 @@ async def deploy_commit(service_id: str, commit_sha: str) -> str | None:
     except Exception as e:
         logger.error(f"deploy_commit failed for {service_id}: {e}")
         return None
+
+
+async def _escalate_vlad(text: str) -> None:
+    """Прямое сообщение владельцу (Влад) в личку — для алертов/эскалаций.
+    Никогда не бросает и не идёт в офис-группу. Работает даже при source=CLAUDE:
+    это не спам в группу, а адресный алерт владельцу."""
+    try:
+        uid = int(os.getenv("YOUR_TELEGRAM_ID", "391077101") or "391077101")
+        await bot.send_message(chat_id=uid, text=text, parse_mode=None)
+    except Exception as e:
+        logger.error(f"_escalate_vlad failed: {e}")
+
+
+# ── Дефект 4: проверка статуса сборки после деплоя ────────────────────────────
+_DEPLOY_TERMINAL_OK   = {"SUCCESS"}
+_DEPLOY_TERMINAL_FAIL = {"FAILED", "CRASHED", "REMOVED", "SKIPPED"}
+
+
+async def wait_for_deploy(service_id: str, *, timeout: float = 180.0,
+                          poll: float = 6.0) -> tuple[str, list[str]]:
+    """Опрашивает статус последнего деплоя сервиса до терминального.
+
+    Переиспользует существующий GraphQL-запрос deployments{edges{node{id status}}}
+    (ср. get_service_logs). Возвращает (status, build_log_tail). status ∈
+    {SUCCESS, FAILED, CRASHED, REMOVED, SKIPPED, TIMEOUT, UNKNOWN}. На не-SUCCESS
+    подтягивает хвост deploymentLogs для диагностики. Никогда не бросает.
+    """
+    deadline = time.monotonic() + timeout
+    last_status = "UNKNOWN"
+    dep_id = None
+    while time.monotonic() < deadline:
+        try:
+            data = await railway_query("""
+                query($id: String!) {
+                  deployments(input: { serviceId: $id }) {
+                    edges { node { id status createdAt } }
+                  }
+                }
+            """, {"id": service_id})
+            edges = (data.get("data") or {}).get("deployments", {}).get("edges", [])
+            if edges:
+                node = edges[0]["node"]
+                dep_id = node.get("id")
+                last_status = (node.get("status") or "UNKNOWN").upper()
+                if last_status in _DEPLOY_TERMINAL_OK:
+                    return last_status, []
+                if last_status in _DEPLOY_TERMINAL_FAIL:
+                    break
+        except Exception as e:
+            logger.warning(f"wait_for_deploy poll error ({service_id}): {e}")
+        await asyncio.sleep(poll)
+    else:
+        last_status = last_status if last_status in _DEPLOY_TERMINAL_FAIL else "TIMEOUT"
+
+    # Не-SUCCESS → тянем хвост логов сборки для диагностики.
+    log_tail: list[str] = []
+    if dep_id:
+        try:
+            log_data = await railway_query("""
+                query($id: String!) {
+                  deploymentLogs(deploymentId: $id) { message timestamp }
+                }
+            """, {"id": dep_id})
+            logs = (log_data.get("data") or {}).get("deploymentLogs", []) or []
+            log_tail = [l.get("message", "") for l in logs][-20:]
+        except Exception as e:
+            logger.warning(f"wait_for_deploy logs error ({service_id}): {e}")
+    return last_status, log_tail
+
+
+async def redeploy_and_verify(service_id: str, service_name: str = "") -> bool:
+    """redeploy_service + проверка статуса сборки. FAILED/timeout → эскалация Владу.
+
+    Возвращает True только при подтверждённом SUCCESS. Заменяет «выстрелил и забыл»
+    там, где деплой автономный (Силли не видела бы упавшую сборку — Дефект 4).
+    """
+    name = service_name or service_id
+    ok = await redeploy_service(service_id)
+    if not ok:
+        await _escalate_vlad(f"⚠️ {name}: мутация редеплоя не принята Railway. Сборка не запущена.")
+        return False
+    status, tail = await wait_for_deploy(service_id)
+    if status == "SUCCESS":
+        return True
+    tail_txt = ("\n".join(tail))[-1500:] if tail else "(логи недоступны)"
+    await _escalate_vlad(
+        f"🔴 {name}: деплой завершился статусом {status}.\n"
+        f"Автоматический откат не делаю — нужно решение.\n\n"
+        f"Хвост build-логов:\n{tail_txt}"
+    )
+    return False
+
+
+# ── Дефект 1+2: безопасный автономный пуш правок бот-репозиториев через PR ──────
+async def safe_autonomous_push(repo: str, path: str, content: str, message: str,
+                               *, service_id: str = "", reply_func=None,
+                               silent: bool = False) -> str:
+    """Единая безопасная точка автономной правки чужого бот-репозитория.
+
+    Вместо прямого push_file→redeploy в main:
+      1. ai-office-shared → отказ (свой код правится ТОЛЬКО вручную, правило #70).
+      2. Валидация: shrink-гейт (код) + пин-гейт (requirements) → провал = НЕ пушим,
+         эскалация Владу, возврат ошибки.
+      3. Пуш в новую ветку → PR → регистрация в pending_prs + кнопки апрува Владу.
+    Возвращает человекочитаемый статус (никогда не бросает).
+    """
+    async def _say(msg: str):
+        if reply_func and not silent:
+            try:
+                await reply_func(msg)
+            except Exception:
+                pass
+
+    if repo in ("ai-office-shared", "ai_office_shared"):
+        note = ("🚫 Правки ai-office-shared (код Силли) — только вручную: "
+                "ветка → PR → ревью Влада (правило #70). Автономно не пушу.")
+        await _say(note)
+        return note
+
+    # ── Валидация перед любым коммитом ───────────────────────────────────────
+    if path.endswith("requirements.txt") or path.endswith("requirements"):
+        pin_problem = await validate_requirements_pins(content)
+        if pin_problem:
+            note = f"⛔ Блок пуша {repo}/{path}: {pin_problem}"
+            await _escalate_vlad(
+                f"⛔ Силли заблокировала автономный пуш в {repo}/{path}.\n{pin_problem}\n"
+                f"Коммит НЕ сделан. Нужна корректная ревизия."
+            )
+            await _say(note)
+            return note
+
+    if path.endswith(".py"):
+        try:
+            old_src = await read_file(repo, path)
+        except Exception:
+            old_src = ""
+        shrink = file_shrink_guard(old_src, content)
+        if shrink:
+            note = f"⛔ Блок пуша {repo}/{path}: {shrink}"
+            await _escalate_vlad(
+                f"⛔ Силли заблокировала автономный пуш в {repo}/{path}.\n{shrink}\nКоммит НЕ сделан."
+            )
+            await _say(note)
+            return note
+
+    # ── Ветка → PR (без прямого пуша в main, без авто-деплоя) ────────────────
+    try:
+        branch = f"cilly/auto-{_uuid_mod.uuid4().hex[:8]}"
+        await create_branch(repo, branch, "main")
+        await push_file_to_branch(repo, path, content, message, branch)
+        pr = await create_pull_request(
+            repo,
+            title=message[:70] or f"cilly: правка {path}",
+            body=(f"Автономная правка Силли, поставлена на ревью (правило #0).\n\n"
+                  f"Файл: `{path}`\nЗадача: {message}\n\n"
+                  f"Пуш в main и деплой — только после мержа Владом."),
+            head_branch=branch,
+        )
+    except Exception as e:
+        note = f"❌ Не удалось создать PR для {repo}/{path}: {e}"
+        await _escalate_vlad(note)
+        await _say(note)
+        return note
+
+    pr_id = f"pr_{repo}_{pr['number']}"
+    pending_prs[pr_id] = {
+        "repo": repo,
+        "pr_number": pr["number"],
+        "branch": branch,
+        "html_url": pr["html_url"],
+    }
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=f"✅ Мержить {repo} #{pr['number']}",
+                             callback_data=f"pr:appr:{pr_id}"),
+        InlineKeyboardButton(text="⏭ Отклонить", callback_data=f"pr:decl:{pr_id}"),
+    ]])
+    try:
+        uid = int(os.getenv("YOUR_TELEGRAM_ID", "391077101") or "391077101")
+        await bot.send_message(
+            chat_id=uid,
+            text=(f"🔎 Силли подготовила автономную правку и ждёт ревью:\n"
+                  f"{repo}/{path}\nЗадача: {message}\n{pr['html_url']}"),
+            reply_markup=kb, parse_mode=None,
+        )
+    except Exception as e:
+        logger.error(f"safe_autonomous_push notify failed: {e}")
+
+    note = (f"✅ PR на ревью: {repo} #{pr['number']} — {pr['html_url']} "
+            f"(пуш в main и деплой после апрува Влада)")
+    await _say(note)
+    return note
 
 
 # ── Ollama helper (silent fallback to Claude) ─────────────────────────────────
@@ -3368,19 +3608,14 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             return
         await reply_func(f"⏳ Генерирую код для `{repo}/{path}`...")
         code = await ask_claude(task)
-        await reply_func("📤 Заливаю на GitHub...")
-        try:
-            result = await push_file(repo, path, code, f"nl: {task[:60]}")
-            action = "Обновлён" if result["action"] == "updated" else "Создан"
-            await reply_func(f"✅ {action}: {result['url']}")
-            # Auto-redeploy
-            service_id = next((sid for sid, (r, _) in SERVICES.items() if r == repo), None)
-            if service_id:
-                await reply_func("🔄 Запускаю редеплой...")
-                ok = await redeploy_service(service_id)
-                await reply_func("✅ Задеплоено" if ok else "⚠️ Пуш сделан, редеплой не удался")
-        except Exception as e:
-            await reply_func(f"❌ Ошибка: {e}")
+        await reply_func("🔎 Валидирую и ставлю правку на ревью...")
+        # Дефект 1+2: не пушим напрямую в main + не деплоим без ревью.
+        # safe_autonomous_push валидирует (пин/усадка) и открывает PR с кнопками апрува.
+        service_id = next((sid for sid, (r, _) in SERVICES.items() if r == repo), None)
+        await safe_autonomous_push(
+            repo, path, code, f"nl: {task[:60]}",
+            service_id=service_id or "", reply_func=reply_func, silent=silent,
+        )
 
     elif intent == "create_bot":
         await reply_func(f"🤖 Создаю бота: *{task}*...")
@@ -3542,9 +3777,9 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             )
 
             await push_file("filly-bot", "bot.py", filly_code, f"feat: add {bot_display} to routing")
-            # Redeploy Filly
+            # Redeploy Filly (Дефект 4: проверяем статус сборки, FAILED → алерт Владу)
             filly_service_id = "5d61d403-feee-455e-9c0d-523f0e7c79d5"
-            await redeploy_service(filly_service_id)
+            await redeploy_and_verify(filly_service_id, "filly-bot")
         except Exception as e:
             logger.warning(f"Не удалось обновить Филли: {e}")
 
@@ -3764,8 +3999,9 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
 
             await push_file("filly-bot", "bot.py", filly_code,
                             f"feat: add external bot {bot_display} to routing")
-            await redeploy_service("5d61d403-feee-455e-9c0d-523f0e7c79d5")
-            await reply_func("✅ Филли обновлён и задеплоен")
+            _dep_ok = await redeploy_and_verify("5d61d403-feee-455e-9c0d-523f0e7c79d5", "filly-bot")
+            await reply_func("✅ Филли обновлён и задеплоен" if _dep_ok
+                             else "⚠️ Филли обновлён, но деплой не подтверждён (алерт в личке)")
         except Exception as e:
             await reply_func(f"⚠️ Ошибка обновления Филли: {e}")
 
@@ -4117,7 +4353,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
 
 Доступные действия:
 - read_file: {"action":"read_file","repo":"...","path":"..."}
-- push_file: {"action":"push_file","repo":"...","path":"...","content":"...","message":"..."}
+- push_file: {"action":"push_file","repo":"...","path":"...","content":"...","message":"..."} — правка НЕ идёт в main напрямую: она валидируется (пины/усадка) и открывается PR на ревью Владу; деплой будет только после мержа. Не жди мгновенного деплоя и не повторяй push.
 - check_var: {"action":"check_var","service":"billy-bot","name":"REDIS_PROXY_TOKEN","expected":"опц. ожидаемая строка"} — читает переменную окружения сервиса в Railway (значение вернётся ЗАМАСКИРОВАННЫМ)
 - railway_logs: {"action":"railway_logs","service":"billy-bot","lines":30} — последние строки логов последнего деплоя сервиса в Railway (lines ≤ 100)
 - send_message: {"action":"send_message","chat_id":-5194783850,"text":"..."} — в ОФИС ГРУППУ (-5194783850)
@@ -4221,9 +4457,13 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                 a_path = action_data.get("path", "")
                 a_content = action_data.get("content", "")
                 a_message = action_data.get("message", "agentic update")
+                # Дефект 1+2: автономный пуш идёт через валидацию + ветку/PR, не в main напрямую.
                 try:
-                    await push_file(a_repo, a_path, a_content, a_message)
-                    steps_log.append({"action": f"push_file({a_repo}/{a_path})", "result": "OK"})
+                    a_status = await safe_autonomous_push(
+                        a_repo, a_path, a_content, a_message,
+                        reply_func=None, silent=True,
+                    )
+                    steps_log.append({"action": f"push_file({a_repo}/{a_path})", "result": a_status})
                 except Exception as e:
                     steps_log.append({"action": f"push_file({a_repo}/{a_path})", "result": f"ERROR: {e}"})
 
@@ -4984,8 +5224,8 @@ async def _apply_pending_action(entry: dict) -> str:
                 payload["repo"], payload["affected"], payload["fixed_code"],
                 f"approved fix({payload['service_name']}): {analysis.get('fix_description','')[:60]}",
             )
-            redeployed = await redeploy_service(payload["service_id"])
-            status = "редеплой запущен ✅" if redeployed else "редеплой не удался ⚠️"
+            redeployed = await redeploy_and_verify(payload["service_id"], payload.get("service_name", ""))
+            status = "деплой SUCCESS ✅" if redeployed else "деплой не подтверждён ⚠️ (см. алерт в личке)"
             asyncio.create_task(append_ops_log(
                 f"approved fix: {analysis.get('fix_description','')[:60]}",
                 payload["service_name"], f"approved by Влад | {status}",
@@ -5596,9 +5836,61 @@ async def _handle_cilly_task_inner(data):
         responses.append(status)
         return web.json_response({"status": "ok", "responses": responses})
 
-    await handle_natural_language(f"[{agent}] {text}", int(chat_id) if chat_id else 0, collect, silent=silent,
-                                  repo_override=payload_repo, file_path_override=payload_file)
-    return web.json_response({"status": "ok", "responses": responses})
+    # Дефект 3: задача выполняется В ФОНЕ, ответ отдаём сразу (202 accepted).
+    # Раньше весь агентный цикл шёл ДО web.json_response → длинные задачи (>30-40с)
+    # рвали вызывающего по таймауту, хотя задача принята и делается. Теперь:
+    # ACK + task_id, а финал кладём в Redis office:task:<id> (опрос GET /task/{id})
+    # и при silent (source=CLAUDE) шлём финал в личку Владу.
+    task_id = _uuid_mod.uuid4().hex[:12]
+
+    async def _run_task_bg():
+        result_status = "done"
+        try:
+            await handle_natural_language(
+                f"[{agent}] {text}", int(chat_id) if chat_id else 0, collect,
+                silent=silent, repo_override=payload_repo, file_path_override=payload_file,
+            )
+        except Exception as bg_e:
+            result_status = "error"
+            responses.append(f"❌ Ошибка выполнения: {bg_e}")
+            logger.error(f"/task bg {task_id} failed: {bg_e}")
+        final = {"status": result_status, "task_id": task_id,
+                 "responses": responses, "ts": time.time()}
+        try:
+            r_cl = await get_redis()
+            if r_cl:
+                await r_cl.set(f"office:task:{task_id}",
+                               json.dumps(final, ensure_ascii=False), ex=3600)
+        except Exception as store_e:
+            logger.error(f"/task bg {task_id} redis store failed: {store_e}")
+        # source=CLAUDE (silent) → в чат ничего не шло; финал адресно в личку Владу.
+        if silent and responses:
+            tail = "\n".join(str(x) for x in responses)[-3000:]
+            await _escalate_vlad(f"✅ Задача Силли завершена ({task_id}):\n{tail}")
+
+    asyncio.create_task(_run_task_bg())
+    return web.json_response(
+        {"status": "accepted", "task_id": task_id,
+         "poll": f"/task/{task_id}"},
+        status=202,
+    )
+
+
+async def handle_task_status(request):
+    """GET /task/{id} — статус/результат фоновой задачи из Redis office:task:<id>."""
+    task_id = request.match_info.get("id", "")
+    try:
+        r_cl = await get_redis()
+        raw = await r_cl.get(f"office:task:{task_id}") if r_cl else None
+    except Exception as e:
+        return web.json_response({"status": "error", "detail": str(e)}, status=200)
+    if not raw:
+        # Ещё выполняется (или истёк TTL / неизвестен) — 202, чтобы клиент опрашивал.
+        return web.json_response({"status": "pending", "task_id": task_id}, status=202)
+    try:
+        return web.json_response(json.loads(raw), status=200)
+    except Exception:
+        return web.json_response({"status": "done", "task_id": task_id, "raw": raw}, status=200)
 
 
 
@@ -6037,6 +6329,7 @@ async def main():
     # HTTP server for Filly routing (office RPC auth via middleware — Layer 1/2)
     app = web.Application(middlewares=[office_auth_middleware])
     app.router.add_post("/task", handle_cilly_task)
+    app.router.add_get("/task/{id}", handle_task_status)   # Дефект 3: опрос статуса фоновой задачи
     app.router.add_get("/secrets", handle_secrets)
     app.router.add_post("/post_raw", handle_post_raw)
     app.router.add_post("/promote_bots", handle_promote_bots)

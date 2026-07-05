@@ -142,6 +142,32 @@ async def get_default_branch_sha(repo: str, branch: str = "main") -> str:
     return r.json()["object"]["sha"]
 
 
+async def commit_exists(repo: str, ref: str) -> bool:
+    """True, если коммит/ссылка ref реально существует в репо unperson22-alt/{repo}.
+
+    Используется для валидации git+…@<sha> пинов в requirements.txt перед пушем:
+    несуществующий SHA (например HEAD ЧУЖОГО репо) → build FAILED на pip install.
+    GET /repos/{owner}/{repo}/commits/{ref}: 200 = есть, 404/422 = нет.
+    При сетевой/иной ошибке НЕ подтверждаем существование (возвращаем False) —
+    гейт должен быть fail-closed, чтобы битый пин не проскочил.
+    """
+    if not GITHUB_TOKEN:
+        raise EnvironmentError("GITHUB_TOKEN не задан")
+    url = f"{BASE_URL}/repos/{GITHUB_USER}/{repo}/commits/{ref}"
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+            r = await c.get(url, headers=HEADERS)
+        if r.status_code == 200:
+            return True
+        if r.status_code in (404, 422):
+            return False
+        logger.warning(f"commit_exists({repo}@{ref}): неожиданный статус {r.status_code}")
+        return False
+    except Exception as e:
+        logger.warning(f"commit_exists({repo}@{ref}) ошибка сети: {e}")
+        return False
+
+
 async def create_branch(repo: str, branch_name: str, from_branch: str = "main") -> str:
     """
     Создаёт новую ветку от from_branch.
