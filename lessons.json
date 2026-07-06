@@ -54,5 +54,12 @@
     "root_cause": "Строки нет ни в одном репо — её шлёт Cloudflare Worker-прокси ai-office-proxy.unperson22.workers.dev перед вебхуком Филли (токеном Филли), когда не получает быстрый ответ. Вебхук filly-bot обрабатывал апдейт синхронно (await process_update: роутинг + до 25с ожидания агента) до ответа ok → прокси ловил таймаут и постил «техработы», а Филли всё равно дороутивала. Редеплой не помогал, т.к. в коде строки нет. Диагностический тупик был из-за того, что не искали за пределами бот-кода (прокси на Cloudflare, не в git).",
     "solution": "filly-bot PR #4: вебхук отвечает ok мгновенно, process_update уходит в asyncio.create_task (best-practice Telegram). Прокси больше не таймаутит. Деплой SUCCESS, старт в webhook-режиме подтверждён логами.",
     "preventive_measure": "Вебхук-хендлеры ВСЕГДА отвечают мгновенно, тяжёлую обработку — в фон. Если симптом-строки нет в коде — искать во фронт-прокси/воркерах/инфре, а не только в репозиториях. Держать исходник ai-office-proxy воркера в git."
+  },
+  {
+    "date": "2026-07-06",
+    "issue": "Гослинг отвечал в офис-группе только «...» на каждое сообщение (после того как фикс вебхука и privacy off оживили команду).",
+    "root_cause": "gosling-bot/bot.py:35 — async _anthropic_call делал ol = await _try_ollama(...), но общий ai_office_shared.shared.ollama.try_ollama СИНХРОННЫЙ (def, httpx.Client). await на несопрограмме → TypeError «object NoneType can't be used in await expression» на каждом ответе → generate_response уходил в except и возвращал «...». billy/kriss зовут try_ollama без await (правильно); coder.py await'ит свой ЛОКАЛЬНЫЙ async _try_ollama (там ок).",
+    "solution": "gosling PR #5: убрать await (ol = _try_ollama(...)). Деплой SUCCESS, в логах нового билда generate_response error отсутствует.",
+    "preventive_measure": "Единый общий try_ollama синхронный — вызывать без await во всех ботах. При копировании LLM-обёртки между sync/async ботами сверять await у _try_ollama. Силли ложно закрыла это как «урок #6 / действий не требуется» — её lesson-gating нельзя доверять диагностику по одному совпадению текста ошибки."
   }
 ]
