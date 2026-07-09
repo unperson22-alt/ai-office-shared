@@ -3819,7 +3819,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
     elif intent == "trader_winrate":
         """Винрейт трейдера: читает signals:list/signal:* и считает TP/SL по 1h-свечам.
 
-        Свечи берём фолбэк-цепочкой binance→bybit→okx (BingX пропускаем — гео-бан IP).
+        Свечи берём фолбэк-цепочкой binance→okx (BingX пропускаем — гео-бан IP).
         Закрытие консервативное: если в одной свече задеты и TP, и SL — считаем SL.
         Отдаёт WR за 7 дней и за всё время + краткую разбивку.
         """
@@ -3849,16 +3849,6 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                         rows = [(int(k[0]), float(k[2]), float(k[3])) for k in (resp.json() or [])]
                 except Exception:
                     rows = []
-                if len(rows) < 20:
-                    try:
-                        resp = await c.get("https://api.bybit.com/v5/market/kline",
-                                           params={"category": "linear", "symbol": concat,
-                                                   "interval": "60", "limit": 1000})
-                        if resp.status_code == 200:
-                            lst = ((resp.json().get("result") or {}).get("list")) or []
-                            rows = [(int(k[0]), float(k[2]), float(k[3])) for k in lst]
-                    except Exception:
-                        pass
                 if len(rows) < 20:
                     try:
                         resp = await c.get("https://www.okx.com/api/v5/market/candles",
