@@ -817,7 +817,7 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
 
 
 INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
-{"intent":"push_code|fix_bot|create_bot|create_cron|add_external_bot|get_bot_token|deploy|read_file|list_files|redis_query|trader_winrate|dev_task|delegate|update_bot_instruction|answer","repo":"repo_name_or_null","path":"file_path_or_null","task":"task_description","bot":"имя_бота_или_null","instruction":"текст_инструкции_или_null","mode":"append|set|clear","confidence":0.0-1.0}
+{"intent":"push_code|fix_bot|create_bot|create_cron|add_external_bot|get_bot_token|deploy|read_file|list_files|redis_query|trader_winrate|dev_task|delegate|update_bot_instruction|office_scan|answer","repo":"repo_name_or_null","path":"file_path_or_null","task":"task_description","bot":"имя_бота_или_null","instruction":"текст_инструкции_или_null","mode":"append|set|clear","confidence":0.0-1.0}
 
 ГЛАВНОЕ ПРАВИЛО — различай вопрос и команду:
 - ВОПРОС о процессе ("как создать бота?", "что нужно для деплоя?", "какой стек?", "как задеплоить?", "с чего начать?") → intent=answer
@@ -825,7 +825,7 @@ INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
 Сигналы вопроса: как, какой, какие, что такое, зачем, почему, расскажи, объясни, с чего начать, какие шаги
 Сигналы команды: создай, сделай, залей, задеплой, исправь, добавь, зарегистрируй
 
-push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не расписание!), create_cron=создать расписание/напоминание/cron для пользователя ("напоминай каждый день", "отправляй каждое утро", "напоминалка в X время") — создаёт Railway cron-сервис, add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon, cleanup_dm=удалить сообщения с ключами/секретами в личке (gsk_, GROQ, токен) через Telethon — ищет в диалоге с user_id=int(BOT_TOKEN.split(':')[0]) (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), edit_file=точечная замена строки в файле без чтения всего файла (сигналы: замени в файле, вставь после строки, patch, добавь в начало функции — когда указан repo+path+old+new), agentic_task=многошаговая задача из 2+ шагов: читай+делай, исправь+задеплой, залей+проверь, прочитай+перепиши. Сигналы: исправь и задеплой, залей код и задеплой, прочитай X и отправь, прочитай X и перепиши, пройдись по всем, для каждого, рефакторинг, аудит. ВАЖНО: если задача содержит И (исправить код И задеплоить) — это agentic_task. При чтении большого файла (bot.py 800+ строк) — не читать целиком в цикле, читать один раз и искать нужную функцию по имени, dev_task=делегировать задачу КОМАНДЕ разработки (Девви→Рикки→Тести→Секки→Скрибби). ТОЛЬКО когда речь о новой фиче/модуле/компоненте для продукта — НЕ о правке одного файла. Требует ВЫСОКОЙ уверенности (confidence>=0.85). Чёткие сигналы: "реализуй фичу", "разработай модуль", "напиши новый компонент", "сделай PR для", "задача для команды", "отдай команде", "dev-dept", "через цепочку". НЕЯСНЫЙ запрос ("сделай что-нибудь", "напиши функцию" без контекста) → confidence<0.85 → Силли переспрашивает. Если задача про правку существующего файла/бота — это push_code или agentic_task, НЕ dev_task. delegate=поручить задачу ГЛАВЕ ОТДЕЛА и проверить результат (НЕ написание кода). Сигналы: "спроси у Тилли", "пусть Милли посчитает", "делегируй Доктору", "поручи отделу", "узнай у <бот>". Заполни "bot" именем отдела. confidence>=0.85, иначе Силли переспросит. update_bot_instruction=изменить поведение бота на лету через инструкцию в системном промпте (БЕЗ редеплоя). Сигналы: "научи <бота>", "пусть <бот> всегда/больше не", "добавь <боту> правило", "обнови инструкцию <бота>", "запомни для <бота>". Заполни "bot" (кого учим), "instruction" (что добавить), "mode" (append по умолчанию; set=заменить; clear=сбросить). answer=ответить словами.
+push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не расписание!), create_cron=создать расписание/напоминание/cron для пользователя ("напоминай каждый день", "отправляй каждое утро", "напоминалка в X время") — создаёт Railway cron-сервис, add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon, cleanup_dm=удалить сообщения с ключами/секретами в личке (gsk_, GROQ, токен) через Telethon — ищет в диалоге с user_id=int(BOT_TOKEN.split(':')[0]) (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), edit_file=точечная замена строки в файле без чтения всего файла (сигналы: замени в файле, вставь после строки, patch, добавь в начало функции — когда указан repo+path+old+new), agentic_task=многошаговая задача из 2+ шагов: читай+делай, исправь+задеплой, залей+проверь, прочитай+перепиши. Сигналы: исправь и задеплой, залей код и задеплой, прочитай X и отправь, прочитай X и перепиши, пройдись по всем, для каждого, рефакторинг, аудит. ВАЖНО: если задача содержит И (исправить код И задеплоить) — это agentic_task. При чтении большого файла (bot.py 800+ строк) — не читать целиком в цикле, читать один раз и искать нужную функцию по имени, dev_task=делегировать задачу КОМАНДЕ разработки (Девви→Рикки→Тести→Секки→Скрибби). ТОЛЬКО когда речь о новой фиче/модуле/компоненте для продукта — НЕ о правке одного файла. Требует ВЫСОКОЙ уверенности (confidence>=0.85). Чёткие сигналы: "реализуй фичу", "разработай модуль", "напиши новый компонент", "сделай PR для", "задача для команды", "отдай команде", "dev-dept", "через цепочку". НЕЯСНЫЙ запрос ("сделай что-нибудь", "напиши функцию" без контекста) → confidence<0.85 → Силли переспрашивает. Если задача про правку существующего файла/бота — это push_code или agentic_task, НЕ dev_task. delegate=поручить задачу ГЛАВЕ ОТДЕЛА и проверить результат (НЕ написание кода). Сигналы: "спроси у Тилли", "пусть Милли посчитает", "делегируй Доктору", "поручи отделу", "узнай у <бот>". Заполни "bot" именем отдела. confidence>=0.85, иначе Силли переспросит. update_bot_instruction=изменить поведение бота на лету через инструкцию в системном промпте (БЕЗ редеплоя). Сигналы: "научи <бота>", "пусть <бот> всегда/больше не", "добавь <боту> правило", "обнови инструкцию <бота>", "запомни для <бота>". Заполни "bot" (кого учим), "instruction" (что добавить), "mode" (append по умолчанию; set=заменить; clear=сбросить). office_scan=самопроверка офиса по команде владельца: просканировать боты на ошибки и предложить фиксы (каждый уходит на /approve). Сигналы: "проверь офис", "просканируй ботов", "что сломалось", "самопроверка", "проверь всех ботов", "почини <бот>" (тогда заполни "bot"). Свип НЕ применяет фиксы сам — только предлагает. answer=ответить словами.
 ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis" → redis_query.
 ВАЖНО trader_winrate: "винрейт трейдера", "посчитай winrate", "проверь винрейт сигналов", "какой winrate у трейдера", "винрейт по сигналам", "статистика трейдера WR" → trader_winrate (читает signals:list/signal:* трейдера, считает WR по свечам, отдаёт за 7 дней и за всё время).
 ВАЖНО: "подключить бота", "добавить чужого бота" → add_external_bot, НЕ create_bot.
@@ -1388,6 +1388,58 @@ async def generate_fix(source_code: str, fix_description: str) -> str:
     return await ask_claude(prompt, system=FIXER_PROMPT, model="claude-opus-4-6")
 
 
+# ── Генератор точной задачи для dev-команды ─────────────────────────────────
+# Причина, почему «команда тупит»: пайплайн Девви→Рикки работает ровно настолько
+# хорошо, насколько точна постановка. Свободная формулировка «исправь баг» даёт
+# размытый результат и лишние NEEDS_FIX-циклы. Этот хелпер превращает диагноз в
+# claude-grade атомарную спеку (по CLAUDE_WORK_PROTOCOL: один файл, точное место,
+# симптом→причина→что изменить→ожидаемый результат→критерий приёмки).
+PRECISE_TASK_PROMPT = """Ты — техлид, ставишь задачу джуну-кодеру для параллельной dev-команды.
+На входе диагноз бага и исходный код одного файла. Верни ОДНУ атомарную задачу текстом (без markdown-заголовков),
+строго по структуре и по-русски:
+
+ФАЙЛ: <repo>/<path> (ровно один файл)
+СИМПТОМ: <что наблюдается, 1 строка>
+КОРНЕВАЯ ПРИЧИНА: <точное место — функция/строка/условие — и почему ломается>
+ЧТО ИЗМЕНИТЬ: <минимальная правка: какую функцию/блок и как; одно логическое изменение>
+ОЖИДАЕМЫЙ РЕЗУЛЬТАТ: <как ведёт себя код после фикса>
+КРИТЕРИЙ ПРИЁМКИ: <проверяемое условие: компилируется, симптом исчез, легаси не сломано>
+ВЕРНИ: полный исправленный файл целиком, минимум изменений, ничего не выбрасывая.
+
+Правила: не выдумывай места, которых нет в коде; если причина не локализуется однозначно —
+укажи наиболее вероятную функцию по симптому. Никаких TODO/заглушек. Только сам текст задачи."""
+
+
+async def build_precise_dev_task(analysis: dict, source_code: str, repo: str, affected: str) -> str:
+    """Строит точную атомарную постановку задачи для dev-команды из диагноза.
+    Fail-silent: при любой ошибке возвращает базовую формулировку (без регресса)."""
+    service = analysis.get("affected_file") or f"{repo}/{affected}"
+    description = analysis.get("description", "")
+    fix_desc = analysis.get("fix_description", "")
+    fallback = (
+        f"Исправь баг в {repo}/{affected}.\n"
+        f"Симптом: {description}\n"
+        f"Что нужно сделать: {fix_desc}\n"
+        f"Верни ПОЛНЫЙ исправленный файл целиком, минимум изменений."
+    )
+    try:
+        prompt = (
+            f"repo/path: {repo}/{affected}\n"
+            f"Диагноз: {json.dumps(analysis, ensure_ascii=False)}\n\n"
+            f"Исходный код файла:\n{source_code[:16000]}"
+        )
+        spec = await ask_claude(prompt, system=PRECISE_TASK_PROMPT,
+                                model="claude-sonnet-4-6")
+        spec = (spec or "").strip()
+        # Санити: спека должна быть содержательной и упоминать файл — иначе фолбэк.
+        if len(spec) >= 60 and ("ФАЙЛ" in spec or affected in spec):
+            return spec
+        return fallback
+    except Exception as e:
+        logger.warning(f"build_precise_dev_task fallback: {e}")
+        return fallback
+
+
 # ── Lesson & notifications ─────────────────────────────────────────────────────
 BUG_LESSONS_CHAT = -5197140411  # Telegram-группа Bug Lessons — единая точка публикации уроков
 
@@ -1516,8 +1568,18 @@ async def notify_office(text: str):
 
 
 # ── Auto-fix pipeline ──────────────────────────────────────────────────────────
-async def handle_bug(service_id: str, service_name: str, repo: str, main_file: str, analysis: dict):
-    """Основная логика: автофикс или запрос подтверждения."""
+async def handle_bug(service_id: str, service_name: str, repo: str, main_file: str,
+                     analysis: dict, *, proposal_chat_id: int = 0) -> dict:
+    """Основная логика: автофикс или запрос подтверждения.
+
+    proposal_chat_id: куда слать предложение с кнопками. 0 → офис-группа (автономный
+    monitor_loop/аудит, поведение по умолчанию). При явной команде владельца
+    (/office scan|fix) сюда передаётся его чат, чтобы находка и /approve пришли туда.
+
+    Возвращает dict-итог для консолидированного отчёта свипа:
+    {"bot", "status": proposed|blocked|blocked_decision|error, "pending_id"?, "symptom", "fix_desc"?}.
+    Существующие вызыватели (monitor_loop, аудит) значение игнорируют.
+    """
     confidence  = analysis.get("confidence", "low")
     description = analysis.get("description", "")
     fix_desc    = analysis.get("fix_description", "")
@@ -1534,13 +1596,15 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
                 f"Причина: {blocked['because']}"
             )
             logger.info(f"[decisions] fix blocked by {blocked['id']} for {service_name}")
-            return
+            return {"bot": service_name, "status": "blocked_decision",
+                    "symptom": blocked.get("do_not", "")}
 
     try:
         source_code = await read_file(repo, affected)
     except Exception as e:
         logger.error(f"Can't read {repo}/{affected}: {e}")
-        return
+        return {"bot": service_name, "status": "error",
+                "symptom": f"не смог прочитать {repo}/{affected}: {e}"}
 
     # ── Фикс генерит НЕ соло-Opus, а параллельная команда dev-dept с ревью ──
     # Девви → [Рикки ‖ Тести ‖ Секки] → Скрибби. Предложение в офис уходит
@@ -1559,12 +1623,9 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
         status="in_progress", task_id=_task_id,
     ) or _task_id
 
-    devvy_task = (
-        f"Исправь баг в боте {service_name} ({repo}/{affected}).\n"
-        f"Симптом: {description}\n"
-        f"Что нужно сделать: {fix_desc}\n"
-        f"Верни ПОЛНЫЙ исправленный файл целиком, минимум изменений."
-    )
+    # Точная спека для команды (claude-grade): атомарная, один файл, симптом→причина→
+    # что изменить→ожидаемый результат→критерий приёмки. Fail-silent → базовая формулировка.
+    devvy_task = await build_precise_dev_task(analysis, source_code, repo, affected)
 
     MAX_DEV_ATTEMPTS = 3
     final_code = ""
@@ -1641,8 +1702,10 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
             f"🧪 Тести: {_testi or '—'}\n"
             f"🔐 Секки: {_sekky or '—'}\n\n"
             f"Применить? (или текстом: /approve {fix_id})",
-            "pg", fix_id, chat_id=0,  # автономно → офис-группа
+            "pg", fix_id, chat_id=proposal_chat_id,  # 0 → офис-группа; иначе чат владельца
         )
+        return {"bot": service_name, "status": "proposed", "pending_id": fix_id,
+                "symptom": description, "fix_desc": fix_desc}
     else:
         # Гейт НЕ пройден — НЕ предлагаем неотревьюенный код, эскалируем владельцу.
         await tb.update_status(r_tb, board_id, "blocked",
@@ -1652,6 +1715,8 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
             f"не дала код, прошедший ревью. Нужен твой разбор.\n"
             f"Симптом: {description[:160]}\nПричина провала: {retry_feedback[:200]}"
         )
+        return {"bot": service_name, "status": "blocked",
+                "symptom": description, "fix_desc": fix_desc}
 
 
 # ── Monitor loop ───────────────────────────────────────────────────────────────
@@ -2307,6 +2372,267 @@ async def run_daily_audit() -> str:
     status_icon = "🟢" if not deploy_fail and not health_fail and not error_services else "🟡"
     lines.append(f"{status_icon} Статус офиса: {'НОРМА' if status_icon == '🟢' else 'ТРЕБУЕТ ВНИМАНИЯ'}")
 
+    return "\n".join(lines)
+
+
+# ── Самообслуживание: инбокс находок + свип по команде владельца ─────────────
+# Поверх ежедневного аудита: владелец в ЛЮБОЙ момент говорит «проверь офис» /
+# «почини <бот>», получает единый отчёт, где каждый наш баг уже застейджен как
+# pending-фикс (через тот же командный гейт handle_bug) и ждёт /approve. Свип
+# НИЧЕГО не применяет сам — только детект + предложение. Это прямой ответ на
+# «команда тупит»: детект теперь on-demand, а не только раз в 5 мин / в аудит.
+FINDINGS_KEY = "office:findings"
+FINDINGS_MAX = 100
+FINDINGS_TTL = 7 * 24 * 3600
+
+
+async def add_finding(finding: dict) -> None:
+    """Пишет находку свипа в инбокс (LPUSH+LTRIM+EXPIRE, контракт как у routing:misses)."""
+    r = await get_redis()
+    if not r:
+        return
+    try:
+        entry = {
+            "id": _uuid_mod.uuid4().hex[:8],
+            "bot": finding.get("bot", "?"),
+            "symptom": (finding.get("symptom", "") or "")[:300],
+            "pending_id": finding.get("pending_id", ""),
+            "status": finding.get("status", "open"),
+            "ts": int(time.time()),
+        }
+        await r.lpush(FINDINGS_KEY, json.dumps(entry, ensure_ascii=False))
+        await r.ltrim(FINDINGS_KEY, 0, FINDINGS_MAX - 1)
+        await r.expire(FINDINGS_KEY, FINDINGS_TTL)
+    except Exception as e:
+        logger.debug(f"add_finding failed: {e}")
+
+
+async def read_findings(limit: int = 20) -> list[dict]:
+    r = await get_redis()
+    if not r:
+        return []
+    try:
+        raw = await r.lrange(FINDINGS_KEY, 0, limit - 1)
+        out = []
+        for x in raw:
+            try:
+                out.append(json.loads(x))
+            except Exception:
+                continue
+        return out
+    except Exception:
+        return []
+
+
+async def mark_finding(pending_id: str, status: str) -> None:
+    """Помечает открытую находку с данным pending_id (applied/skipped).
+    Переписывает список, сохраняя порядок (newest-first). Вызывается из /approve, /skip, кнопок."""
+    if not pending_id:
+        return
+    r = await get_redis()
+    if not r:
+        return
+    try:
+        raw = await r.lrange(FINDINGS_KEY, 0, -1)
+        out, changed = [], False
+        for x in raw:
+            try:
+                d = json.loads(x)
+            except Exception:
+                out.append(x)
+                continue
+            if d.get("pending_id") == pending_id and d.get("status") == "open":
+                d["status"] = status
+                changed = True
+                out.append(json.dumps(d, ensure_ascii=False))
+            else:
+                out.append(x)
+        if changed:
+            pipe = r.pipeline()
+            pipe.delete(FINDINGS_KEY)
+            if out:
+                pipe.rpush(FINDINGS_KEY, *out)
+                pipe.expire(FINDINGS_KEY, FINDINGS_TTL)
+            await pipe.execute()
+    except Exception as e:
+        logger.debug(f"mark_finding failed: {e}")
+
+
+def _resolve_scan_target(raw: str) -> str:
+    """Имя/алиас бота → repo из SERVICES. '' если не распознан."""
+    raw = (raw or "").strip().lower()
+    repos = {r for _, (r, _) in SERVICES.items()}
+    if raw in repos:
+        return raw
+    if f"{raw}-bot" in repos:
+        return f"{raw}-bot"
+    try:
+        from ai_office_shared.shared.identity import canonical, BOTS
+        canon = canonical(raw)
+        if canon and canon in BOTS:
+            repo = BOTS[canon].get("repo", "")
+            if repo in repos:
+                return repo
+    except Exception:
+        pass
+    for r in repos:
+        if raw and (raw in r or r.split("-")[0] == raw):
+            return r
+    return ""
+
+
+async def _run_office_scan(target: str = "", *, proposal_chat_id: int = 0) -> dict:
+    """On-demand свип офиса: детект → классификация → (наш баг) предложение фикса.
+
+    target — repo одного бота ('gosling-bot') или '' для всех сервисов из SERVICES.
+    proposal_chat_id — куда слать предложение с кнопками (0 → офис-группа).
+    Переиспользует существующий конвейер (IGNORE/ERROR_PATTERNS, classify_fault,
+    search_lessons, analyze_logs, handle_bug). Ничего не применяет сам.
+    Каждый бот в отдельном try/except: сбой ОДНОЙ проверки ≠ падение всего свипа
+    (урок #1 — «не смог проверить» ≠ «сломано»)."""
+    railway_ok = await _railway_is_available()
+    result = {"healthy": [], "external": [], "known": [],
+              "proposed": [], "blocked": [], "errors": []}
+    for sid, (repo, main_file) in SERVICES.items():
+        if target and repo != target:
+            continue
+        try:
+            logs = await get_service_logs(sid) if railway_ok else await get_service_logs_via_redis(repo)
+            if not logs:
+                result["healthy"].append(repo)
+                continue
+            error_lines = [ln for ln in logs
+                           if any(ep in ln for ep in ERROR_PATTERNS)
+                           and not any(ip in ln for ip in IGNORE_PATTERNS)]
+            if not error_lines:
+                result["healthy"].append(repo)
+                continue
+            if classify_fault(error_lines) == "external":
+                result["external"].append(repo)
+                continue
+            known = await search_lessons(error_lines)
+            if known.get("match") and str(known.get("confidence", "")).lower() == "high":
+                result["known"].append(f"{repo} (lesson #{known.get('lesson_id')})")
+                continue
+            source_code = await read_file(repo, main_file)
+            analysis = await analyze_logs(repo, error_lines, source_code)
+            if not analysis.get("is_bug") or analysis.get("bug_type") == "external":
+                (result["external"] if analysis.get("bug_type") == "external"
+                 else result["healthy"]).append(repo)
+                continue
+            outcome = await handle_bug(sid, repo, repo, main_file, analysis,
+                                       proposal_chat_id=proposal_chat_id) or {}
+            st = outcome.get("status")
+            if st == "proposed":
+                await add_finding(outcome)
+                result["proposed"].append(outcome)
+            elif st in ("blocked", "blocked_decision"):
+                result["blocked"].append(outcome)
+            else:
+                result["errors"].append({"bot": repo, "symptom": outcome.get("symptom", "?")})
+        except Exception as e:
+            logger.error(f"[office_scan] {repo}: {e}")
+            result["errors"].append({"bot": repo, "symptom": f"сбой проверки: {e}"})
+    return result
+
+
+def _format_scan_report(result: dict, *, target: str = "") -> str:
+    import datetime as _dt
+    ts = _dt.datetime.now(_dt.timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+    scope = f"бот {target}" if target else "весь офис"
+    lines = [f"🔎 Самопроверка офиса ({scope}) — {ts}\n"]
+    prop = result.get("proposed", [])
+    blocked = result.get("blocked", [])
+    if prop:
+        lines.append(f"🛠 Наши баги — предложены фиксы ({len(prop)}), подтверди /approve:")
+        for f in prop:
+            lines.append(f"  • {f['bot']}: {(f.get('symptom') or '')[:120]}")
+            lines.append(f"     ↳ /approve {f.get('pending_id')}   (или ⏭ /skip {f.get('pending_id')})")
+    if blocked:
+        lines.append(f"\n⛔ Наши баги — команда не дала чистый код за 3 попытки ({len(blocked)}), нужен разбор:")
+        for f in blocked:
+            lines.append(f"  • {f['bot']}: {(f.get('symptom') or '')[:120]}")
+    if result.get("known"):
+        lines.append(f"\n📚 Известные (в уроках, не чиним заново): {', '.join(result['known'])}")
+    if result.get("external"):
+        lines.append(f"\n🌐 Внешние/сетевые сбои (не наш баг, пропущены): {', '.join(result['external'])}")
+    if result.get("errors"):
+        lines.append("\n⚠️ Проверка не удалась: " + ", ".join(e["bot"] for e in result["errors"]))
+    healthy = result.get("healthy", [])
+    if healthy:
+        lines.append(f"\n🟢 Здоровы ({len(healthy)}): {', '.join(healthy)}")
+    if not prop and not blocked:
+        lines.append("\n✅ Наших багов, требующих фикса, не найдено.")
+    return "\n".join(lines)
+
+
+async def _office_status_snapshot() -> str:
+    r = await get_redis()
+    if not r:
+        return "❌ Redis недоступен"
+    lines = ["📊 Статус офиса\n"]
+    try:
+        up = down = 0
+        async for key in r.scan_iter("office:health:*"):
+            v = await r.get(key)
+            if v == "up":
+                up += 1
+            elif v == "down":
+                down += 1
+        lines.append(f"❤️ Health: {up} up / {down} down")
+    except Exception:
+        pass
+    try:
+        bad = []
+        async for key in r.scan_iter("office:quality:*"):
+            d = await r.hgetall(key)
+            u, dn = int(d.get("up", 0)), int(d.get("down", 0))
+            if dn >= 5 and dn > u:
+                bad.append(f"{key.split(':')[-1]} 👎{dn}/👍{u}")
+        lines.append("👎 Качество (проблемные): " + (", ".join(bad) if bad else "нет"))
+    except Exception:
+        pass
+    try:
+        from collections import Counter
+        raw = await r.lrange("office:routing:misses", 0, 99)
+        c = Counter()
+        for m in raw:
+            try:
+                c[json.loads(m).get("agent", "?")] += 1
+            except Exception:
+                pass
+        top = ", ".join(f"{a}:{n}" for a, n in c.most_common(3)) if c else "нет"
+        lines.append(f"🧭 Routing-миссы (топ): {top}")
+    except Exception:
+        pass
+    try:
+        all_tasks = await tb.list_tasks(r, limit=200)
+        active = [t for t in all_tasks
+                  if t.get("status") in ("in_progress", "needs_fix", "blocked", "awaiting_approval")]
+        lines.append(f"📋 Активных задач: {len(active)}")
+    except Exception:
+        pass
+    try:
+        fs = await read_findings(50)
+        openf = [f for f in fs if f.get("status") == "open"]
+        lines.append(f"🔎 Открытых находок: {len(openf)} (см. /office inbox)")
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
+async def _office_inbox_text() -> str:
+    fs = await read_findings(30)
+    openf = [f for f in fs if f.get("status") == "open" and f.get("pending_id")]
+    if not openf:
+        return "🔎 Инбокс пуст — открытых находок с ожидающим фиксом нет."
+    lines = ["🔎 Открытые находки (подтверди /approve id или отклони /skip id):\n"]
+    for f in openf:
+        lines.append(f"• {f['bot']}: {(f.get('symptom') or '')[:120]}")
+        lines.append(f"   ↳ /approve {f['pending_id']}   /skip {f['pending_id']}")
+    done = [f for f in fs if f.get("status") in ("applied", "skipped")]
+    if done:
+        lines.append(f"\n(закрыто недавно: {len(done)})")
     return "\n".join(lines)
 
 
@@ -3339,6 +3665,22 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             answer = await ask_claude(message_text, system=answer_system, model="claude-sonnet-4-6")
         await reply_func(answer)
 
+
+    elif intent == "office_scan":
+        # Самопроверка офиса по явной команде. Предложения с кнопками уходят в чат
+        # инициатора (proposal_chat_id из HTTP /task, иначе текущий chat_id).
+        bot_arg = intent_data.get("bot") or ""
+        target = _resolve_scan_target(bot_arg) if bot_arg else ""
+        pcid = proposal_chat_id or chat_id or 0
+        if bot_arg and not target:
+            known = ", ".join(sorted({r for _, (r, _) in SERVICES.items()}))
+            await reply_func(f"Не знаю бота «{bot_arg}». Доступные репо: {known}")
+            return
+        await reply_func(
+            f"🔎 Запускаю самопроверку {'бота ' + target if target else 'офиса'}… (1–2 мин)"
+        )
+        result = await _run_office_scan(target=target, proposal_chat_id=pcid)
+        await reply_func(_format_scan_report(result, target=target))
 
     elif intent == "redis_query":
         """Выполняет реальные Redis операции — scan, get, hgetall, custom audit."""
@@ -5314,7 +5656,58 @@ async def cmd_approve(message: Message):
     label = entry.get("title") or entry.get("type", "действие")
     await message.answer(f"⏳ Применяю: {label}...")
     status = await _apply_pending_action(entry)
+    await mark_finding(action_id, "applied")
     await message.answer(status)
+
+
+@dp.message(F.text.startswith("/office"))
+async def cmd_office(message: Message):
+    """Консоль самообслуживания офиса (только владелец).
+      /office | /office scan  — полный свип, предложить фиксы (ждут /approve)
+      /office fix <bot>       — точечно проверить и предложить фикс
+      /office status          — снапшот health/quality/routing/задачи/находки
+      /office inbox           — открытые находки с /approve id
+    Ничего не применяет сам — только детект и предложение через гейт /approve."""
+    owner = int(os.getenv("YOUR_TELEGRAM_ID", "0") or "0")
+    if owner and message.from_user and message.from_user.id != owner:
+        await message.answer("Только Влад может запускать самопроверку офиса.")
+        return
+    parts = message.text[len("/office"):].strip().split()
+    sub = parts[0].lower() if parts else "scan"
+    chat_id = message.chat.id
+
+    if sub in ("scan", "проверь", "check", "свип"):
+        await message.answer("🔎 Запускаю самопроверку офиса… (1–2 мин)")
+        result = await _run_office_scan(proposal_chat_id=chat_id)
+        await message.answer(_format_scan_report(result))
+        return
+
+    if sub in ("fix", "почини"):
+        raw_bot = " ".join(parts[1:]).strip()
+        if not raw_bot:
+            await message.answer("Укажи бота: /office fix gosling-bot (или имя: гослинг)")
+            return
+        repo = _resolve_scan_target(raw_bot)
+        if not repo:
+            known = ", ".join(sorted({r for _, (r, _) in SERVICES.items()}))
+            await message.answer(f"Не знаю бота «{raw_bot}». Доступные репо: {known}")
+            return
+        await message.answer(f"🔎 Проверяю {repo}…")
+        result = await _run_office_scan(target=repo, proposal_chat_id=chat_id)
+        await message.answer(_format_scan_report(result, target=repo))
+        return
+
+    if sub in ("status", "статус"):
+        await message.answer(await _office_status_snapshot())
+        return
+
+    if sub in ("inbox", "инбокс", "находки"):
+        await message.answer(await _office_inbox_text())
+        return
+
+    await message.answer(
+        "Команды: /office scan | /office fix <bot> | /office status | /office inbox"
+    )
 
 
 
@@ -5460,6 +5853,7 @@ async def cmd_skip(message: Message):
         if task_id:
             r = await get_redis()
             await tb.update_status(r, task_id, "rejected", result="пропущено Владом")
+        await mark_finding(action_id, "skipped")
         await message.answer(f"⏭️ Действие `{action_id}` пропущено.")
     else:
         await message.answer(f"❌ Действие `{action_id}` не найдено.")
@@ -5493,11 +5887,13 @@ async def cb_approval(cb: CallbackQuery):
             if task_id:
                 await tb.update_status(await get_redis(), task_id, "rejected",
                                        result="отклонено кнопкой")
+            await mark_finding(ident, "skipped")
             await cb.answer("Отклонено")
             await _finish_cb(cb, "⏭ Отклонено Владом")
             return
         await cb.answer("Применяю…")
         status = await _apply_pending_action(entry)
+        await mark_finding(ident, "applied")
         await _finish_cb(cb, status)
         return
 
