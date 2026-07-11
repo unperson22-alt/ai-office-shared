@@ -1167,6 +1167,7 @@
     "prevention": "When flagging an agent's tool-call result as untrustworthy, distinguish 'I can't verify this' from 'this is fake' — say the former unless there's actual contradicting evidence (e.g., a follow-up read-back that returns a different value). Keep verifying real-money/irreversible settings through a reliable, code-controlled path regardless either way; that practice doesn't depend on whether this particular Cilly response turns out to have been genuine.",
     "cause": "A single weak stylistic signal (localhost in an LLM-narrated code snippet) was treated as near-conclusive evidence of a fabricated tool result, without stronger corroborating proof either way.",
     "tag": "trader",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-07-11T19:30:20.310002+00:00"
   }
 ]
