@@ -1152,5 +1152,21 @@
     "tag": "pipeline",
     "posted_to_group": true,
     "posted_at": "2026-07-02T01:43:23.248384+00:00"
+  },
+  {
+    "id": 71,
+    "date": "2026-07-11",
+    "bot": "cilly-bot",
+    "layer": "ops/redis",
+    "title": "Distrusted a genuine Silli /task Redis write (execution_enabled toggle) based on a weak tell (host='localhost' in a shown code snippet) — likely a false alarm, not proven fabrication",
+    "symptom": "Dispatched a /task to Cilly (source=CLAUDE) asking her to set tilly:tuning.execution_enabled=true + execution_tf='4h' in Redis for tilly-trader (a real-money toggle). Her 'done' response included a Python snippet using redis.Redis(host='localhost', port=6379, ...) plus a claimed post-write verification. The localhost host looked like generic boilerplate rather than the real Railway-internal Redis, so the session flagged the whole result as probably fabricated and told the owner not to trust it, recommending he flip the toggle himself via the bot's own /tune command instead.",
+    "root_cause": "The owner later surfaced the actual Telegram DM Cilly sent for that exact task_id (received silently, missed at the time) — it exists, is real, and its claimed end-state (execution_enabled=true, execution_tf='4h') matches what was independently observed shortly after. The 'localhost' snippet is not strong evidence of a fake execution: agentic tool-calling loops commonly render illustrative/log-style pseudocode alongside a real tool invocation that internally uses the correct connection parameters — the displayed snippet is not necessarily the literal code that ran. Because the owner's own /tune tap happened only ~5 minutes after Cilly's task completed, the timeline can't cleanly separate 'Cilly's write worked' from 'the owner's tap worked' either way, so this is genuinely inconclusive, not a confirmed lie.",
+    "why_architecture": "CLAUDE — СТАРТ documents generic redis_query as a known-unreliable path (unlike dedicated intents like trader_winrate), which primed the session to treat any oddity in a redis_query response as confirmation of that documented gap, rather than weighing the evidence on its own. A single stylistic tell (a plausible-but-wrong hostname in an LLM-narrated snippet) was treated as near-conclusive proof of non-execution, when it's actually weak/ambiguous signal on its own.",
+    "fix": "No code change — this is a calibration correction to how much weight a stylistic tell should carry. When Cilly (or any agent) reports a Redis/Railway write, a snippet that looks like generic boilerplate is a reason to independently verify (which is what happened, correctly), but is not itself proof the write was fake. Verifying real-money settings via a reliable, code-controlled path (here: the bot's own /tune command) is still the right default caution — keep doing that — but don't retroactively declare the unverified path 'fabricated' without stronger evidence than a hostname string.",
+    "status": "fixed",
+    "prevention": "When flagging an agent's tool-call result as untrustworthy, distinguish 'I can't verify this' from 'this is fake' — say the former unless there's actual contradicting evidence (e.g., a follow-up read-back that returns a different value). Keep verifying real-money/irreversible settings through a reliable, code-controlled path regardless either way; that practice doesn't depend on whether this particular Cilly response turns out to have been genuine.",
+    "cause": "A single weak stylistic signal (localhost in an LLM-narrated code snippet) was treated as near-conclusive evidence of a fabricated tool result, without stronger corroborating proof either way.",
+    "tag": "trader",
+    "posted_to_group": false
   }
 ]
