@@ -3146,7 +3146,7 @@ async def handle_task(request):
     data = await request.json()
     message = data.get("message", "")
     user_id = data.get("user_id", YOUR_TELEGRAM_ID)
-    await log("MSG_IN", f"[HTTP] {{message[:80]}}")
+    await log("MSG_IN", f"[HTTP] {{message}}")
     try:
         response = await process(message, user_id)
     except Exception as e:
@@ -3156,7 +3156,7 @@ async def handle_task(request):
     # По умолчанию ответ идёт только в HTTP response (личка или вызывающий)
     if data.get("notify", False):
         await send_to_group(f"{bot_name}:\n{response}")
-    await log("MSG_OUT", f"{bot_name}: {{response[:80]}}")
+    await log("MSG_OUT", f"{bot_name}: {{response}}")
     return web.json_response({{"status": "ok", "response": response}})
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3172,9 +3172,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await redis_client.set("office:secrets:groq_api_key", groq_key, ex=86400*365)
         await update.message.reply_text("✅ GROQ_API_KEY сохранён — удали это сообщение вручную 🗑")
         return
-    await log("MSG_IN", msg[:80])
+    await log("MSG_IN", msg)
     response = await process(msg, update.effective_user.id)
-    await log("MSG_OUT", f"{bot_name}: {{response[:80]}}")
+    await log("MSG_OUT", f"{bot_name}: {{response}}")
     await update.message.reply_text(response)
 
 
