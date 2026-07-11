@@ -61,5 +61,12 @@
     "root_cause": "MSG_OUT log emit in kriss-bot's photo handler sliced the reply to 80 chars (response[:80]) — a legacy pattern from BOT_TEMPLATE in agents/coder.py; the same [:80] slices also lived in villy-bot, prophet-bot, pilly-bot-bot and railway-deployer-bot (both MSG_IN and MSG_OUT). Delivery path (send_long/reply_text/json_response) was never truncated — logs only",
     "solution": "Removed all [:80] slices from MSG_IN/MSG_OUT log emits in kriss-bot, villy-bot, prophet-bot, pilly-bot-bot, railway-deployer-bot and from BOT_TEMPLATE in agents/coder.py; logger-bot's central MAX_MSG_LEN=3800 guard with the explicit '… [обрезано]' marker remains the single truncation point",
     "preventive_measure": "BOT_TEMPLATE no longer stamps truncation into newly generated bots; log-length limiting is owned solely by logger-bot; photo/text/HTTP handlers now log identically (full text)"
+  },
+  {
+    "date": "2026-07-11",
+    "issue": "Follow-up sweep after the [:80] fix found more observability defects: ray-bot pre-truncated MSG_OUT to 200 chars; family-dept Ray/Nelli logged placeholders ('Сообщение'/'Ответ') instead of real texts (Nelli had no MSG_IN at all); billy-bot never logged MSG_OUT for private/fallback replies; kriss-bot logged photo MSG_IN only after processing (wrong IN timestamps); villy-bot's voice branch crashed with NameError (undefined data/response) when GROQ_API_KEY was missing; kriss-bot and villy-bot had __pycache__ bytecode committed in git",
+    "root_cause": "Per-bot copy-paste of logging helpers without a shared contract: three send_log clients post directly to the Telegram API bypassing logger-bot's length guard, so authors added ad-hoc pre-truncations and placeholders; broken/dead branches in handlers had no review step to catch them",
+    "solution": "All emitters now log full real texts; the 3800 + '… [обрезано]' guard was added inside every direct-to-Telegram send_log (ray-bot, family-dept Ray and Nelli) mirroring logger-bot; billy-bot logs MSG_OUT on both direct-reply paths; kriss-bot logs photo MSG_IN before processing; villy-bot voice branch fixed; __pycache__ untracked and gitignored",
+    "preventive_measure": "Contract: emitters never pre-truncate or placeholder log texts — the transport layer (logger-bot, or the local send_log guard for direct-to-Telegram clients) owns the Telegram length limit"
   }
 ]
