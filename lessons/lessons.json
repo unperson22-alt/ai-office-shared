@@ -1169,5 +1169,21 @@
     "tag": "trader",
     "posted_to_group": true,
     "posted_at": "2026-07-11T19:30:20.310002+00:00"
+  },
+  {
+    "id": 72,
+    "date": "2026-07-14",
+    "bot": "tilly-trader",
+    "layer": "trader/execution",
+    "title": "Sim-side closes (indicator reversal / expired / counter-signal) never closed the live BingX position — bot reported 'closed' while real positions stayed open",
+    "symptom": "At 02:16 the trader reported 'UNI-USDT SHORT [15m] — closed by indicator reversal (EMA20/50, no profit taken)' and the same for EVAA-USDT, but the exchange app at 02:17 still showed both SHORT positions open with their original SL/TP; the owner had to close them manually via quick-close.",
+    "root_cause": "Live execution (enabled 2026-07-13) mirrored only the ENTRY: place_order sends a market order with an attached SL/TP1 bracket. Every simulation-side close transition — indicator reversal in screener_outcome_tracker, opposite-signal close in _close_opposite_signals, TTL expiry and win/be/loss in _apply_eval_to_signal — mutated only Redis and sent a Telegram message. BingXClient.close_position/cancel_order were dead code never invoked from bot.py, so indicator/time/counter-signal closes (which have no price-based exchange counterpart) leaked open positions. 'expired' closes leaked silently (that close reason sends no message at all), and a counter-signal placed a new live order that nets against the still-open old position in One-way mode.",
+    "why_architecture": "This was a known, deliberately deferred v1 gap (tilly-trader HANDOFF 2 step 3, scheduled for ~Jul 20): validate the entry pipeline first, build live position management later. But the notification layer treated simulation state as the single source of truth ('закрыт' with no qualifier), and no reconciliation existed anywhere between tracked signals and actual exchange positions — so the deferred gap surfaced as the bot lying about real-money state instead of as a visible limitation.",
+    "fix": "tilly-trader PR #43: _ensure_live_closed(s) runs on EVERY close transition of a signal carrying live_order_id — queries actual positions, closes min(live_qty, available share) by market order (never more: One-way netting can merge 4h+15m signals of one symbol into a single position) with reduceOnly plus one deterministic fallback without it on exchange rejection, is idempotent via live_closed_ts, and appends the live outcome to the same Telegram message (loud ⚠️ + 'close manually' on failure). A reconciliation pass _reconcile_live_closes at the top of every tracker tick retries failures/crash gaps and covers batch_verify_screener's silent closes, alerting on attempts 1/3/every 12th. bingx_client.get_positions no longer collapses exchange error payloads into [] (an API error must not be read as 'position gone'). Orphaned SL/TP conditional orders are cancelled only when zero positions remain for the symbol. Regression: data/test_live_close_sync.py (63 checks), all 11 offline test files green.",
+    "status": "fixed",
+    "prevention": "Any state transition that claims an exchange-side effect must execute/verify it against the exchange, not just local state, with persisted error + scheduled retry + loud alert on failure — an unmanaged live position is direct financial risk. When enabling live execution for a new action class, enumerate every code path that mutates the simulated state and mirror or reconcile each one; a v1 that mirrors only the entry needs the reconciliation loop from day one. Never close blind: fetch the actual position and close min(own qty, available) so a shared netted position is never over-closed and a stale close can never open a reverse position.",
+    "cause": "Live execution mirrored only order entry; all close paths (reversal/expired/counter-signal/win/be/loss) mutated Redis/Telegram only, with no exchange call and no reconciliation loop.",
+    "tag": "trader",
+    "posted_to_group": false
   }
 ]
