@@ -1184,6 +1184,7 @@
     "prevention": "Any state transition that claims an exchange-side effect must execute/verify it against the exchange, not just local state, with persisted error + scheduled retry + loud alert on failure — an unmanaged live position is direct financial risk. When enabling live execution for a new action class, enumerate every code path that mutates the simulated state and mirror or reconcile each one; a v1 that mirrors only the entry needs the reconciliation loop from day one. Never close blind: fetch the actual position and close min(own qty, available) so a shared netted position is never over-closed and a stale close can never open a reverse position.",
     "cause": "Live execution mirrored only order entry; all close paths (reversal/expired/counter-signal/win/be/loss) mutated Redis/Telegram only, with no exchange call and no reconciliation loop.",
     "tag": "trader",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-07-14T07:02:48.256637+00:00"
   }
 ]
