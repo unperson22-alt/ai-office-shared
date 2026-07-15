@@ -3574,6 +3574,45 @@ async def railway_create_service(repo_name: str, bot_display_name: str, variable
     return {"service_id": service_id}
 
 
+import unicodedata as _ud
+
+
+def _norm_for_match(s: str) -> str:
+    """Нормализация ТОЛЬКО для поиска (не для записи): NFC, срез variation
+    selectors, NBSP→пробел, схлопывание пробелов внутри строк, strip концов."""
+    s = _ud.normalize("NFC", s)
+    s = s.replace("️", "").replace("︎", "")    # эмодзи VS16 / VS15
+    s = s.replace(" ", " ").replace(" ", " ")  # NBSP, narrow NBSP
+    s = "\n".join(" ".join(line.split()) for line in s.split("\n"))
+    return s.strip()
+
+
+def resilient_replace(content: str, old: str, new: str):
+    """(updated, method) при успехе или (None, reason) при неудаче.
+    reason ∈ {"empty","notfound","ambiguous"}. Поиск — по нормализованной форме
+    (устойчив к эмодзи-VS/NBSP/пробелам), замена — по ТОЧНОМУ исходному срезу файла,
+    поэтому запись всегда побайтово-корректна.
+    """
+    if old in content:
+        return content.replace(old, new, 1), "exact"
+    n_old = _norm_for_match(old)
+    if not n_old:
+        return None, "empty"
+    lines = content.split("\n")
+    span = n_old.count("\n") + 1
+    hits = [i for i in range(len(lines) - span + 1)
+            if _norm_for_match("\n".join(lines[i:i + span])) == n_old]
+    if len(hits) != 1:
+        return None, ("ambiguous" if hits else "notfound")
+    i = hits[0]
+    orig = "\n".join(lines[i:i + span])            # точный исходный срез файла
+    indent = orig[:len(orig) - len(orig.lstrip())]
+    repl = new
+    if span == 1 and repl[:1] and not repl[:1].isspace():
+        repl = indent + repl                       # сохранить отступ однострочной замены
+    return content.replace(orig, repl, 1), "normalized"
+
+
 async def handle_natural_language(message_text: str, chat_id: int, reply_func, history: list = None, silent: bool = False, repo_override: str = "", file_path_override: str = "", proposal_chat_id: int = 0):
     """Process any natural language request — detect intent and execute."""
     # Читаем ops.md — лог последних действий Claude и Силли
@@ -4658,10 +4697,17 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             return
         try:
             file_content = await read_file(repo, path)
-            if old_text not in file_content:
-                await reply_func(f"❌ Строка не найдена в {repo}/{path}")
+            # Дефект: old формирует LLM-классификатор из текста задачи, а не из файла,
+            # поэтому побайтовое old_text not in file_content ломалось на variation
+            # selector'ах эмодзи (U+FE0F), NBSP и отличии пробелов/отступа. Ищем
+            # нормализованно, но заменяем ИСХОДНЫЙ срез файла (запись байт-в-байт).
+            updated, how = resilient_replace(file_content, old_text, new_text)
+            if updated is None:
+                if how == "ambiguous":
+                    await reply_func(f"❌ Строка встречается в нескольких местах в {repo}/{path} — уточни old (добавь контекст вокруг)")
+                else:
+                    await reply_func(f"❌ Строка не найдена в {repo}/{path}")
                 return
-            updated = file_content.replace(old_text, new_text, 1)
             if path.endswith(".py"):
                 import ast as _ast
                 try:
@@ -4671,7 +4717,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                     return
             commit_msg = intent_data.get("message", f"edit: patch {path}")
             await push_file(repo, path, updated, commit_msg)
-            await reply_func(f"✅ {repo}/{path} обновлён")
+            await reply_func(f"✅ {repo}/{path} обновлён" + ("" if how == "exact" else f" (совпадение: {how})"))
         except Exception as e:
             await reply_func(f"❌ Ошибка: {e}")
 
@@ -4751,6 +4797,11 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             else:
                 _action_repeat = 0
                 _last_action_sig = _sig
+            # На первом повторе — корректирующий толчок (даём шанс самоисправиться),
+            # и только при следующем повторе рвём цикл. Транзиентный повтор не роняет задачу.
+            if _action_repeat == 1:
+                context += ("\n\n[СИСТЕМА] Ты повторяешь то же действие — оно не приблизило к цели. "
+                            "Показанного фрагмента достаточно: смени подход или заверши done с текущим итогом.")
             if _action_repeat >= 2:
                 await reply_func("⚠️ Остановлено: повторяющееся действие (зацикливание).")
                 break
@@ -4766,7 +4817,17 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                 a_path = action_data.get("path", "")
                 try:
                     file_content = await read_file(a_repo, a_path)
-                    result = file_content[:4000]
+                    # Раньше срез [:4000] прятал целевую строку типового bot.py за окном
+                    # видимости → модель перечитывала тот же файл и упиралась в стоп-гард
+                    # («зацикливание»). Окна хватает на весь bot.py; при обрезке — явный маркер.
+                    _CAP = 24000
+                    if len(file_content) > _CAP:
+                        result = file_content[:_CAP] + (
+                            f"\n\n[...файл обрезан: показано {_CAP} из {len(file_content)} символов. "
+                            "Ищи нужную функцию/строку в показанном фрагменте; если её здесь нет — "
+                            "не перечитывай тот же файл, а заверши done с уточнением...]")
+                    else:
+                        result = file_content
                     steps_log.append({"action": f"read_file({a_repo}/{a_path})", "result": result})
                     # Добавляем содержимое в контекст
                     context += f"\n\n[Файл {a_repo}/{a_path}]:\n{result}"
