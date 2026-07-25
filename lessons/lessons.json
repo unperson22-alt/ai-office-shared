@@ -1269,7 +1269,8 @@
     "prevention": "Every user-facing tag/DSL format must have a test that parses the exact examples printed in the prompt — the prompt and the parser are one contract and drift silently otherwise. Never let a broad try/except convert a format error into a silent None on a write path: if a confirmation is sent to the user, it must be derived from the persisted record, not from the model's intention.",
     "cause": "parser could not read its own documented format; broad except hid it",
     "tag": "parser, silent-failure, scheduling, contract-testing",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-07-25T08:00:32.350491+00:00"
   },
   {
     "id": 78,
@@ -1285,6 +1286,7 @@
     "prevention": "A generated file must be executed or at least import-checked, not just parsed — doubled braces are valid syntax and a wrong URL is invisible to a parser. When N bots differ only in a name and a prompt, the runtime belongs in shared and the bot file should contain only what makes it that bot.",
     "cause": "copy-paste generation + unverified codegen output",
     "tag": "duplication, codegen, fleet-drift, ci",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-07-25T08:00:32.350491+00:00"
   }
 ]
