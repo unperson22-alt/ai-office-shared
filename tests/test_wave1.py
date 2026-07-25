@@ -15,7 +15,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ai_office_shared.shared.prompt import (  # noqa: E402
-    EnhanceResult, _is_safe_enhancement, enhance_prompt, enhance_prompt_ex, intent_hint,
+    EnhanceResult, _is_safe_enhancement, enhance_prompt, enhance_prompt_ex,
+    intent_hint, validate_enhancement,
 )
 from ai_office_shared.shared.dev_escalation import (  # noqa: E402
     parse_dev_feature_tag, strip_dev_feature_tag, request_dev_feature,
@@ -239,6 +240,21 @@ class TestEnhanceGuard(unittest.TestCase):
         self.assertFalse(res.used)
         self.assertEqual(res.reason, "api_error")
         self.assertEqual(res.enhanced, original)
+
+    def test_public_validate_enhancement_matches_internal(self):
+        """Публичный контракт для ботов с рукописным LLM-вызовом (ray-bot)."""
+        uk = ("Є догляд за волоссям numero, зараз у них ребрендинг, "
+              "можеш порівняти стару версію шампуню з вівсом і нову")
+        ru = ("Есть уход за волосами numero, сейчас у них ребрендинг, "
+              "можешь сравнить старую версию шампуня с овсом и новую")
+        self.assertEqual(validate_enhancement(uk, ru), _is_safe_enhancement(uk, ru))
+        ok, _ = validate_enhancement(uk, ru)
+        self.assertFalse(ok)
+
+        good_o = "посмотри что там по курсу доллара и евро на сегодня примерно"
+        good_e = "Найди актуальный курс доллара и евро к гривне на сегодня"
+        ok, reason = validate_enhancement(good_o, good_e)
+        self.assertTrue(ok, reason)
 
     def test_intent_hint_empty_when_unused(self):
         self.assertEqual(intent_hint(EnhanceResult("a", "a", False, "too_short")), "")
