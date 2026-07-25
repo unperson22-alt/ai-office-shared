@@ -1237,5 +1237,21 @@
     "tag": "capabilities, escalation, taskboard, fleet-drift",
     "posted_to_group": true,
     "posted_at": "2026-07-25T06:24:17.650822+00:00"
+  },
+  {
+    "id": 76,
+    "date": "2026-07-25",
+    "bot": "gosling-bot / milly-bot / villy-bot / ray-bot (wave 2)",
+    "layer": "fleet/static-analysis",
+    "title": "A fleet-wide pyflakes sweep found 16 more undefined names in production bots — py_compile had been the only check and it accepts every one of them",
+    "symptom": "Gosling's /reply, /send and /send_scheduled all returned 500 and EVERY reaction on his messages crashed, so office:quality:гослинг silently never filled. Milly ignored every photo. Villy crashed on every bot message in the office group. Ray's scheduled sends with generate=true crashed. None of this touched the ordinary DM text path, so all four bots looked healthy.",
+    "root_cause": "One shared bot template was copied across the fleet with its bugs already in it, and the only pre-push check was py_compile, which parses but does not resolve names. The same trio recurred verbatim in four bots: `analyze_photo(..., SYSTEM_PROMPT)` where the module defines SYSTEM; `ptb` used in /reply although it is local to main() (the module global is _ptb_bot); and undefined check_secret/HTTP_SECRET left behind when auth moved into shared/auth.py. Villy and Doctor additionally shared a mangled import line `import httpx, logging, asyncio, httpx` in which `random` had been overwritten by a duplicate httpx. Gosling had also drifted further: it called process() (its generator is generate_response()), and used remember_my_message plus REACTION_UP/REACTION_DOWN without importing them from shared.quality. Ray, on an aiogram + raw-httpx stack, kept a hand-written copy of the enhance-prompt logic and so did not inherit the wave-1 fix at all: chat_reply fed Sonnet the Haiku paraphrase instead of the user's text.",
+    "why_architecture": "Capability code lives as per-bot copy-paste rather than in ai_office_shared, so both defects and fixes propagate by hand. Combined with a name-blind pre-push check, a whole class of crash could sit in production indefinitely — visible only on endpoints and event paths nobody exercises manually.",
+    "fix": "Fixed all 16 names: SYSTEM_PROMPT->SYSTEM, ptb->_ptb_bot (module global added where missing), check_secret/HTTP_SECRET->shared.auth.check_office_token (the canonical check office_auth_middleware already applies), process()->generate_response(), REACTION_UP/REACTION_DOWN/remember_my_message imported from shared.quality with the canonical signature, duplicate httpx import replaced by the intended random. Added shared.prompt.validate_enhancement() so bots without an anthropic client can still use the wave-1 output contract, and rewired ray-bot's chat_reply to always send raw_text with the validated suggestion demoted to a system-prompt hint. All asyncio.create_task calls replaced with shared.tasks.spawn. Fleet is now clean: `pyflakes */bot.py | grep 'undefined name'` returns nothing.",
+    "status": "fixed",
+    "prevention": "py_compile is not a linter — make pyflakes the pre-push gate for every bot; it found 30 production crashes across two waves in seconds. When a defect is found in one bot, sweep the whole fleet immediately rather than fixing the one that was reported. A hand-rolled copy of a shared behaviour does not inherit shared fixes: where a bot cannot use the shared helper because of a different client stack, it must still consume the shared contract (that is what validate_enhancement is for).",
+    "cause": "copy-paste template propagation + name-blind pre-push check",
+    "tag": "fleet-drift, static-analysis, tooling, prevention",
+    "posted_to_group": false
   }
 ]
