@@ -22,7 +22,7 @@ from ai_office_shared.shared.dev_escalation import (  # noqa: E402
 )
 from ai_office_shared.shared.media import (  # noqa: E402
     ImageError, ImagePayload, MAX_IMAGE_BYTES, addressed_in_group,
-    extract_image, has_image,
+    bot_username, extract_image, has_image,
 )
 
 
@@ -333,6 +333,37 @@ class TestAddressedInGroup(unittest.TestCase):
     def test_no_text_no_address(self):
         msg = FakeMessage(photo=[FakePhotoSize()])
         self.assertFalse(addressed_in_group(msg, "kriss_bot", "Крис"))
+
+    def test_username_at_prefix_normalized(self):
+        msg = FakeMessage(text="@kriss_bot глянь")
+        self.assertTrue(addressed_in_group(msg, "@kriss_bot", "Крис"))
+
+
+class TestBotUsername(unittest.TestCase):
+    """
+    telegram.Bot.username бросает RuntimeError на неинициализированном боте, и
+    getattr(bot, "username", "") от этого НЕ спасает — он глушит только AttributeError.
+    """
+
+    def test_returns_username(self):
+        class B:
+            username = "kriss_bot"
+        self.assertEqual(bot_username(B()), "kriss_bot")
+
+    def test_swallows_runtime_error(self):
+        class B:
+            @property
+            def username(self):
+                raise RuntimeError("Bot is not properly initialized")
+        self.assertEqual(bot_username(B()), "")
+
+    def test_swallows_missing_attribute(self):
+        self.assertEqual(bot_username(object()), "")
+
+    def test_none_username(self):
+        class B:
+            username = None
+        self.assertEqual(bot_username(B()), "")
 
 
 # ── 3. Dev-эскалация ──────────────────────────────────────────────────────────

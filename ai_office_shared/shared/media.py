@@ -165,22 +165,41 @@ async def extract_image(message, bot) -> Union[ImagePayload, ImageError]:
     )
 
 
-def addressed_in_group(message, bot_username: str = "", bot_name: str = "") -> bool:
+def bot_username(bot) -> str:
+    """
+    Безопасно достаёт username бота.
+
+    ВАЖНО: telegram.Bot.username — property, которое бросает RuntimeError, если бот
+    ещё не инициализирован (`Bot.bot` → `_bot_user is None`). getattr(bot, "username", "")
+    от этого НЕ спасает: он глушит только AttributeError. В хендлерах бот уже
+    инициализирован, но полагаться на это в общем хелпере нельзя.
+    """
+    try:
+        return bot.username or ""
+    except Exception:
+        return ""
+
+
+def addressed_in_group(message, username: str = "", bot_name: str = "") -> bool:
     """
     Обращались ли к боту в группе: reply на его сообщение, @-меншн или имя в тексте.
 
     Общий предикат для текста и фото — чтобы группа не вела себя асимметрично
     («на текст с меншном отвечаю, на фото с меншном молчу»).
+
+    username — берётся через bot_username(context.bot) (см. выше, там try/except).
     """
     if message is None:
         return False
+
+    uname_norm = username.lower().lstrip("@") if username else ""
 
     reply = getattr(message, "reply_to_message", None)
     if reply is not None:
         sender = getattr(reply, "from_user", None)
         if sender is not None and getattr(sender, "is_bot", False):
-            uname = (getattr(sender, "username", "") or "").lower()
-            if bot_username and uname == bot_username.lower().lstrip("@"):
+            sender_uname = (getattr(sender, "username", "") or "").lower()
+            if uname_norm and sender_uname == uname_norm:
                 return True
 
     text = (getattr(message, "text", None) or getattr(message, "caption", None) or "")
@@ -188,9 +207,8 @@ def addressed_in_group(message, bot_username: str = "", bot_name: str = "") -> b
         return False
     low = text.lower()
 
-    if bot_username:
-        if "@" + bot_username.lower().lstrip("@") in low:
-            return True
+    if uname_norm and "@" + uname_norm in low:
+        return True
     if bot_name and bot_name.lower() in low:
         return True
     return False
