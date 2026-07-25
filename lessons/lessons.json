@@ -1252,6 +1252,7 @@
     "prevention": "py_compile is not a linter — make pyflakes the pre-push gate for every bot; it found 30 production crashes across two waves in seconds. When a defect is found in one bot, sweep the whole fleet immediately rather than fixing the one that was reported. A hand-rolled copy of a shared behaviour does not inherit shared fixes: where a bot cannot use the shared helper because of a different client stack, it must still consume the shared contract (that is what validate_enhancement is for).",
     "cause": "copy-paste template propagation + name-blind pre-push check",
     "tag": "fleet-drift, static-analysis, tooling, prevention",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-07-25T06:36:46.636228+00:00"
   }
 ]
