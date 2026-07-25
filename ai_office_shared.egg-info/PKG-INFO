@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: ai-office-shared
+Version: 0.1.21
+Summary: Shared library for AI Office Telegram bots
+Requires-Python: >=3.10

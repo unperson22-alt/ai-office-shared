@@ -123,6 +123,10 @@
 |`shared.url_check`    |v0.1.7  |`check_url`, `filter_live_urls`, `extract_urls`, `verify_text_urls`                                            |
 |`shared.office`       |v0.1.18 |`call_office`, `OFFICE_AGENTS`, `parse_office_tag`, `instructions_suffix(redis, bot)` ← рантайм-обучение      |
 |`shared.taskboard`    |v0.1.18 |`create_task`, `update_status`, `set_result`, `incr_attempts`, `add_subtask`, `get_task`, `list_tasks`        |
+|`shared.prompt`       |v0.1.21 |`enhance_prompt` (с guard), `enhance_prompt_ex`, `EnhanceResult`, `intent_hint`                                |
+|`shared.media`        |v0.1.21 |`IMAGE_FILTER`, `extract_image`, `has_image`, `addressed_in_group`, `ImagePayload`, `ImageError`               |
+|`shared.dev_escalation`|v0.1.21|`DEV_FEATURE_PROMPT_BLOCK`, `parse_dev_feature_tag`, `strip_dev_feature_tag`, `request_dev_feature`            |
+|`shared.tasks`        |v0.1.21 |+ `spawn(coro, name)` — фоновые задачи с удержанием ссылки (GC-фикс)                                           |
 
 ### ⚡ MIGRATION RULE
 
@@ -174,6 +178,10 @@
 |----------|---------------------|--------------------------------------------------------------------------------------------------------------------------------------|------------------|
 |`BUG-001` |filly-bot `/metrics` |Handler зависает (http=000) — таймауты asyncio.wait_for добавлены.|✅ Закрыт 2026-05-26|
 |`DATA-001`|Доктор / METRICS_BOTS|Аудит запущен 2026-05-27: ключ `office:quality:дилли` в Redis отсутствует — бот пишет под `office:quality:доктор`. Рассинхрона нет.|✅ Закрыт 2026-05-27|
+|`BUG-002` |`shared.prompt`      |`enhance_prompt` подменял сообщение пользователя непроверенным выводом Haiku — главная модель никогда не видела оригинал. Крис дважды отшил живой запрос Яны (укр.). Затрагивал Крисс/Мама/Филли.|✅ Закрыт 2026-07-25 (v0.1.21, guard + `enhance_prompt_ex`)|
+|`BUG-003` |Все боты / Telegram  |`filters.Document.IMAGE` не обрабатывал ни один бот — картинка файлом/без сжатия молча пропадала и в ЛС, и в группе.|✅ Закрыт 2026-07-25 (`shared.media`, накатан на Крисс/Билли)|
+|`BUG-004` |Билли, Крис          |Нет авто-эскалации «просят X, инструмента нет» — бот отшивался («у меня нет рук и ног») вместо задачи в dev-dept.|✅ Закрыт 2026-07-25 (`shared.dev_escalation` → `taskboard`)|
+|`BUG-005` |Все боты / asyncio   |`asyncio.create_task()` без сохранения ссылки — `schedule_loop`/`weekly_review_loop` могли быть собраны GC и умереть молча.|✅ Закрыт 2026-07-25 (`shared.tasks.spawn`)|
 
 -----
 

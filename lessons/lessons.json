@@ -1186,5 +1186,53 @@
     "tag": "trader",
     "posted_to_group": true,
     "posted_at": "2026-07-14T07:02:48.256637+00:00"
+  },
+  {
+    "id": 73,
+    "date": "2026-07-25",
+    "bot": "kriss-bot / mama-bot / filly-bot",
+    "layer": "shared/prompt-pipeline",
+    "title": "enhance_prompt silently replaced the user's message with unvalidated Haiku output — Kris rejected two genuine requests as 'text not meant for me'",
+    "symptom": "On 2026-07-25 Yana sent Kris a real task twice (compare the old and new oat shampoo from Numero, mid-rebrand). Both times Kris refused it as an artifact: 'схоже моя система трохи збожеволіла і сама собі поставила запитання' and 'ти надіслала якийсь текст який не мав до мене потрапити'. Same class of failure had been logged once before on a Ukrainian/short greeting.",
+    "root_cause": "kriss-bot/bot.py:287 did `message = await enhance_prompt(message, claude_async)` — the return value of a Haiku 'improve this request' call REPLACED the user's text before the messages array was built, so the main model never saw Yana's words. shared/prompt.py accepted whatever Haiku returned with zero validation (it was fail-silent on exceptions only) and logged nothing, while MSG_IN kept logging the original — the substitution was invisible in every log. On short and non-Russian input Haiku translates or returns meta-commentary, and the main model reacted to that artifact. mama-bot:319 and filly-bot:812,976 had the identical substitution (filly with its own local copy at :506).",
+    "why_architecture": "An intermediate LLM transform was placed on the AUTHORITATIVE path: the user's original text was destroyed rather than augmented. Trust was granted to an LLM's output with no output contract and no audit trail, so a wrong enhancement was indistinguishable from a right one at every downstream layer.",
+    "fix": "shared/prompt.py rewritten: _is_safe_enhancement(original, enhanced) rejects language/script switches (Ukrainian і/ї/є/ґ markers lost, Cyrillic↔Latin flip), a '?' added where the original had none, length outside x0.5..x3, and meta-markers ('вот улучшенный', 'here is', 'the user'); messages shorter than MIN_ENHANCE_LEN=40 are never enhanced at all. enhance_prompt() keeps its string signature and now returns the ORIGINAL whenever the guard fails, so bots whose call sites were not touched are protected too. New enhance_prompt_ex() returns EnhanceResult(original, enhanced, used, reason) and intent_hint() renders the enhancement as a clearly-marked hint for the SYSTEM prompt. Every decision is logged via logger.info and optional log_event(..., 'prompt_enhanced'). Call sites in kriss/mama/filly now keep the original in history.",
+    "status": "fixed",
+    "prevention": "Never let an intermediate LLM transform own the authoritative input. Enhancement is advisory metadata: keep the original, validate the output against an explicit contract, log both sides. A prompt-level patch had already been tried for this exact bug (kriss-bot/lessons.json #1) and did not hold — for LLM-output trust issues the fix must be structural, not another instruction.",
+    "cause": "unvalidated intermediate LLM transform on the authoritative path",
+    "tag": "prompt-pipeline, intermediate-llm, observability, i18n",
+    "posted_to_group": false
+  },
+  {
+    "id": 74,
+    "date": "2026-07-25",
+    "bot": "fleet (all 22 bots with bot.py)",
+    "layer": "telegram/ingress",
+    "title": "Images sent as files were dropped silently by every bot — filters.Document.IMAGE was handled nowhere",
+    "symptom": "Vlad: 'я только что тебе в предыдущем сообщении кинул картинку а ты молчишь'. Billy and Kris both stayed completely silent on a screenshot, even though their Vision code works.",
+    "root_cause": "Two independent silent paths. (1) No bot in the office registered filters.Document.IMAGE — only filters.PHOTO — so an image sent uncompressed / as a file / forwarded from desktop matched no handler at all, in DM as well as in groups. (2) The group path was a bare `return` (kriss-bot:243, billy-bot:647) with no message, and the group handlers matched filters.TEXT only, so a photo in a group reached nobody. Non-jpeg media types were also hardcoded to image/jpeg on the DM path.",
+    "why_architecture": "Every bot is a single-file bot.py copy-pasted from the previous one, so media ingress was re-implemented per bot and never audited as a capability. There was no shared owner for 'how an image enters a bot', so a whole delivery mode could be missing fleet-wide without anyone noticing.",
+    "fix": "New shared/media.py owns image ingress: IMAGE_FILTER = filters.PHOTO | filters.Document.IMAGE, extract_image() handles photo AND image documents (mime with filename-extension fallback), validates against SUPPORTED_IMAGE_TYPES and MAX_IMAGE_BYTES, and returns a typed ImageError carrying a ready user-facing message instead of ever failing silently. addressed_in_group() is a shared predicate (reply-to-bot / @mention / bot name) so text and photos behave the same in groups. Rolled out to kriss-bot and billy-bot.",
+    "status": "fixed",
+    "prevention": "A handler that returns without replying is a bug, not a design choice — every rejection path must carry a user-visible message. Media ingress belongs in shared, not in per-bot copy-paste; new delivery modes are added once and inherited.",
+    "cause": "missing ingress filter + silent early return",
+    "tag": "telegram, media, ingress, fleet-drift",
+    "posted_to_group": false
+  },
+  {
+    "id": 75,
+    "date": "2026-07-25",
+    "bot": "billy-bot / kriss-bot",
+    "layer": "capabilities/escalation",
+    "title": "No auto-escalation for missing capabilities — Billy answered 'I have no hands, legs or corporate Slack' and sent Vlad to himself",
+    "symptom": "Asked to poke the dev department about a scheduled reminder, Billy refused ('у меня нет рук, ног и корпоративного Slack', 'напиши Владу сам') without noticing that Yodka IS Vlad. The 'request a feature' button Vlad had specced never appeared.",
+    "root_cause": "Billy had no escalation mechanism at all — no report_bug, no feature button, no CallbackQueryHandler, and 'callback_query' was not even in allowed_updates, so a button would not have worked if drawn. Kris had a '💡 Запросить функцию' button, but it was rendered by keyword match on task-related words (should_show_quick_reply) rather than when the bot actually hit a missing capability, it required a user click, and it sent a plain Telegram message to chat 391077101 instead of using the canonical taskboard — so the request did not survive a restart and was invisible to the board.",
+    "why_architecture": "The rule 'user asks for X, no tool for X → escalate' existed only as an expectation of the model, never as code or as a prompt instruction. Absent both, the model does the socially natural thing and declines.",
+    "fix": "New shared/dev_escalation.py: DEV_FEATURE_PROMPT_BLOCK states the rule explicitly and forbids the refusal answers; parse_dev_feature_tag/strip_dev_feature_tag handle a [DEV_FEATURE:...] tag emitted by the model (same shape as the existing [SCHEDULE:...] tags); request_dev_feature() writes a real task via taskboard.create_task(assignee='dev-dept', status='open') and optionally notifies the owner. Wired into billy-bot and kriss-bot; Kris's button now routes through the same helper instead of the ad-hoc DM.",
+    "status": "fixed",
+    "prevention": "A capability the operator believes is deployed must be verifiable by grep across the fleet. Behaviour that depends on the model 'realising' something needs both an explicit prompt rule and a code path — one without the other silently degrades to a refusal.",
+    "cause": "missing mechanism + missing prompt rule",
+    "tag": "capabilities, escalation, taskboard, fleet-drift",
+    "posted_to_group": false
   }
 ]
