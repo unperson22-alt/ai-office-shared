@@ -51,7 +51,6 @@ import re
 import time as _time
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import Any
 
 from .redis_helpers import (
     redis_get_notes,
@@ -65,6 +64,36 @@ logger = logging.getLogger("ai_office_shared.tasks")
 
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 WEEK_SECONDS = 7 * 24 * 3600
+
+# ─── Удержание фоновых задач ─────────────────────────────────────────────────
+# asyncio держит на задачу только слабую ссылку: результат asyncio.create_task(),
+# который никуда не сохранён, может быть собран GC вместе с недоработавшей корутиной.
+# Все боты запускали schedule_loop/weekly_review_loop именно так — цикл мог умереть
+# молча, и напоминания перестали бы приходить без единой строчки в логах.
+_BACKGROUND_TASKS: set = set()
+
+
+def spawn(coro, name: str = "") -> asyncio.Task:
+    """
+    Запускает фоновую корутину и УДЕРЖИВАЕТ ссылку на неё до завершения.
+
+    Замена голому asyncio.create_task() для долгоживущих циклов. Дополнительно
+    логирует падение задачи — иначе исключение оседает в объекте Task и не видно нигде.
+    """
+    task = asyncio.create_task(coro, name=name or None)
+    _BACKGROUND_TASKS.add(task)
+
+    def _done(t: asyncio.Task) -> None:
+        _BACKGROUND_TASKS.discard(t)
+        if t.cancelled():
+            logger.info("background task cancelled: %s", name or t.get_name())
+            return
+        exc = t.exception()
+        if exc is not None:
+            logger.error("background task died: %s: %r", name or t.get_name(), exc)
+
+    task.add_done_callback(_done)
+    return task
 
 # ─── Existing functions (unchanged) ──────────────────────────────────────────
 
