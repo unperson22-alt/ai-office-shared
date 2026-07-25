@@ -1201,7 +1201,8 @@
     "prevention": "Never let an intermediate LLM transform own the authoritative input. Enhancement is advisory metadata: keep the original, validate the output against an explicit contract, log both sides. A prompt-level patch had already been tried for this exact bug (kriss-bot/lessons.json #1) and did not hold — for LLM-output trust issues the fix must be structural, not another instruction.",
     "cause": "unvalidated intermediate LLM transform on the authoritative path",
     "tag": "prompt-pipeline, intermediate-llm, observability, i18n",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-07-25T06:24:17.650822+00:00"
   },
   {
     "id": 74,
@@ -1217,7 +1218,8 @@
     "prevention": "A handler that returns without replying is a bug, not a design choice — every rejection path must carry a user-visible message. Media ingress belongs in shared, not in per-bot copy-paste; new delivery modes are added once and inherited.",
     "cause": "missing ingress filter + silent early return",
     "tag": "telegram, media, ingress, fleet-drift",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-07-25T06:24:17.650822+00:00"
   },
   {
     "id": 75,
@@ -1233,6 +1235,7 @@
     "prevention": "A capability the operator believes is deployed must be verifiable by grep across the fleet. Behaviour that depends on the model 'realising' something needs both an explicit prompt rule and a code path — one without the other silently degrades to a refusal.",
     "cause": "missing mechanism + missing prompt rule",
     "tag": "capabilities, escalation, taskboard, fleet-drift",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-07-25T06:24:17.650822+00:00"
   }
 ]
