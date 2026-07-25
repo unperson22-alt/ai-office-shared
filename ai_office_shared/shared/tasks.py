@@ -288,16 +288,22 @@ def parse_schedule_tag(text: str) -> dict | None:
     rest = parts[1]
 
     try:
+        # ВНИМАНИЕ: время передаётся как HH:MM, то есть САМО содержит двоеточие.
+        # Раньше здесь было rest.split(":", 1), из-за чего time_part становился "09"
+        # вместо "09:00", а int(time_part[3:5]) падал на пустой строке. Исключение
+        # глушилось общим except → тег возвращал None. В итоге daily/weekly/once
+        # НЕ РАБОТАЛИ ВООБЩЕ: бот отвечал «напоминание создано», а в Redis не ложилось
+        # ничего. Работал только interval. (Инцидент 22.07: «напоминай мне утром».)
         if stype == "daily":
-            time_part, msg = rest.split(":", 1)
-            h, mi = int(time_part[:2]), int(time_part[3:5])
-            return {"action": "add", "type": "daily", "hour": h, "minute": mi, "message": msg.strip()}
+            h_s, m_s, msg = rest.split(":", 2)
+            return {"action": "add", "type": "daily", "hour": int(h_s), "minute": int(m_s),
+                    "message": msg.strip()}
 
         elif stype == "weekly":
-            dow_s, time_part, msg = rest.split(":", 2)
-            h, mi = int(time_part[:2]), int(time_part[3:5])
-            dow = _DOW_MAP.get(dow_s.lower(), 0)
-            return {"action": "add", "type": "weekly", "day_of_week": dow, "hour": h, "minute": mi, "message": msg.strip()}
+            dow_s, h_s, m_s, msg = rest.split(":", 3)
+            dow = _DOW_MAP.get(dow_s.strip().lower(), 0)
+            return {"action": "add", "type": "weekly", "day_of_week": dow,
+                    "hour": int(h_s), "minute": int(m_s), "message": msg.strip()}
 
         elif stype == "interval":
             interval_s, msg = rest.split(":", 1)
@@ -311,9 +317,8 @@ def parse_schedule_tag(text: str) -> dict | None:
             return {"action": "add", "type": "interval", "interval_sec": sec, "message": msg.strip()}
 
         elif stype == "once":
-            date_s, time_part, msg = rest.split(":", 2)
-            h, mi = int(time_part[:2]), int(time_part[3:5])
-            run_at = f"{date_s}T{h:02d}:{mi:02d}:00+00:00"
+            date_s, h_s, m_s, msg = rest.split(":", 3)
+            run_at = f"{date_s.strip()}T{int(h_s):02d}:{int(m_s):02d}:00+00:00"
             return {"action": "add", "type": "once", "run_at": run_at, "message": msg.strip()}
 
     except Exception as e:
@@ -406,6 +411,58 @@ async def format_task_list(tasks: list[dict]) -> str:
         lines.append(f"{i}. {desc} — «{msg}»")
     lines.append("\nДля отмены: «отмени напоминание #N»")
     return "\n".join(lines)
+
+
+SCHEDULE_PROMPT_BLOCK = """
+
+УПРАВЛЕНИЕ НАПОМИНАНИЯМИ:
+Ты УМЕЕШЬ ставить напоминания. Если пользователь просит напомнить о чём-то или писать
+регулярно — добавь в конец своего ответа специальный тег (он невидим для пользователя):
+• Каждый день в HH:MM UTC → [SCHEDULE:daily:HH:MM:текст]
+• Каждую неделю в день → [SCHEDULE:weekly:mon:HH:MM:текст] (mon/tue/wed/thu/fri/sat/sun)
+• Каждые N минут → [SCHEDULE:interval:Nm:текст]
+• Один раз в дату → [SCHEDULE:once:YYYY-MM-DD:HH:MM:текст]
+• Показать список → [LIST_SCHEDULES]
+• Отменить #N → [CANCEL_SCHEDULE:N]
+Время всегда в UTC. Если пользователь называет локальное время — переведи в UTC
+(Германия: UTC+2 летом, UTC+1 зимой). ЗАПРЕЩЕНО отвечать «я не могу инициировать
+сообщения» или «я отвечаю только когда ты пишешь» — это неправда, механизм у тебя есть.
+Обычным текстом подтверди что напоминание создано и когда сработает.
+"""
+
+_STRIP_SCHEDULE_RE = re.compile(
+    r'\[(?:SCHEDULE|CANCEL_SCHEDULE|LIST_SCHEDULES)[^\]]*\]', re.IGNORECASE)
+
+
+async def apply_schedule_tag(
+    redis_client,
+    bot_name: str,
+    user_id: int,
+    response: str,
+) -> tuple[str, str | None]:
+    """
+    Разбирает тег расписания в ответе модели и применяет его.
+
+    Возвращает (текст_без_тега, текст_списка_или_None). Если второй элемент не None —
+    его надо отправить пользователю ВМЕСТО ответа (это ответ на [LIST_SCHEDULES]).
+
+    Раньше эта развязка была скопирована в каждом боте, который умел расписания,
+    а боты, у которых schedule_loop запущен без неё, крутили цикл вхолостую —
+    напоминание нельзя было создать вообще (доктор, эллис, филли до 2026-07-25).
+    """
+    tag = parse_schedule_tag(response)
+    if not tag:
+        return response, None
+
+    if tag["action"] == "add":
+        await add_scheduled_task(redis_client, bot_name, user_id, tag)
+    elif tag["action"] == "cancel":
+        await remove_scheduled_task(redis_client, bot_name, user_id, tag["index"])
+    elif tag["action"] == "list":
+        tasks = await list_scheduled_tasks(redis_client, bot_name, user_id)
+        return response, await format_task_list(tasks)
+
+    return _STRIP_SCHEDULE_RE.sub("", response).strip(), None
 
 
 async def schedule_loop(

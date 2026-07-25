@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
 
 import httpx
 from aiohttp import web

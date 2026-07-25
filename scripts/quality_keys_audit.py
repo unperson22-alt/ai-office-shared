@@ -13,7 +13,7 @@ quality_keys_audit.py — аудит Redis quality ключей AI офиса.
 Запуск:
     REDIS_URL=redis://... python quality_keys_audit.py
 """
-import asyncio, os, json
+import asyncio, os
 import redis.asyncio as aioredis
 
 # Ожидаемые quality ключи (lowercase, как пишет каждый бот)
