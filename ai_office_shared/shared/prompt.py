@@ -120,6 +120,18 @@ def _is_safe_enhancement(original: str, enhanced: str) -> tuple[bool, str]:
     return True, "ok"
 
 
+def validate_enhancement(original: str, enhanced: str) -> tuple[bool, str]:
+    """
+    Публичный контракт на вывод enhance-модели: (можно_доверять, причина).
+
+    Для ботов, которые вызывают LLM своим кодом (raw httpx вместо anthropic-клиента)
+    и потому не могут использовать enhance_prompt/enhance_prompt_ex напрямую —
+    например ray-bot. Правило одно на всех: уточнение применяется, только если
+    прошло эту проверку; иначе используется оригинал пользователя.
+    """
+    return _is_safe_enhancement(original, enhanced)
+
+
 async def _log_decision(
     redis_client,
     bot_name: str,
