@@ -1,0 +1,30 @@
+# Гейт против класса багов, который 25.07.2026 дал 30 живых крашей в проде
+# (lessons #74–76). py_compile разбирает код, но НЕ резолвит имена — он пропускал
+# SYSTEM_PROMPT при определённой SYSTEM, ptb вне main(), незаимпортированный random.
+# pyflakes ловит это за секунды.
+#
+# agents/ пока исключён: в coder.py найдены 4 неопределённых имени (BOT_URLS,
+# HTTP_SECRET_BOTS, bot_name, PROJECT_ID). Правится ТОЛЬКО вручную с ревью Влада —
+# правило CLAUDE-СТАРТ после инцидента 2026-07-01 (авто-пуш подменил 5766-строчный
+# файл 8-строчным стабом и уронил cilly-bot). Снять исключение после того фикса.
+name: lint
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pyflakes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pyflakes
+      - name: compile
+        run: python -m compileall -q $(git ls-files '*.py' ':!agents/*')
+      - name: pyflakes
+        run: python -m pyflakes $(git ls-files '*.py' ':!agents/*')
+      - name: tests
+        run: python -m unittest discover -s tests -v

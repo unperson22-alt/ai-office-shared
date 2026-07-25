@@ -30,10 +30,9 @@ import anthropic
 from anthropic import AsyncAnthropic
 import redis.asyncio as aioredis
 
-from ai_office_shared.shared.logging import log_event
 from ai_office_shared.shared.redis_helpers import (
     redis_get_history, redis_save_history,
-    redis_get_notes, redis_add_note,
+    redis_get_notes
 )
 from ai_office_shared.shared.tasks import (
     auto_extract_interests, weekly_review_loop,

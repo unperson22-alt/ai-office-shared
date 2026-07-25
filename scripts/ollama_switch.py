@@ -85,7 +85,7 @@ def cmd_ollama(action, target):
             print(f"  {name:<10} {'✓' if ok else '✗'}")
         except Exception as e:
             print(f"  {name:<10} ✗ {e}")
-    print(f"\nRailway пересоберёт затронутые сервисы за 1-2 минуты.")
+    print("\nRailway пересоберёт затронутые сервисы за 1-2 минуты.")
 
 
 def cmd_pause(paused: bool):

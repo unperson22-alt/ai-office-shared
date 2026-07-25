@@ -5,7 +5,6 @@ ai_office_shared.shared.url_check
 """
 import asyncio
 import logging
-from typing import Optional
 import httpx
 
 logger = logging.getLogger(__name__)
