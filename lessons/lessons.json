@@ -1288,5 +1288,21 @@
     "tag": "duplication, codegen, fleet-drift, ci",
     "posted_to_group": true,
     "posted_at": "2026-07-25T08:00:32.350491+00:00"
+  },
+  {
+    "id": 79,
+    "date": "2026-07-27",
+    "bot": "tilly-trader",
+    "layer": "notifications/architecture",
+    "title": "One TP1 hit produced three separate Telegram reports because the tracker had no message-composition layer",
+    "symptom": "Owner: a taken TP1 arrived as three consecutive messages for the same trade (\"TP1 taken\", \"exchange cut ~70%\", \"stop moved to breakeven\"), each repeating the signal header. Every trade event also carried a redundant \" · source: bingx\" tail.",
+    "root_cause": "screener_outcome_tracker collects a tick's lines from three INDEPENDENT supervisors (_trade_event_messages, _scale_out_partial, _manage_live_be_stop) into one flat `msgs` list and then dispatched EVERY element as its own _notify_signal_event call. Each producer emitted a self-contained string carrying its own _HEAD_TOKEN, so the number of messages tracked how many supervisors fired, not what happened to the trade.",
+    "why_architecture": "The producers are correctly independent — a scale-out cut and a live stop move are separate exchange operations that can each fail on their own. The defect was the missing seam between 'what happened' (many independent facts) and 'what the user reads' (one event). Without that seam every new supervisor added another message to the user's chat, so the spam grew with the feature set rather than with the trade.",
+    "fix": "Added pure helpers _split_head + _compose_event_card (bot.py). A tick's lines merge into ONE card: the first line stays the header (keeps the clickable _HEAD_TOKEN link), the rest become bullets with the header stripped, ordered by _CARD_ORDER (cut -> stop -> next target -> alerts) so the card reads identically regardless of supervisor call order. Single-line events pass through untouched. The tracker now iterates _compose_event_card(msgs). The \" · source: bingx\" tail was dropped from trade events and from the exchange-close notice. Side fix: the TP1/TP2 header no longer claims 'stop moved to breakeven' for LIVE trades — that claim now comes only from _manage_live_be_stop after BingX accepts the stop (previously the header asserted breakeven even when the exchange rejected the move and a contradicting alert followed); paper signals get an explicit virtual-stop bullet. Regression data/test_event_card.py (24 checks); all 22 pre-existing tests green.",
+    "status": "fixed",
+    "prevention": "One user-visible event = one message: keep composition at the single dispatch point instead of making each producer aware of the others. Producers stay independent and return plain lines; ordering and formatting are decided once. Never let a summary line promise an exchange-side action a later step may fail to perform — state facts only after the exchange confirms.",
+    "cause": "architecture",
+    "tag": "notifications",
+    "posted_to_group": false
   }
 ]
