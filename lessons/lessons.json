@@ -1303,6 +1303,7 @@
     "prevention": "One user-visible event = one message: keep composition at the single dispatch point instead of making each producer aware of the others. Producers stay independent and return plain lines; ordering and formatting are decided once. Never let a summary line promise an exchange-side action a later step may fail to perform — state facts only after the exchange confirms.",
     "cause": "architecture",
     "tag": "notifications",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-07-27T04:32:42.556364+00:00"
   }
 ]
