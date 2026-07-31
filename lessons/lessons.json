@@ -1322,5 +1322,22 @@
     "tag": "intent-routing",
     "posted_to_group": true,
     "posted_at": "2026-07-31T21:16:06.221683+00:00"
+  },
+  {
+    "id": 81,
+    "date": "2026-07-31",
+    "bot": "dev-dept",
+    "layer": "worker-runtime",
+    "title": "Every dev-dept worker had been blind to the codebase for months because a Cyrillic bot name cannot be encoded into an HTTP header",
+    "symptom": "The department was written off as useless: asked to add an endpoint to a real 43-line file, Devvy returned a 474-char stub with run_worker, SYSTEM_PROMPT and the bot name all gone, plus an undefined name. Asked directly what BOT_NAME was in devvy-bot/bot.py, he answered \"ФАЙЛА НЕТ\". The same mechanism on 2026-07-01 replaced a 5766-line file with an 8-line stub and took cilly-bot down.",
+    "root_cause": "gh_read_file built its request with `\"User-Agent\": f\"{bot_name}-bot\"`. All five worker names are Cyrillic (девви, рикки, тести, секки, скрибби) and urllib encodes HTTP headers as latin-1, so every file read raised UnicodeEncodeError at position 0-4 — exactly the five letters of the name. The handler swallowed it (`except Exception: return \"\"`), so a total failure to read was indistinguishable from an empty file, and the worker rewrote the file from imagination.",
+    "why_architecture": "Two independent decisions combined into an invisible failure. Interpolating a display name into a protocol field mixes a human-facing string with a wire format that only accepts ASCII. Returning '' on every exception then erased the evidence. Either alone is survivable; together they produced a subsystem that looked healthy — /health green, responses fast, plausible code returned — while never once reading a byte of the repository. Silent degradation is worse than a crash precisely because nothing prompts an investigation.",
+    "fix": "User-Agent is now the ASCII constant GH_USER_AGENT; the bot name stays in logs where Cyrillic is safe. gh_fetch_file returns (content, error) and distinguishes 404 (file does not exist yet — legitimate for a new file) from a genuine read failure. When the read fails the worker REFUSES the task and the model is never called: a loud failure is cheaper than a destroyed file. Percent-encoding was added for the path after live testing showed the same UnicodeEncodeError resurfacing in the URL. Delivered end to end: merged to main, pin bumped in all five worker repos (a9716a78 to f814b9ad), all five redeployed — production had been running June 2 code while the repos were on July 25.",
+    "status": "fixed",
+    "prevention": "Never interpolate a display name into a protocol field; wire formats take ASCII identifiers, humans get logs. Never let a failed read return the same value as an empty read — callers cannot distinguish them and will act on emptiness as if it were fact. When a subsystem is called useless, measure what it can SEE before rewriting how it thinks: the department needed a working file read, not better prompts.",
+    "cause": "non-ASCII display name in an HTTP header, hidden by a fail-silent except",
+    "tag": "worker-runtime",
+    "posted_to_group": false,
+    "posted_at": null
   }
 ]
