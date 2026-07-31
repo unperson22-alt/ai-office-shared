@@ -318,6 +318,49 @@ class TestGhReadFile(unittest.TestCase):
             worker.urllib.request.urlopen = orig
             os.environ.pop("GH_PAT", None)
 
+    def test_non_ascii_path_is_percent_encoded(self):
+        """Тот же класс дефекта, но в URL: urllib требует ASCII и там тоже.
+
+        Найдено при проверке фикса против живого API — путь с кириллицей ронял
+        чтение с UnicodeEncodeError('ascii'), уже после того как заголовок
+        починили. Лечится процентным кодированием.
+        """
+        import io
+        import json as _json
+
+        captured = {}
+
+        class FakeResp:
+            def __init__(self, payload):
+                self._b = io.BytesIO(payload)
+
+            def __enter__(self):
+                return self._b
+
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(req, timeout=0):
+            captured["url"] = req.full_url
+            req.full_url.encode("ascii")   # бросит, если кодирование потеряли
+            import base64 as _b64
+            return FakeResp(_json.dumps({
+                "content": _b64.b64encode(b"ok").decode()}).encode())
+
+        os.environ["GH_PAT"] = "x"
+        orig = worker.urllib.request.urlopen
+        worker.urllib.request.urlopen = fake_urlopen
+        try:
+            text, err = worker.gh_fetch_file("devvy-bot", "папка/файл.py")
+            self.assertEqual(err, "")
+            self.assertEqual(text, "ok")
+            self.assertIn("%", captured["url"], "путь не закодирован")
+            self.assertIn("/contents/", captured["url"])
+            self.assertNotIn("файл", captured["url"])
+        finally:
+            worker.urllib.request.urlopen = orig
+            os.environ.pop("GH_PAT", None)
+
     def test_missing_file_is_not_an_error_but_broken_read_is(self):
         """404 = файла ещё нет (штатно для нового файла); прочие сбои = ошибка.
 

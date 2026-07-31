@@ -35,6 +35,7 @@ import logging
 import os
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 
 from aiohttp import web
 
@@ -88,7 +89,11 @@ def gh_fetch_file(repo: str, path: str, *, bot_name: str = "worker") -> tuple:
         return "", "GH_PAT не задан"
     if not repo or not path:
         return "", ""                      # нечего читать — это не ошибка
-    url = f"https://api.github.com/repos/{GH_ORG}/{repo}/contents/{path}"
+    # Путь ОБЯЗАН быть процентно-закодирован: urllib требует ASCII и в URL тоже,
+    # так что нелатинское имя файла роняло бы чтение той же UnicodeEncodeError,
+    # что и кириллица в заголовке (найдено при проверке фикса против живого API).
+    url = (f"https://api.github.com/repos/{quote(GH_ORG, safe='')}/"
+           f"{quote(repo, safe='')}/contents/{quote(path, safe='/')}")
     try:
         req = urllib.request.Request(url, headers={
             "Authorization": f"token {token}",
