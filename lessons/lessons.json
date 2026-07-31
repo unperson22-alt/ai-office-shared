@@ -1320,7 +1320,7 @@
     "prevention": "When a capability exists in code, check that the dispatcher can name it directly. Before adding a capability to a chain-of-agents pipeline, ask what a user would type to invoke it and confirm that string classifies to the intended intent. A dispatcher must be able to say 'I have a tool for exactly this' — otherwise it will delegate the writing of a tool it already owns.",
     "cause": "capability existed but was unnameable by the intent dispatcher",
     "tag": "intent-routing",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-07-31T21:16:06.221683+00:00"
   }
 ]
