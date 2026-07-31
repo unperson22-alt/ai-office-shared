@@ -1337,7 +1337,7 @@
     "prevention": "Never interpolate a display name into a protocol field; wire formats take ASCII identifiers, humans get logs. Never let a failed read return the same value as an empty read — callers cannot distinguish them and will act on emptiness as if it were fact. When a subsystem is called useless, measure what it can SEE before rewriting how it thinks: the department needed a working file read, not better prompts.",
     "cause": "non-ASCII display name in an HTTP header, hidden by a fail-silent except",
     "tag": "worker-runtime",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-07-31T21:32:26.969603+00:00"
   }
 ]
