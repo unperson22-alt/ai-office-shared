@@ -33,7 +33,9 @@ import base64
 import json
 import logging
 import os
+import urllib.error
 import urllib.request
+from urllib.parse import quote
 
 from aiohttp import web
 
@@ -63,23 +65,57 @@ def summarize_result(text: str, limit: int = 160) -> str:
     return text.strip().replace("\n", " ")[:limit]
 
 
-def gh_read_file(repo: str, path: str, *, bot_name: str = "worker") -> str:
-    """Читает файл из GitHub через contents API. Fail-silent → ''."""
+# 🔴 User-Agent ОБЯЗАН быть ASCII. urllib кодирует HTTP-заголовки в latin-1, а
+# имена воркеров кириллические («девви», «рикки», «тести», «секки», «скрибби»).
+# Подстановка bot_name в заголовок роняла КАЖДОЕ чтение файла с
+# UnicodeEncodeError('latin-1', position 0-4) — ровно пять букв имени, — а
+# fail-silent превращал падение в пустой контекст. В результате весь отдел
+# писал код, ни разу не увидев ни одного файла (диагностика 31.07.2026: Девви на
+# прямой вопрос о содержимом devvy-bot/bot.py отвечал «ФАЙЛА НЕТ»).
+# Имя бота остаётся в логах, где кириллица безопасна.
+GH_USER_AGENT = "ai-office-worker"
+
+
+def gh_fetch_file(repo: str, path: str, *, bot_name: str = "worker") -> tuple:
+    """(содержимое, ошибка). Пустая ошибка = успех.
+
+    Ошибка возвращается ОТДЕЛЬНО, потому что вызывающему нужно различать два
+    случая, которые раньше были неотличимы (оба давали ''):
+      • файла ещё нет (404) — штатно для задачи «создай новый файл»;
+      • файл есть, но прочитать не смогли — работать вслепую нельзя.
+    """
     token = os.getenv("GH_PAT", "")
-    if not token or not repo or not path:
-        return ""
-    url = f"https://api.github.com/repos/{GH_ORG}/{repo}/contents/{path}"
+    if not token:
+        return "", "GH_PAT не задан"
+    if not repo or not path:
+        return "", ""                      # нечего читать — это не ошибка
+    # Путь ОБЯЗАН быть процентно-закодирован: urllib требует ASCII и в URL тоже,
+    # так что нелатинское имя файла роняло бы чтение той же UnicodeEncodeError,
+    # что и кириллица в заголовке (найдено при проверке фикса против живого API).
+    url = (f"https://api.github.com/repos/{quote(GH_ORG, safe='')}/"
+           f"{quote(repo, safe='')}/contents/{quote(path, safe='/')}")
     try:
         req = urllib.request.Request(url, headers={
             "Authorization": f"token {token}",
-            "User-Agent": f"{bot_name}-bot",
+            "User-Agent": GH_USER_AGENT,
         })
         with urllib.request.urlopen(req, timeout=15) as r:
             data = json.load(r)
-        return base64.b64decode(data["content"]).decode()
+        return base64.b64decode(data["content"]).decode(), ""
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return "", ""                  # нового файла ещё нет — не ошибка
+        logger.warning("gh_fetch_file %s/%s: HTTP %s (бот %s)", repo, path, e.code, bot_name)
+        return "", f"HTTP {e.code}"
     except Exception as e:
-        logger.warning("gh_read_file %s/%s: %s", repo, path, e)
-        return ""
+        logger.warning("gh_fetch_file %s/%s: %s (бот %s)", repo, path, e, bot_name)
+        return "", f"{type(e).__name__}: {e}"
+
+
+def gh_read_file(repo: str, path: str, *, bot_name: str = "worker") -> str:
+    """Совместимость со старыми вызовами: только содержимое, ошибка теряется.
+    Новый код должен звать gh_fetch_file и обрабатывать ошибку явно."""
+    return gh_fetch_file(repo, path, bot_name=bot_name)[0]
 
 
 async def ask_claude(system_prompt: str, message: str, context: str = "") -> str:
@@ -125,7 +161,23 @@ def build_app(bot_name: str, system_prompt: str, state: dict) -> web.Application
 
         context = data.get("context", "")
         if not context and repo:
-            context = gh_read_file(repo, file_path or "bot.py", bot_name=bot_name)
+            target = file_path or "bot.py"
+            context, ctx_err = gh_fetch_file(repo, target, bot_name=bot_name)
+            if ctx_err:
+                # 🔴 Правка вслепую ЗАПРЕЩЕНА. Раньше воркер молча получал пустой
+                # контекст и переписывал файл «по памяти». Замер 31.07: просьба
+                # точечно добавить эндпоинт в devvy-bot/bot.py вернула
+                # 474-символьный обрубок — без run_worker, без SYSTEM_PROMPT, с
+                # неопределённым именем 'web'. Тот же механизм 01.07 подменил
+                # 5766-строчный файл 8-строчным стабом и уронил Силли.
+                # Отказ — единственный безопасный исход: пусть задача упадёт
+                # громко, чем тихо уничтожит файл.
+                msg = (f"ERROR: {bot_name} не смог прочитать {repo}/{target}: {ctx_err}. "
+                       f"Правка файла вслепую запрещена — задача не выполнена.")
+                logger.error("[%s] %s", bot_name, msg)
+                await log_event(r, bot_name, "response_sent", user_id=user_id)
+                await publish_activity(r, task_id, bot_name, "error", msg[:160])
+                return web.json_response({"response": msg})
 
         full_message = message
         if artifact:

@@ -205,6 +205,46 @@ class TestWorkerTask(unittest.TestCase):
         resp = run(h(FakeRequest({"message": "x", "task_id": "t1"})))
         self.assertIn("response", json.loads(resp.text))
 
+    def test_refuses_to_work_when_file_cannot_be_read(self):
+        """🔴 Правка вслепую запрещена: модель НЕ должна вызываться вообще.
+
+        Именно молчаливая работа с пустым контекстом дала инцидент 01.07
+        (5766-строчный файл заменён 8-строчным стабом) и воспроизвелась 31.07
+        на devvy-bot/bot.py. Отказ громче и дешевле уничтоженного файла.
+        """
+        called = []
+
+        async def must_not_run(system_prompt, message, context=""):
+            called.append(1)
+            return "не должно случиться"
+
+        worker.ask_claude = must_not_run
+        orig = worker.gh_fetch_file
+        worker.gh_fetch_file = lambda repo, path, **kw: ("", "HTTP 401")
+        try:
+            resp = run(self.handler(FakeRequest(
+                {"message": "добавь эндпоинт", "repo": "devvy-bot",
+                 "file_path": "bot.py", "task_id": "t1"})))
+            body = json.loads(resp.text)["response"]
+            self.assertTrue(body.startswith("ERROR:"), body)
+            self.assertIn("вслепую", body)
+            self.assertIn("devvy-bot/bot.py", body)
+            self.assertEqual(called, [], "модель вызвана несмотря на нечитаемый файл")
+        finally:
+            worker.gh_fetch_file = orig
+
+    def test_new_file_in_existing_repo_still_works(self):
+        """404 не должен блокировать задачу «создай новый файл»."""
+        orig = worker.gh_fetch_file
+        worker.gh_fetch_file = lambda repo, path, **kw: ("", "")
+        try:
+            resp = run(self.handler(FakeRequest(
+                {"message": "создай новый модуль", "repo": "devvy-bot",
+                 "file_path": "new.py", "task_id": "t1"})))
+            self.assertNotIn("ERROR:", json.loads(resp.text)["response"])
+        finally:
+            worker.gh_fetch_file = orig
+
 
 async def worker_publish(redis, task_id, bot, phase, summary):
     from ai_office_shared.shared.dev_activity import publish_activity
@@ -227,6 +267,125 @@ class TestGhReadFile(unittest.TestCase):
             self.assertEqual(worker.gh_read_file("", "bot.py"), "")
             self.assertEqual(worker.gh_read_file("repo", ""), "")
         finally:
+            os.environ.pop("GH_PAT", None)
+
+    def test_cyrillic_bot_name_does_not_break_the_request(self):
+        """🔴 Регресс главного дефекта отдела (найден 31.07.2026).
+
+        urllib кодирует HTTP-заголовки в latin-1. Пока в User-Agent
+        подставлялось имя бота, КАЖДОЕ чтение файла у всех пяти воркеров падало
+        с UnicodeEncodeError, а fail-silent превращал это в пустой контекст —
+        отдел месяцами писал код, ни разу не увидев ни одного файла.
+
+        Тест обязан падать, если имя бота вернут в заголовки.
+        """
+        import base64 as _b64
+        import io
+        import json as _json
+
+        captured = {}
+
+        class FakeResp:
+            def __init__(self, payload):
+                self._b = io.BytesIO(payload)
+
+            def read(self, *a):
+                return self._b.read(*a)
+
+            def __enter__(self):
+                return self._b
+
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(req, timeout=0):
+            captured["headers"] = dict(req.headers)
+            body = _json.dumps({
+                "content": _b64.b64encode("BOT_NAME = 'девви'".encode()).decode()
+            }).encode()
+            return FakeResp(body)
+
+        os.environ["GH_PAT"] = "x"
+        orig = worker.urllib.request.urlopen
+        worker.urllib.request.urlopen = fake_urlopen
+        try:
+            text, err = worker.gh_fetch_file("devvy-bot", "bot.py", bot_name="девви")
+            self.assertEqual(err, "", "кириллическое имя бота снова ломает чтение")
+            self.assertIn("девви", text, "содержимое файла не вернулось")
+            for k, v in captured["headers"].items():
+                v.encode("latin-1")   # бросит UnicodeEncodeError, если вернут кириллицу
+        finally:
+            worker.urllib.request.urlopen = orig
+            os.environ.pop("GH_PAT", None)
+
+    def test_non_ascii_path_is_percent_encoded(self):
+        """Тот же класс дефекта, но в URL: urllib требует ASCII и там тоже.
+
+        Найдено при проверке фикса против живого API — путь с кириллицей ронял
+        чтение с UnicodeEncodeError('ascii'), уже после того как заголовок
+        починили. Лечится процентным кодированием.
+        """
+        import io
+        import json as _json
+
+        captured = {}
+
+        class FakeResp:
+            def __init__(self, payload):
+                self._b = io.BytesIO(payload)
+
+            def __enter__(self):
+                return self._b
+
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(req, timeout=0):
+            captured["url"] = req.full_url
+            req.full_url.encode("ascii")   # бросит, если кодирование потеряли
+            import base64 as _b64
+            return FakeResp(_json.dumps({
+                "content": _b64.b64encode(b"ok").decode()}).encode())
+
+        os.environ["GH_PAT"] = "x"
+        orig = worker.urllib.request.urlopen
+        worker.urllib.request.urlopen = fake_urlopen
+        try:
+            text, err = worker.gh_fetch_file("devvy-bot", "папка/файл.py")
+            self.assertEqual(err, "")
+            self.assertEqual(text, "ok")
+            self.assertIn("%", captured["url"], "путь не закодирован")
+            self.assertIn("/contents/", captured["url"])
+            self.assertNotIn("файл", captured["url"])
+        finally:
+            worker.urllib.request.urlopen = orig
+            os.environ.pop("GH_PAT", None)
+
+    def test_missing_file_is_not_an_error_but_broken_read_is(self):
+        """404 = файла ещё нет (штатно для нового файла); прочие сбои = ошибка.
+
+        Различие нужно, чтобы отказ работать вслепую не ломал задачи вида
+        «создай новый файл в существующем репозитории».
+        """
+        os.environ["GH_PAT"] = "x"
+        orig = worker.urllib.request.urlopen
+
+        def raising(code):
+            def _f(req, timeout=0):
+                raise worker.urllib.error.HTTPError(
+                    "url", code, "boom", {}, None)
+            return _f
+
+        try:
+            worker.urllib.request.urlopen = raising(404)
+            self.assertEqual(worker.gh_fetch_file("repo", "new.py"), ("", ""))
+
+            worker.urllib.request.urlopen = raising(401)
+            text, err = worker.gh_fetch_file("repo", "bot.py")
+            self.assertEqual(text, "")
+            self.assertIn("401", err, "сбой чтения обязан быть видимой ошибкой")
+        finally:
+            worker.urllib.request.urlopen = orig
             os.environ.pop("GH_PAT", None)
 
 

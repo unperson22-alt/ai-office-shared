@@ -1305,5 +1305,22 @@
     "tag": "notifications",
     "posted_to_group": true,
     "posted_at": "2026-07-27T04:32:42.556364+00:00"
+  },
+  {
+    "id": 80,
+    "date": "2026-07-31",
+    "bot": "cilly",
+    "layer": "intent-routing",
+    "title": "\"Create repository molly-trader\" was routed to the dev team, which spent three attempts writing a script instead of calling the create_repo function that already existed",
+    "symptom": "Owner asked Cilly in DM to create a private repository and got no answer at all. Logs showed the request was received and classified as intent=dev_task with confidence 0.92, then handed to the dev-dept chain. Devvy produced a 3876-char provisioning script against an invented organisation (GITHUB_ORG=\"ai-office\"), Ricky errored, Testi found syntax faults, and the task ended in status=blocked. No repository was created, and because the pipeline only replies when it finishes, the owner saw silence and assumed the bot was down.",
+    "root_cause": "create_repo was imported and working, but reachable ONLY from inside the create_bot intent. The dispatcher's intent enum had no entry for creating a repository on its own, so every such request had to land on some other intent: create_bot (which also goes to BotFather for a token and provisions a Railway service) or dev_task. The classifier picked dev_task because the phrasing looked like new work for the team. A capability with no way to name it is, from the dispatcher's point of view, a capability that does not exist.",
+    "why_architecture": "The intent list is the whole API surface of the office. Anything not on it gets silently reinterpreted as the nearest listed thing rather than refused, and the nearest listed thing here was 'have humans write code'. That failure mode is quiet and expensive: it burns the dev chain, produces plausible-looking wrong artefacts, and reports nothing to the owner until the chain terminates. The lesson is not about this one verb but about the gap between what the code can do and what the dispatcher can name.",
+    "fix": "Added an explicit create_repo intent to coder.py: entry in the INTENT_PROMPT enum, a description that spells out both the signals (\"create repository X\", \"set up repo X\") and the anti-signals (do not create a bot, do not go to BotFather, do not push template code, do not call the dev team), a handler that validates the name and calls the existing create_repo, and an added anti-signal on dev_task pointing at this incident by date. create_repo joined the DESTRUCTIVE tuple so a low-confidence guess asks for clarification instead of creating stray repositories.",
+    "status": "fixed",
+    "prevention": "When a capability exists in code, check that the dispatcher can name it directly. Before adding a capability to a chain-of-agents pipeline, ask what a user would type to invoke it and confirm that string classifies to the intended intent. A dispatcher must be able to say 'I have a tool for exactly this' — otherwise it will delegate the writing of a tool it already owns.",
+    "cause": "capability existed but was unnameable by the intent dispatcher",
+    "tag": "intent-routing",
+    "posted_to_group": false,
+    "posted_at": null
   }
 ]
