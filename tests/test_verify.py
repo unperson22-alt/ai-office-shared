@@ -27,6 +27,22 @@ class TestExtractCode(unittest.TestCase):
         t = "```python\nx=1\n```\ntext\n```python\ndef f():\n    return 2\n```"
         self.assertIn("def f()", verify.extract_code(t))
 
+    def test_file_containing_fences_survives(self):
+        """🔴 Файл сам содержит ``` — наивный разбор обрезал его на внутреннем заборе.
+
+        Ровно форма devvy-bot/bot.py: в SYSTEM_PROMPT лежит пример ответа в
+        ```python-блоке. 01.08.2026 это три попытки подряд давало
+        «unterminated triple-quoted string literal», и выглядело как слабая
+        модель, хотя виноват транспорт.
+        """
+        inner = '```python\n# полный код файла\n```'
+        payload = f'BOT_NAME = "девви"\n\nPROMPT = """формат:\n{inner}\nSUMMARY: что сделал"""\n'
+        answer = f"Вот файл:\n```python\n{payload}```\nSUMMARY: добавил эндпоинт"
+        got = verify.extract_code(answer)
+        self.assertIn("SUMMARY: что сделал", got, "хвост файла обрезан на внутреннем заборе")
+        ok, rep = verify.verify_code(got)
+        self.assertTrue(ok, f"извлечённый файл не компилируется: {rep}")
+
     def test_no_block_is_empty_not_error(self):
         """У ревьюеров ответ текстовый — это не повод падать."""
         self.assertEqual(verify.extract_code("VERDICT: APPROVED, всё хорошо"), "")

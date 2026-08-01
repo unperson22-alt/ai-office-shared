@@ -25,16 +25,54 @@ logger = logging.getLogger("ai_office_shared.verify")
 _FENCE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.S)
 
 
-def extract_code(text: str) -> str:
-    """Самый длинный ```python-блок из ответа воркера. '' — блока нет.
+def _compiles(code: str) -> bool:
+    if not code.strip():
+        return False
+    try:
+        compile(code, "<probe>", "exec")
+        return True
+    except Exception:
+        return False
 
-    Пустая строка НЕ означает «плохо»: у ревьюеров (Тести, Секки) ответ по
-    смыслу текстовый, и проверять там нечего.
+
+def _outermost(text: str) -> str:
+    """Срез от ПЕРВОГО открывающего забора до ПОСЛЕДНЕГО закрывающего.
+
+    Нужен, когда сам файл содержит ```. Такие файлы в офисе реальны:
+    devvy-bot/bot.py держит в SYSTEM_PROMPT пример ответа в ```python-блоке.
+    """
+    m = re.search(r"```(?:python|py)?\s*\n", text)
+    if not m:
+        return ""
+    end = text.rfind("```")
+    return text[m.end():end].strip() if end > m.end() else ""
+
+
+def extract_code(text: str) -> str:
+    """Код из ответа воркера. '' — блока нет.
+
+    🔴 Забор ``` НЕ вложенный: если файл сам содержит тройные кавычки, наивный
+    нежадный разбор обрежет его на внутреннем заборе и отдаст обрубок, который
+    не компилируется. Именно это 01.08.2026 давало «unterminated triple-quoted
+    string literal» три попытки подряд, и это легко было списать на слабую
+    модель — а виноват транспорт.
+
+    Поэтому берём НЕСКОЛЬКО кандидатов и предпочитаем тот, что компилируется:
+    внешний срез (первый забор → последний), затем самый длинный нежадный блок.
+    Если не компилируется ни один — отдаём самый длинный, чтобы verify_code
+    показал настоящую ошибку, а не молчал.
+
+    Пустая строка НЕ означает «плохо»: у ревьюеров ответ текстовый.
     """
     if not text:
         return ""
-    blocks = _FENCE.findall(text)
-    return max(blocks, key=len).strip() if blocks else ""
+    blocks = [b.strip() for b in _FENCE.findall(text) if b.strip()]
+    longest = max(blocks, key=len) if blocks else ""
+    candidates = [_outermost(text), longest]
+    for c in candidates:
+        if c and _compiles(c):
+            return c
+    return longest or (candidates[0] if candidates[0] else "")
 
 
 def _pyflakes_report(code: str, filename: str = "<worker>") -> list:
