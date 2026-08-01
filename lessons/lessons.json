@@ -1339,5 +1339,22 @@
     "tag": "worker-runtime",
     "posted_to_group": true,
     "posted_at": "2026-07-31T21:32:26.969603+00:00"
+  },
+  {
+    "id": 82,
+    "date": "2026-08-01",
+    "bot": "dev-dept",
+    "layer": "worker-runtime",
+    "title": "Nothing in the pipeline ever compiled the code, and the fence-delimited transport silently truncated any file containing triple backticks",
+    "symptom": "After the workers regained sight, Devvy still returned a file that would not compile: 'unterminated triple-quoted string literal', three attempts in a row, identical each time. It looked like a weak model. Separately, no stage of the pipeline had ever run a compiler: Testi 'tested' text, Sekky audited text, and the pipeline's final_code_artifact was Ricky's review prose.",
+    "root_cause": "Two defects stacked. First, there was no verification of any kind — a defect that takes milliseconds to detect could travel the whole chain and come out as a commit message. Second, the transport is fence-delimited: workers return code inside a ```python block, but devvy-bot/bot.py itself contains ``` on lines 37 and 39 (its SYSTEM_PROMPT shows an example answer in a fenced block). The inner fence closes the outer one, so a non-greedy parse returns a truncated file. Any office file containing triple backticks could not round-trip through the pipeline at all.",
+    "why_architecture": "The fence collision was invisible precisely because there was no verification: a truncated file looks like a plausible file. Once the compiler was in the loop the failure became specific and repeatable, and the repeatability is what exposed the real cause — a model that cannot write valid Python fails differently each time, a broken parser fails identically. Adding the check did not just catch defects, it made the remaining defect diagnosable.",
+    "fix": "Added shared/verify.py (extract_code + verify_code + retry_prompt) and a self-check loop in the worker: generate, verify with compile+pyflakes — the same two gates the office CI runs — and on failure re-ask the model with the CONCRETE error and line number, up to WORKER_VERIFY_ATTEMPTS times. Code is never executed: compile() parses, pyflakes walks the AST, so no sandbox is needed; a sandbox is only required to RUN tests. Exhausted retries mark the answer with an ERROR prefix, which the existing dev_pipeline abort already understands. extract_code now prefers whichever candidate compiles — the outermost fence span or the longest non-greedy block — so nested fences survive. Verified against the live file: 1753 of 1754 characters recovered, compiles, tail intact.",
+    "status": "fixed",
+    "prevention": "A pipeline that produces code must run a compiler on it before passing it on; without that, every downstream stage reviews fiction. When a failure repeats identically, suspect the plumbing rather than the model — determinism is a property of code, not of sampling. And never carry a payload in a delimiter the payload itself can contain.",
+    "cause": "no verification stage; fence-delimited transport cannot carry fences",
+    "tag": "worker-runtime",
+    "posted_to_group": false,
+    "posted_at": null
   }
 ]
