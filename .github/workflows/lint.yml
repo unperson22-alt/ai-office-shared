@@ -26,5 +26,10 @@ jobs:
         run: python -m compileall -q $(git ls-files '*.py' ':!agents/*')
       - name: pyflakes
         run: python -m pyflakes $(git ls-files '*.py' ':!agents/*')
+      # Зависимости нужны: tests/test_worker.py импортирует shared/worker.py, а тот
+      # тянет aiohttp; verify.py зовёт pyflakes. Без установки job падал на
+      # ModuleNotFoundError — то есть тесты в CI не гонялись вовсе.
+      - name: deps
+        run: pip install aiohttp pyflakes
       - name: tests
         run: python -m unittest discover -s tests -v

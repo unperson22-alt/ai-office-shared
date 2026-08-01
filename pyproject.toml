@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-office-shared"
-version = "0.1.21"
+version = "0.1.22"
 description = "Shared library for AI Office Telegram bots"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["pyflakes>=3.0"]  # verify.py: тот же гейт, что в CI офиса
 
 [tool.setuptools.packages.find]
 where = ["."]

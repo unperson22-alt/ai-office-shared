@@ -42,6 +42,7 @@ from aiohttp import web
 from .auth import office_auth_middleware
 from .dev_activity import format_activity_for_prompt, publish_activity, read_activity
 from .logging import log_event
+from .verify import extract_code, retry_prompt, verify_code
 
 logger = logging.getLogger("ai_office_shared.worker")
 
@@ -52,6 +53,9 @@ WORKER_MAX_TOKENS = int(os.getenv("WORKER_MAX_TOKENS", "8192"))
 
 MAX_CONTEXT_CHARS = 8000
 MAX_ARTIFACT_CHARS = 4000
+# Сколько раз воркер переписывает код по реальной ошибке проверки. 1 = проверять
+# и помечать, но не переделывать. Каждая попытка — ещё один вызов модели.
+VERIFY_ATTEMPTS = int(os.getenv("WORKER_VERIFY_ATTEMPTS", "3"))
 
 
 def summarize_result(text: str, limit: int = 160) -> str:
@@ -136,6 +140,57 @@ async def ask_claude(system_prompt: str, message: str, context: str = "") -> str
     return resp.content[0].text
 
 
+async def _verified(bot_name: str, system_prompt: str, message: str, context: str,
+                    response: str, redis_client=None, task_id: str = "") -> str:
+    """Прогнать ответ через проверку и дать воркеру переписать по РЕАЛЬНОЙ ошибке.
+
+    Это то, чего в отделе не было вовсе: код уезжал дальше по цепочке, ни разу не
+    встретившись с компилятором. Тести «тестировал» текст, Секки искал в тексте
+    уязвимости, а на выходе получался commit message к коду, который не
+    компилируется.
+
+    Цикл, а не одна попытка, — потому что модели нужна конкретная ошибка со
+    строкой: одного «перепиши получше» недостаточно. Если после всех попыток
+    код всё ещё красный, ответ помечается префиксом ERROR — пусть задача упадёт
+    громко, чем поедет дальше и станет чужой проблемой.
+
+    Ревьюеров это не трогает: у них в ответе нет ```python-блока, verify_code
+    на пустом коде возвращает ok.
+    """
+    code = extract_code(response)
+    if not code:
+        return response
+
+    ok, report = verify_code(code)
+    for attempt in range(1, VERIFY_ATTEMPTS + 1):
+        if ok:
+            if attempt > 1:
+                logger.info("[%s] проверка пройдена с %d-й попытки", bot_name, attempt)
+            return response
+        logger.warning("[%s] проверка не пройдена (попытка %d/%d): %s",
+                       bot_name, attempt, VERIFY_ATTEMPTS, report)
+        await publish_activity(redis_client, task_id, bot_name, "retry",
+                               f"проверка: {report}"[:160])
+        if attempt == VERIFY_ATTEMPTS:
+            break
+        try:
+            response = await ask_claude(
+                system_prompt, message + retry_prompt(report, attempt, VERIFY_ATTEMPTS),
+                context=context)
+        except Exception as e:
+            logger.warning("[%s] переделка не удалась: %s", bot_name, e)
+            break
+        code = extract_code(response)
+        if not code:
+            return response
+        ok, report = verify_code(code)
+
+    if ok:
+        return response
+    return (f"ERROR: {bot_name} не смог получить проходящий проверку код за "
+            f"{VERIFY_ATTEMPTS} попыт(ки). Последняя ошибка: {report}\n\n{response}")
+
+
 def build_app(bot_name: str, system_prompt: str, state: dict) -> web.Application:
     """aiohttp-приложение воркера: /task, /health, /reply."""
 
@@ -192,6 +247,8 @@ def build_app(bot_name: str, system_prompt: str, state: dict) -> web.Application
 
         try:
             response = await ask_claude(system_prompt, full_message, context=context)
+            response = await _verified(bot_name, system_prompt, full_message,
+                                       context, response, r, task_id)
         except Exception as e:
             logger.warning("[%s] ask_claude failed: %s", bot_name, e)
             response = f"ERROR: {bot_name} не смог обработать задачу: {e}"
