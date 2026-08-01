@@ -1354,7 +1354,7 @@
     "prevention": "A pipeline that produces code must run a compiler on it before passing it on; without that, every downstream stage reviews fiction. When a failure repeats identically, suspect the plumbing rather than the model — determinism is a property of code, not of sampling. And never carry a payload in a delimiter the payload itself can contain.",
     "cause": "no verification stage; fence-delimited transport cannot carry fences",
     "tag": "worker-runtime",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-08-01T01:03:22.176378+00:00"
   }
 ]
