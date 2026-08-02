@@ -1404,6 +1404,8 @@
     "status": "fixed",
     "prevention": "Before designing any workaround for a missing capability, spend one call testing the capability directly against the real target. Treat session-start scope lists, credential inventories and permission tables as snapshots that tools can extend, and let the tool's own error be the evidence of a limit — never a list read at startup. If a transfer mechanism produces no confirmation that data arrived, it has not been shown to work, however plausible it looks.",
     "cause": "a session-start snapshot was mistaken for a hard boundary, and the capability was never tested against the real target",
-    "tag": "process"
+    "tag": "process",
+    "posted_to_group": true,
+    "posted_at": "2026-08-02T15:46:42.310949+00:00"
   }
 ]
