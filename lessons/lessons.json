@@ -1388,7 +1388,7 @@
     "prevention": "Verify a credential through the component that will use it, never from the agent's own client. If a check must run locally, first confirm the request actually carried the credential — inspect the response for identity markers (client id, rate-limit tier, token expiry) before trusting a 200.",
     "cause": "egress proxy replaced the Authorization header, making every credential appear valid",
     "tag": "security",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-08-02T09:57:10.527058+00:00"
   }
 ]
