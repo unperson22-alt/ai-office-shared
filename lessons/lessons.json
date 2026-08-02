@@ -1356,5 +1356,22 @@
     "tag": "worker-runtime",
     "posted_to_group": true,
     "posted_at": "2026-08-01T01:03:22.176378+00:00"
+  },
+  {
+    "id": 83,
+    "date": "2026-08-02",
+    "bot": "cilly",
+    "layer": "monitoring",
+    "title": "The daily audit declared a working Railway token expired for two days because it probed with a query that project-scoped tokens cannot answer",
+    "symptom": "Cilly's daily audit reported '🔴 RAILWAY_TOKEN истёк или отозван — Railway API недоступен' on 01.08 and again on 02.08, and asked for a new token to be issued. The token was fine: the same value listed all 7 projects, read variables and triggered redeploys on demand. The audit also reported 'Деплои (0): все SUCCESS' — it had checked nothing.",
+    "root_cause": "The auth canary was `{ me { id } }`. `me` is an ACCOUNT-level field: a token scoped to Projects answers Not Authorized to it while remaining fully functional for everything the office actually does — projects, deployments, variables, serviceInstanceRedeploy. The office had just moved to a project-scoped token (the previous account-scoped one was rotated after a leak), so the canary began failing on a healthy token. A second probe, _railway_is_available, had the mirror-image defect: it only checked HTTP 200, and Railway returns 200 with an errors body, so it reported success even when auth genuinely failed.",
+    "why_architecture": "A health check must exercise the capability it certifies. Probing a field the caller never uses tests the wrong permission, and the failure is doubly expensive: it hides the real state and it manufactures work — two days of alerts demanding a token rotation that would not have helped. The pair of defects is instructive: one probe was stricter than the real usage and cried wolf, the other was laxer and would have stayed silent during a genuine outage.",
+    "fix": "Both probes now use RAILWAY_PROBE = '{ projects { edges { node { id } } } }' — the same surface the office relies on — and _railway_is_available additionally checks for an errors body instead of trusting HTTP 200. Verified with the live token: the old probe returns Not Authorized, the new one succeeds, same credential.",
+    "status": "fixed",
+    "prevention": "Health checks probe the exact capability in use, never a broader one. When a monitor reports a credential dead, verify the credential independently before rotating it: an alert is a hypothesis, not a finding — this one survived two days and one unnecessary rotation because nobody tested the token directly.",
+    "cause": "auth canary probed an account-level field with a project-scoped token",
+    "tag": "monitoring",
+    "posted_to_group": false,
+    "posted_at": null
   }
 ]

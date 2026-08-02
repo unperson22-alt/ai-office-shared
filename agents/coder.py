@@ -936,16 +936,30 @@ async def railway_query(query: str, variables: dict = None) -> dict:
 
 
 
+# Пробник доступности Railway. НЕ спрашивать `me` — это АККАУНТНЫЙ уровень, и
+# токен с областью «Projects» отвечает на него Not Authorized, будучи при этом
+# полностью рабочим для всего, что офису нужно (projects, deployments,
+# variables, редеплой). 02.08.2026 из-за этого аудит два дня подряд объявлял
+# живой токен истёкшим и требовал его перевыпустить. Спрашиваем то, что офис
+# реально использует: список проектов.
+RAILWAY_PROBE = "{ projects { edges { node { id } } } }"
+
+
 async def _railway_is_available() -> bool:
-    """Быстрая проверка доступности Railway API (timeout 8 сек)."""
+    """Быстрая проверка доступности Railway API (timeout 8 сек).
+
+    Railway отдаёт HTTP 200 и с ошибкой в теле, поэтому одного кода мало —
+    проверяем, что в ответе нет `errors`."""
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(8.0)) as c:
             r = await c.post(
                 "https://backboard.railway.com/graphql/v2",
                 headers={"Authorization": f"Bearer {RAILWAY_TOKEN}", "Content-Type": "application/json"},
-                json={"query": "{ me { id } }"},
+                json={"query": RAILWAY_PROBE},
             )
-            return r.status_code == 200
+            if r.status_code != 200:
+                return False
+            return not (r.json() or {}).get("errors")
     except Exception:
         return False
 
@@ -2025,7 +2039,7 @@ async def run_daily_audit() -> str:
     # 0. Early Railway API auth check — prevents 14 fake AUTH_ERRORs on expired token
     _railway_auth_ok = True
     try:
-        await railway_query("{ me { id } }")
+        await railway_query(RAILWAY_PROBE)
     except RuntimeError as e:
         if "Not Authorized" in str(e) or "Unauthorized" in str(e):
             _railway_auth_ok = False
