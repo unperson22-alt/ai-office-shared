@@ -1390,5 +1390,20 @@
     "tag": "security",
     "posted_to_group": true,
     "posted_at": "2026-08-02T09:57:10.527058+00:00"
+  },
+  {
+    "id": 85,
+    "date": "2026-08-02",
+    "bot": "office",
+    "layer": "process/tooling",
+    "title": "A session's own repository allowlist was treated as fixed, so finished code sat undeliverable for two days while elaborate transfer routes were designed around a one-call fix",
+    "symptom": "molly-trader was complete and green locally — 19 files, 2 commits, 35 regression tests passing — but the repository was not in the session's scope at the time the work started. Two days went into workarounds: a git bundle handed to a second session via chat attachment (which silently never arrived, because chat attachments are not part of a session's filesystem), and a plan to push ~190 KB of source through a worker bot's HTTP endpoint one file at a time. The eventual delivery was a single add_repo call followed by an ordinary git push, and it took under a minute.",
+    "root_cause": "The scope list printed at session start was read as the definitive set of reachable repositories. It is a snapshot, not a boundary: add_repo appends to it at any point in the session, including for repositories created after the session began. Nothing was ever tried against the repository itself; the impossibility was inferred from the list.",
+    "why_architecture": "The failure was not a missing capability but an untested assumption about a capability's shape, and untested assumptions about tooling are expensive in a specific way — they redirect effort into building machinery whose only purpose is to route around a wall that is not there. The cost also compounds silently: the bundle route failed without an error, so two days of it looked like progress. A capability check costs one call and returns a definite answer; a workaround costs however long it takes to discover it does not work.",
+    "fix": "Called add_repo for unperson22-alt/molly-trader, which returned success, then pushed the existing local history to claude/mean-reversion-bot-szbd0j. CI lint passed on the first run. No bundle, no worker relay, no file-by-file transfer.",
+    "status": "fixed",
+    "prevention": "Before designing any workaround for a missing capability, spend one call testing the capability directly against the real target. Treat session-start scope lists, credential inventories and permission tables as snapshots that tools can extend, and let the tool's own error be the evidence of a limit — never a list read at startup. If a transfer mechanism produces no confirmation that data arrived, it has not been shown to work, however plausible it looks.",
+    "cause": "a session-start snapshot was mistaken for a hard boundary, and the capability was never tested against the real target",
+    "tag": "process"
   }
 ]
