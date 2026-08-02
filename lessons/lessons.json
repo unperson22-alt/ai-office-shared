@@ -1373,5 +1373,22 @@
     "tag": "monitoring",
     "posted_to_group": true,
     "posted_at": "2026-08-02T09:16:30.522003+00:00"
+  },
+  {
+    "id": 84,
+    "date": "2026-08-02",
+    "bot": "office",
+    "layer": "security/verification",
+    "title": "Credential checks run from the agent's own sandbox were meaningless: an egress proxy substituted its own GitHub App token, so every token tested alive",
+    "symptom": "Four distinct GitHub tokens found across office services all reported healthy when checked with GET /api.github.com/user, including tokens that were in fact revoked. The office was told all four were fine and given an identification rule based on refreshing their 'last used' timestamps — a rule that could not work, because none of them had been used.",
+    "root_cause": "The sandbox routes outbound HTTPS through a proxy that rewrites the Authorization header to its own GitHub App installation credential. The response headers gave it away — X-Oauth-Client-Id pointing at an App, a token expiry a few hours out, and a 15000/hour rate limit that classic PATs never get. Every request tested the proxy's identity, not the supplied token.",
+    "why_architecture": "A credential can only be verified by the system that will actually present it. Testing it from somewhere else tests that place's identity, and the failure is silent and confidently positive — worse than no check at all, because it produces a false all-clear. The same shape as the audit's Railway canary found the same week: a probe that does not exercise the real path certifies the wrong thing.",
+    "fix": "Tokens are now verified through a worker: the candidate is set as devvy-bot's GH_PAT, the service is redeployed and asked to read a real file from GitHub. The answer is unambiguous because a worker that cannot read refuses loudly with the HTTP code. Run against all four office tokens this way, two proved revoked — one sitting on six services as GITHUB_TOKEN, one on vietnam-bot — and were replaced with the live token.",
+    "status": "fixed",
+    "prevention": "Verify a credential through the component that will use it, never from the agent's own client. If a check must run locally, first confirm the request actually carried the credential — inspect the response for identity markers (client id, rate-limit tier, token expiry) before trusting a 200.",
+    "cause": "egress proxy replaced the Authorization header, making every credential appear valid",
+    "tag": "security",
+    "posted_to_group": false,
+    "posted_at": null
   }
 ]
