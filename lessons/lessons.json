@@ -1422,7 +1422,8 @@
     "prevention": "Never accept a delegated state change on the strength of the agent's own report. Verify through a different client than the one that performed the action — the caller's own API access, or git ls-remote for refs. When dispatching, ask for the raw HTTP status and body rather than for a summary or a re-read: a status code is cheap to check and conspicuous to invent, while a narrated 'готово' costs nothing to produce. Treat a self-confirming answer, where the agent both acts and reports its own verification, as unverified by construction.",
     "cause": "delegated action reported as done, including a fabricated verification, when the call had never been made",
     "tag": "delegation, verification, hallucination, ops",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-02T18:18:31.157960+00:00"
   },
   {
     "id": 87,
@@ -1438,6 +1439,7 @@
     "prevention": "Give the intent classifier a generic GitHub-ops route covering ref and branch operations, and make dev_task the explicit fallback rather than the default one: an unroutable ops request should come back as 'нет такого интента' in one step. When delegating an ops action, state it as the HTTP call and check the first line of the reply — a plan, a filename or a repo/file header means it was classified as codegen, and the task should be stopped immediately rather than left to run the chain out.",
     "cause": "no intent for ref operations, so a GitHub ops request defaulted into the code-generation pipeline",
     "tag": "intent-routing, delegation, ops, fleet-drift",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-02T18:18:31.157960+00:00"
   }
 ]
