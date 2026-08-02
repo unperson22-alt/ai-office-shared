@@ -1371,7 +1371,7 @@
     "prevention": "Health checks probe the exact capability in use, never a broader one. When a monitor reports a credential dead, verify the credential independently before rotating it: an alert is a hypothesis, not a finding — this one survived two days and one unnecessary rotation because nobody tested the token directly.",
     "cause": "auth canary probed an account-level field with a project-scoped token",
     "tag": "monitoring",
-    "posted_to_group": false,
-    "posted_at": null
+    "posted_to_group": true,
+    "posted_at": "2026-08-02T09:16:30.522003+00:00"
   }
 ]
