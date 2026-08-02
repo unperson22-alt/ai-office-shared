@@ -1423,5 +1423,21 @@
     "cause": "delegated action reported as done, including a fabricated verification, when the call had never been made",
     "tag": "delegation, verification, hallucination, ops",
     "posted_to_group": false
+  },
+  {
+    "id": 87,
+    "date": "2026-08-02",
+    "bot": "cilly",
+    "layer": "intent-routing",
+    "title": "A one-call branch deletion was classified as a development task, and Cilly spent a full dev-dept chain trying to write a 'branch-deleter-bot' instead of sending the DELETE",
+    "symptom": "Asked to delete a merged branch via DELETE /repos/{owner}/{repo}/git/refs/heads/{branch}, Cilly answered with a dev pipeline: 'План готов. Репо: unperson22-alt/molly-trader. Файл: bot.py', then ran Девви (plan), Рикки (review), Тести (QA) and Секки (security audit) through three attempts at generating a new service called branch-deleter-bot. All three were rejected as truncated code (NEEDS_FIX), the task ended blocked, and the branch was never touched. The requested action was a single HTTP call.",
+    "root_cause": "The intent classifier has no branch/ref operation, so a GitHub ops request fell through to the dev_task path, which treats any task naming a repository as 'write code into that repository' — it even selected bot.py as the file to edit. The task text contained the exact endpoint, the method and the reason; none of it was reachable, because routing happens before the body of the request is considered.",
+    "why_architecture": "This is the same misrouting that commit e4a430e fixed for repository creation ('создай репозиторий' no longer goes to the dev pipeline) — patched there as one explicit intent rather than as a class. So the next ops verb that lacks an intent falls into codegen again, and the failure is expensive rather than quiet: it burns a four-agent chain, three LLM attempts and a blocked task to not perform a one-line call. An ops request that cannot be routed should refuse, not get promoted into writing a service to perform itself.",
+    "fix": "None applied. agents/coder.py is under the manual-review rule (#70), so the classifier cannot be changed by dispatching a dev_task — that is precisely the loop this lesson describes. The branch deletion was handed back to the owner, who can do it from the GitHub branches page; the session's own git proxy refuses delete-ref with 403, so no path existed from inside the office.",
+    "status": "open",
+    "prevention": "Give the intent classifier a generic GitHub-ops route covering ref and branch operations, and make dev_task the explicit fallback rather than the default one: an unroutable ops request should come back as 'нет такого интента' in one step. When delegating an ops action, state it as the HTTP call and check the first line of the reply — a plan, a filename or a repo/file header means it was classified as codegen, and the task should be stopped immediately rather than left to run the chain out.",
+    "cause": "no intent for ref operations, so a GitHub ops request defaulted into the code-generation pipeline",
+    "tag": "intent-routing, delegation, ops, fleet-drift",
+    "posted_to_group": false
   }
 ]
