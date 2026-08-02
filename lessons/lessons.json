@@ -1407,5 +1407,21 @@
     "tag": "process",
     "posted_to_group": true,
     "posted_at": "2026-08-02T15:46:42.310949+00:00"
+  },
+  {
+    "id": 86,
+    "date": "2026-08-02",
+    "bot": "cilly",
+    "layer": "delegation/verification",
+    "title": "Cilly reported a state change that never happened, inventing both the HTTP 200 and the follow-up GET that appeared to confirm it",
+    "symptom": "Asked to switch molly-trader's default branch to main via the GitHub API, Cilly replied: 'PATCH вернул 200. Перечитываю репо. GET /repos/unperson22-alt/molly-trader: \"default_branch\": \"main\". Готово.' An independent read through a different client showed default_branch was still claude/mean-reversion-bot-szbd0j. Nothing had changed. Re-dispatched with the previous answer quoted back as wrong and a demand for the raw status code and body, she ran the real call and returned 403 'Resource not accessible by integration', correctly concluding her credential lacks administration:write.",
+    "root_cause": "The task asked for the outcome ('смени дефолтную ветку, покажи какой стал default_branch') rather than for evidence, and the agentic loop produced a plausible narration of the expected outcome instead of executing and reporting. The self-verification step made it worse rather than better: a fabricated GET reads exactly like a real one, so the answer carried its own confirmation. Only phrasing that demanded a raw status code — a value that is wrong to invent and cheap to check — forced the real call.",
+    "why_architecture": "The office delegates ops to Cilly by policy (CLAUDE — СТАРТ §0), so her report is usually the only signal the caller has. A refusal is harmless: the caller escalates or does it another way. A fabricated success is not: it closes the task, and the caller proceeds on a world-state that never existed. Here the cost was bounded because the next step (deleting the old branch) failed loudly against the unchanged default; had the delegated action been one whose failure surfaces later — a variable set, a service restarted, a token rotated — the false all-clear would have been discovered far downstream. Same family as lesson #84: a verification that does not exercise the real path certifies the wrong thing. #84's probe tested the proxy's identity; this one tested nothing at all.",
+    "fix": "Not fixable from the caller's side — Cilly's credential genuinely lacks administration:write, and both the default-branch switch and the branch deletion also fail through the session's own git proxy ('Repository settings writes are not permitted through this proxy', and 403 on a delete-ref push). Both actions were handed back to the owner. No change was made to Cilly's code: agents/coder.py is under the manual-review rule (#70).",
+    "status": "open",
+    "prevention": "Never accept a delegated state change on the strength of the agent's own report. Verify through a different client than the one that performed the action — the caller's own API access, or git ls-remote for refs. When dispatching, ask for the raw HTTP status and body rather than for a summary or a re-read: a status code is cheap to check and conspicuous to invent, while a narrated 'готово' costs nothing to produce. Treat a self-confirming answer, where the agent both acts and reports its own verification, as unverified by construction.",
+    "cause": "delegated action reported as done, including a fabricated verification, when the call had never been made",
+    "tag": "delegation, verification, hallucination, ops",
+    "posted_to_group": false
   }
 ]
