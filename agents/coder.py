@@ -1037,8 +1037,25 @@ async def get_service_logs_via_redis(repo: str) -> list[str]:
     return synthetic_errors
 
 
-async def get_service_logs(service_id: str) -> list[str]:
-    """Получить последние логи сервиса."""
+async def get_service_logs(service_id: str, window_s: float | None = None) -> list[str]:
+    """Логи сервиса. Два режима отбора — выбирается наличием window_s.
+
+    window_s=None — ВОДЯНОЙ ЗНАК (по умолчанию, режим monitor_loop): отдаёт только
+      то, что появилось с прошлого чтения, и сдвигает отметку last_seen. Монитору
+      нужен поток без повторов, иначе один баг детектился бы каждые 5 минут.
+
+    window_s=N — ОКНО: отдаёт логи за последние N секунд и отметку НЕ трогает.
+
+    🔴 Зачем понадобился второй режим. Отметка last_seen ОБЩАЯ для всех, кто зовёт
+    эту функцию, а вычитывание её сдвигает. Монитор ходит раз в 5 минут, аудит —
+    дважды в сутки, поэтому монитор почти всегда успевал вычерпать логи первым, и
+    аудит видел пустоту. Он сообщал «ошибок нет» не потому, что их не было, а
+    потому что их уже съел другой потребитель. Проверялось это ровно наоборот:
+    molly-trader показывал ошибки в каждом отчёте — единственный сервис, которого
+    НЕ было в SERVICES, то есть чью отметку никто не двигал.
+
+    Окно ничего не потребляет, поэтому аудит и монитор больше не мешают друг другу.
+    """
     try:
         data = await railway_query("""
             query($id: String!) {
@@ -1064,9 +1081,12 @@ async def get_service_logs(service_id: str) -> list[str]:
         logger.debug(f"get_service_logs failed for {service_id}: {e}")
         return []
 
-    # Только новые логи с момента последней проверки
-    r = await get_redis()
-    cutoff = float(await r.get(f"last_seen:{service_id}") or 0) if r else last_seen.get(service_id, 0)
+    if window_s is not None:
+        cutoff = time.time() - window_s
+        r = None                      # окно ничего не потребляет — Redis не нужен
+    else:
+        r = await get_redis()
+        cutoff = float(await r.get(f"last_seen:{service_id}") or 0) if r else last_seen.get(service_id, 0)
     new_logs = []
     latest_ts = cutoff
     for l in logs:
@@ -1080,6 +1100,9 @@ async def get_service_logs(service_id: str) -> list[str]:
             new_logs.append(l.get("message", ""))
             if ts > latest_ts:
                 latest_ts = ts
+    if window_s is not None:
+        return new_logs               # 🔴 отметку НЕ двигаем: иначе окно съело бы
+                                      # логи у монитора и он ослеп бы вместо аудита
     r = await get_redis()
     if r:
         await r.set(f"last_seen:{service_id}", latest_ts)
@@ -1740,6 +1763,12 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
 # ── Monitor loop ───────────────────────────────────────────────────────────────
 ERROR_PATTERNS = ["Traceback", "Error:", "Exception:", "CRITICAL", "crashed", "exit code"]
 
+# Окна аудита. Аудит НЕ должен потреблять логи водяным знаком: он ходит дважды в
+# сутки, а монитор — раз в 5 минут, и монитор всегда успевал бы первым, оставляя
+# аудиту пустоту (см. get_service_logs).
+AUDIT_LOG_WINDOW_S    = float(os.getenv("AUDIT_LOG_WINDOW_S", 2 * 3600))   # ошибки в отчёт
+AUDIT_LESSON_WINDOW_S = float(os.getenv("AUDIT_LESSON_WINDOW_S", 24 * 3600))  # поиск паттернов и диагностика
+
 # Kill-switch для аварийной остановки мониторинга (например, во время массовых деплоев)
 # Поставь в Railway: CILLY_MONITOR_PAUSED=true → Cilly перестанет анализировать логи ботов
 MONITOR_PAUSED = lambda: os.getenv("CILLY_MONITOR_PAUSED", "").lower() in ("1", "true", "yes")
@@ -1992,7 +2021,9 @@ async def _handle_health_failures(health_fail: list[str], lines: list[str]) -> l
         svc_logs: list[str] = []
         if svc_id:
             try:
-                svc_logs = (await get_service_logs(svc_id))[:30]
+                # Окно: иначе диагностика упавшего бота может получить пустой
+                # список, если монитор вычитал логи прямо перед этим.
+                svc_logs = (await get_service_logs(svc_id, window_s=AUDIT_LESSON_WINDOW_S))[:30]
             except Exception as ex:
                 logger.warning(f"[audit_health] logs failed for {name}: {ex}")
         crash_text = "\n".join(svc_logs[:20])
@@ -2168,7 +2199,9 @@ async def run_daily_audit() -> str:
             prevention = ""
             fix_action = "escalate"
             try:
-                crash_logs = (await get_service_logs(svc_id))[:30]
+                # Окно, а не водяной знак: логи падения нужны целиком, даже
+                # если монитор уже прочитал их минуту назад.
+                crash_logs = (await get_service_logs(svc_id, window_s=AUDIT_LESSON_WINDOW_S))[:30]
                 crash_text = "\n".join(crash_logs[:20])
 
                 # Классификация ДО анализа/редеплоя (как в _handle_health_failures):
@@ -2329,17 +2362,14 @@ async def run_daily_audit() -> str:
     else:
         lines.append(f"✅ HTTP health ({len(HEALTH_URLS)}): все OK")
 
-    # 3. Scan logs for new errors
-    # ⚠️ Окна «за 2 часа» здесь нет и никогда не было: get_service_logs отдаёт хвост
-    # лога текущего деплоя без фильтра по времени. Переменная cutoff_ts вычислялась
-    # и НИ РАЗУ не читалась, а комментарий обещал обратное. Следствие: ошибка,
-    # случившаяся при старте сервиса, попадала в отчёт каждый день до передеплоя.
-    # Убрана вместе с ложным обещанием; поведение прежнее — считаем то, что в логе.
+    # 3. Ошибки за последние AUDIT_LOG_WINDOW_S секунд.
+    # Окно, а не водяной знак: иначе монитор (раз в 5 минут) вычёрпывает логи
+    # первым и аудит рапортует «ошибок нет», ничего на самом деле не проверив.
     error_services = []
     office_services = await _all_office_services()
     for service_id, repo in office_services:
         try:
-            logs = await get_service_logs(service_id)
+            logs = await get_service_logs(service_id, window_s=AUDIT_LOG_WINDOW_S)
             # Блочный фильтр вместо построчного. Построчный не работал: строка
             # `Traceback (most recent call last):` совпадает с шаблоном ошибки и не
             # содержит ни одного игнор-паттерна, поэтому трейсбек от Conflict —
@@ -2353,14 +2383,11 @@ async def run_daily_audit() -> str:
         except Exception:
             pass
 
-    # Формулировки без обещания окна: его здесь нет. get_service_logs отдаёт хвост
-    # лога текущего деплоя целиком, поэтому ошибка «свежая» ровно до передеплоя,
-    # а не два часа. Прежний текст обещал и «новизну», и «последние 2 часа» — оба
-    # утверждения были неверны, и по ним нельзя было судить, когда всё сломалось.
+    _win_h = AUDIT_LOG_WINDOW_S / 3600
     if error_services:
-        lines.append(f"⚠️  Ошибки в логах: {', '.join(error_services)}")
+        lines.append(f"⚠️  Ошибки за последние {_win_h:g}ч: {', '.join(error_services)}")
     else:
-        lines.append("✅ Логи: ошибок нет")
+        lines.append(f"✅ Логи: ошибок за последние {_win_h:g}ч нет")
 
     # 4. Bug lesson scan — ищем новые паттерны ошибок которых нет в lessons.json
     new_lesson_count = 0
@@ -2372,7 +2399,7 @@ async def run_daily_audit() -> str:
         all_errors: dict[str, list[str]] = {}
         for service_id, repo in office_services:
             try:
-                logs = await get_service_logs(service_id)
+                logs = await get_service_logs(service_id, window_s=AUDIT_LESSON_WINDOW_S)
                 errs = [l for l in strip_ignored_tracebacks(logs)
                         if any(p in l for p in ERROR_PATTERNS)]
                 if errs:

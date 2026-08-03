@@ -1475,5 +1475,21 @@
     "tag": "monitoring, filtering, false-negative, autofix",
     "posted_to_group": true,
     "posted_at": "2026-08-03T12:34:27.093557+00:00"
+  },
+  {
+    "id": 90,
+    "date": "2026-08-03",
+    "bot": "cilly",
+    "layer": "monitoring/observability",
+    "title": "The audit and the monitor shared one consume-once log watermark, so the five-minute monitor ate the logs and the twice-daily audit reported 'no errors' without having seen any",
+    "symptom": "The daily audit's error section was almost always empty, and the one service that did report errors reported the same ones every single day. That service, molly-trader, was the only one absent from SERVICES — the only one the monitor never read.",
+    "root_cause": "get_service_logs filtered by a watermark stored in Redis as last_seen:{service_id}: it returned messages newer than the mark and then advanced the mark to the newest line seen. The mark was shared by every caller and advanced on every read, so the loop that runs most often wins. monitor_loop runs every 5 minutes and run_daily_audit twice a day, meaning the monitor had almost always consumed the window before the audit looked. The audit's '✅ Логи: ошибок нет' therefore reported the absence of unread lines, not the absence of errors. molly-trader inverted the proof: with no entry in SERVICES nothing advanced its mark, its cutoff stayed 0, and the audit re-read its whole log — including a start-up traceback — on every run.",
+    "why_architecture": "A consume-once stream is the right shape for exactly one consumer and wrong for every additional one, and nothing in the signature said so: get_service_logs(service_id) reads like an ordinary getter, so each new caller silently stole from the others. The damage is invisible by construction — the starved consumer cannot tell an empty read from a healthy office, and reports the reassuring version. This lesson also corrects #89, which stated that get_service_logs applies no time filter at all: it does, just a watermark rather than a window.",
+    "fix": "get_service_logs takes an optional window_s. Given it, the function selects by wall-clock age and does NOT touch the watermark; omitted, behaviour is unchanged for monitor_loop, which genuinely needs a no-repeats stream so one bug is not re-detected every five minutes. All four audit-path reads — the error scan, the bug-pattern scan and the two crash diagnostics — now pass a window (2h for the report, 24h for pattern search and diagnostics, both overridable by env). The report again names its window, and this time the claim is true.",
+    "status": "fixed",
+    "prevention": "A read that mutates shared state is not a getter; make the consuming variant the explicit one and name it so at the call site. Before adding a second consumer to any log or queue helper, check whether reading it removes what it returns. When a monitoring path can only report the good news on failure — an empty read rendered as 'no errors' — treat that asymmetry itself as the defect.",
+    "cause": "one consume-once watermark shared between consumers of different frequencies",
+    "tag": "monitoring, observability, shared-state, false-negative",
+    "posted_to_group": false
   }
 ]
