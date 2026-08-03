@@ -1441,5 +1441,21 @@
     "tag": "intent-routing, delegation, ops, fleet-drift",
     "posted_to_group": true,
     "posted_at": "2026-08-02T18:18:31.157960+00:00"
+  },
+  {
+    "id": 88,
+    "date": "2026-08-03",
+    "bot": "office",
+    "layer": "scheduling/observability",
+    "title": "Three independent triggers had been built for one daily job; the only working one lived inside another bot's Python and was invisible to every infrastructure check",
+    "symptom": "The Vietnam digest arrived every morning at exactly 03:00 while the office audit reported vietnam-bot/vietnam-cron:SKIPPED daily and held the office at 'ТРЕБУЕТ ВНИМАНИЯ'. Looking for the trigger found a Railway cron service with the correct schedule and the correct curl — and seven consecutive SKIPPED deployments with empty logs, meaning its container had never started. The owner's recollection pointed at a Make scenario, which turned out to be dead as well. Nothing in Railway, GitHub Actions or Make was sending the digest, yet it kept arriving.",
+    "root_cause": "The live trigger was vietnam_cron_loop() in ai-office-shared/agents/coder.py — an asyncio loop inside Cilly's own process that POSTs /generate at 01:00 UTC. Infrastructure-level auditing cannot see it: it is not a service, not a cron entry, not a workflow, just a coroutine in another bot. Meanwhile the two mechanisms that WERE visible were both inert, so every visible signal pointed away from the truth. The Railway service had no repo and no image attached, which is why Railway skipped each scheduled run rather than failing it.",
+    "why_architecture": "A dead mechanism is worse than a missing one: it looks like coverage, absorbs the attention that should go to finding the real trigger, and emits a daily false alarm that trains everyone to ignore that line of the audit. The inverse failure sat next to it — the working trigger emitted no infrastructure signal at all, so the office had an alert for the thing that did nothing and silence for the thing that did the work. Repairing the visible one would have been actively harmful: its schedule was 0 1 * * *, the same slot as Cilly's loop, so a fixed cron would have produced two digests a day. The diagnostic that separated them was timing precision — the Railway cron fired at 01:01–01:06 with scheduler jitter while the digests landed to the second, which only an in-process timer does.",
+    "fix": "vietnam-cron deleted (03.08.2026) after confirming it had never executed: no source, seven SKIPPED deployments, empty logs, and a working trigger located elsewhere. vietnam-bot's README now states where the trigger actually lives, that the schedule dies with Cilly, that redeploying ai-office-shared between 01:00 and 01:01 UTC costs that day's digest, and that a second trigger must not be added without disabling this one.",
+    "status": "fixed",
+    "prevention": "When a scheduled job's trigger is not obvious, grep the code before trusting the infrastructure — in this office a schedule is as likely to be a coroutine inside another bot as a cron service. Record the owning mechanism in the repo of the job it drives, since that is where the next person will look. Treat a service with no source as a hard failure rather than a skip: SKIPPED reads as transient and hides permanent absence. Before repairing any dormant scheduler, check what else already covers that slot — the repair is a duplicate until proven otherwise.",
+    "cause": "the working scheduler lived inside another service's code while two visible mechanisms for the same job were inert",
+    "tag": "scheduling, observability, duplication, fleet-drift",
+    "posted_to_group": false
   }
 ]
