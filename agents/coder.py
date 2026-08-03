@@ -1754,6 +1754,44 @@ IGNORE_PATTERNS = [
     "Failed to fetch updates",                   # временный сбой polling
 ]
 
+
+def strip_ignored_tracebacks(logs: list[str]) -> list[str]:
+    """Выбрасывает шумовые трейсбеки ЦЕЛИКОМ, оставляя всё остальное.
+
+    Зачем: ERROR_PATTERNS начинается с "Traceback", а строка
+    `Traceback (most recent call last):` не содержит ни одного IGNORE_PATTERN.
+    Поэтому построчный фильтр пропускал стек-трейсы от Conflict/TimedOut дальше,
+    и они уходили на анализ. Прежнее лечение было грубым — при любой шумовой
+    строке пропускался ВЕСЬ сервис на цикл; так как телеграм-бот почти всегда
+    имеет в логе TimedOut или Conflict после рестарта, монитор переставал
+    смотреть на ботов вовсе (03.08.2026: 20 пропусков за один деплой у 4 ботов).
+
+    Здесь шум удаляется блоком: трейсбек выкидывается вместе с телом, если его
+    строка ИСКЛЮЧЕНИЯ попадает в IGNORE_PATTERNS. Настоящие ошибки, стоящие в том
+    же логе рядом, остаются и доходят до анализа.
+    """
+    out: list[str] = []
+    i, n = 0, len(logs)
+    while i < n:
+        line = logs[i]
+        if "Traceback (most recent call last)" in line:
+            # Тело трейсбека — строки с отступом; исключение — первая строка без него.
+            j = i + 1
+            while j < n and (not logs[j].strip() or logs[j][:1] in (" ", "\t")):
+                j += 1
+            exc_line = logs[j] if j < n else ""
+            end = j + 1 if j < n else n
+            if any(p in exc_line for p in IGNORE_PATTERNS):
+                i = end                      # весь блок — шум
+                continue
+            out.extend(logs[i:end])          # настоящая ошибка — сохраняем целиком
+            i = end
+            continue
+        if not any(p in line for p in IGNORE_PATTERNS):
+            out.append(line)
+        i += 1
+    return out
+
 # Внешние/транзиентные сбои — НЕ наш баг. Если корневая причина в недоступности
 # стороннего сервиса (Telegram/Railway API, DNS, сеть), а бот жив — Силли МОЛЧИТ
 # (по требованию владельца), а не предлагает фикс. Список шире IGNORE_PATTERNS:
@@ -2287,21 +2325,25 @@ async def run_daily_audit() -> str:
     else:
         lines.append(f"✅ HTTP health ({len(HEALTH_URLS)}): все OK")
 
-    # 3. Scan logs for new errors (last 2 hours)
-    import time, hashlib
-    cutoff_ts = time.time() - 7200  # 2 hours
+    # 3. Scan logs for new errors
+    # ⚠️ Окна «за 2 часа» здесь нет и никогда не было: get_service_logs отдаёт хвост
+    # лога текущего деплоя без фильтра по времени. Переменная cutoff_ts вычислялась
+    # и НИ РАЗУ не читалась, а комментарий обещал обратное. Следствие: ошибка,
+    # случившаяся при старте сервиса, попадала в отчёт каждый день до передеплоя.
+    # Убрана вместе с ложным обещанием; поведение прежнее — считаем то, что в логе.
     error_services = []
-    IGNORE_LOG = [
-        "Conflict: terminated by other getUpdates",
-        "DeprecationWarning", "TimedOut", "NetworkError",
-    ]
     office_services = await _all_office_services()
     for service_id, repo in office_services:
         try:
             logs = await get_service_logs(service_id)
-            errs = [l for l in logs
-                    if any(p in l for p in ["Error:", "Traceback", "CRITICAL", "KeyError"])
-                    and not any(i in l for i in IGNORE_LOG)]
+            # Блочный фильтр вместо построчного. Построчный не работал: строка
+            # `Traceback (most recent call last):` совпадает с шаблоном ошибки и не
+            # содержит ни одного игнор-паттерна, поэтому трейсбек от Conflict —
+            # который стоит в списке игнорируемых — всё равно считался ошибкой.
+            # Так molly-trader показывал «(2)» в каждом отчёте из-за двух строк
+            # трейсбека, порождённых одним заведомо безобидным рестартом.
+            errs = [l for l in strip_ignored_tracebacks(logs)
+                    if any(p in l for p in ["Error:", "Traceback", "CRITICAL", "KeyError"])]
             if errs:
                 error_services.append(f"{repo}({len(errs)})")
         except Exception:
@@ -2323,8 +2365,8 @@ async def run_daily_audit() -> str:
         for service_id, repo in office_services:
             try:
                 logs = await get_service_logs(service_id)
-                errs = [l for l in logs if any(p in l for p in ERROR_PATTERNS)
-                        and not any(i in l for i in IGNORE_LOG)]
+                errs = [l for l in strip_ignored_tracebacks(logs)
+                        if any(p in l for p in ERROR_PATTERNS)]
                 if errs:
                     all_errors[repo] = errs
             except Exception:
@@ -2913,12 +2955,18 @@ async def monitor_loop():
                 if not logs:
                     continue
 
-                # === Filter Layer 1: если в логе вообще присутствует deployment noise — пропускаем весь цикл
-                # (Conflict/getUpdates ошибки порождают stack trace из строк, не содержащих ignore-паттернов;
-                #  они проходили per-line filter и шли на анализ к Claude. Это была реальная дыра.)
-                if any(any(p in l for p in IGNORE_PATTERNS) for l in logs):
-                    logger.info(f"[monitor] {repo}: deployment-related noise in logs (Conflict/restart), skipping whole cycle")
+                # === Filter Layer 1: вырезаем шумовые трейсбеки ЦЕЛИКОМ и работаем с остатком.
+                # Раньше здесь стоял пропуск ВСЕГО сервиса при любой шумовой строке. Это
+                # закрывало дыру со стек-трейсами Conflict, но ценой слепоты: телеграм-бот
+                # почти всегда имеет в логе TimedOut или Conflict после рестарта, поэтому
+                # монитор переставал смотреть на ботов вовсе и не чинил ничего.
+                noisy = len(logs)
+                logs = strip_ignored_tracebacks(logs)
+                if not logs:
+                    logger.info(f"[monitor] {repo}: в логе только deployment-шум ({noisy} строк) — анализировать нечего")
                     continue
+                if noisy != len(logs):
+                    logger.info(f"[monitor] {repo}: отброшено {noisy - len(logs)} шумовых строк, осталось {len(logs)}")
 
                 # === Filter Layer 2: есть ли реальные ошибки помимо deployment-шума
                 error_logs = [l for l in logs if any(p in l for p in ERROR_PATTERNS)]
