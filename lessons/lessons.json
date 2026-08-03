@@ -1490,6 +1490,7 @@
     "prevention": "A read that mutates shared state is not a getter; make the consuming variant the explicit one and name it so at the call site. Before adding a second consumer to any log or queue helper, check whether reading it removes what it returns. When a monitoring path can only report the good news on failure — an empty read rendered as 'no errors' — treat that asymmetry itself as the defect.",
     "cause": "one consume-once watermark shared between consumers of different frequencies",
     "tag": "monitoring, observability, shared-state, false-negative",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-03T19:36:25.593735+00:00"
   }
 ]
