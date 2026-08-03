@@ -91,6 +91,10 @@ SERVICES = {
     "92f70bbb-70ea-474c-be0d-5cc1c9bd8f4e": ("kriss-bot",        "bot.py"),
     "a5e37cc4-0a9f-4700-b6d3-d39b958ce0cb": ("villy-bot",        "bot.py"),
     "ed03c9d3-e83f-4675-9f0a-a4d4fc622365": ("gosling-bot",      "bot.py"),
+    # trading-dept, бумажный режим. В HEALTH_URLS НЕ добавлен намеренно: публичного
+    # домена у сервиса нет (serviceDomains пуст), HTTP-проверка дала бы ложный сбой.
+    # Мониторинг логов идёт через Railway API и домена не требует.
+    "86dc28a1-b283-4038-9b64-b91741583da7": ("molly-trader",     "bot.py"),
 }
 
 def _render_railway_ids_block() -> str:
