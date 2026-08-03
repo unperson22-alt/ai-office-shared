@@ -2353,10 +2353,14 @@ async def run_daily_audit() -> str:
         except Exception:
             pass
 
+    # Формулировки без обещания окна: его здесь нет. get_service_logs отдаёт хвост
+    # лога текущего деплоя целиком, поэтому ошибка «свежая» ровно до передеплоя,
+    # а не два часа. Прежний текст обещал и «новизну», и «последние 2 часа» — оба
+    # утверждения были неверны, и по ним нельзя было судить, когда всё сломалось.
     if error_services:
-        lines.append(f"⚠️  Новые ошибки: {', '.join(error_services)}")
+        lines.append(f"⚠️  Ошибки в логах: {', '.join(error_services)}")
     else:
-        lines.append("✅ Логи: ошибок за последние 2 часа нет")
+        lines.append("✅ Логи: ошибок нет")
 
     # 4. Bug lesson scan — ищем новые паттерны ошибок которых нет в lessons.json
     new_lesson_count = 0
