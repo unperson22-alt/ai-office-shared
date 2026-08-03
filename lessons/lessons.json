@@ -1457,5 +1457,21 @@
     "cause": "the working scheduler lived inside another service's code while two visible mechanisms for the same job were inert",
     "tag": "scheduling, observability, duplication, fleet-drift",
     "posted_to_group": false
+  },
+  {
+    "id": 89,
+    "date": "2026-08-03",
+    "bot": "cilly",
+    "layer": "monitoring/filtering",
+    "title": "The fix for noisy false positives made Cilly stop looking at bots entirely: one ignorable line skipped the whole service, and a Telegram bot almost always has one",
+    "symptom": "Cilly detected errors in the daily audit but never repaired anything, and the owner asked why she does not fix bots at all. The monitor was neither paused nor crashed — its log showed the same line over and over: '[monitor] <bot>: deployment-related noise in logs (Conflict/restart), skipping whole cycle', 20 times across four bots within a single deployment (office-dashboard 11, billy-bot 4, tilly-trader 3, gosling-bot 2).",
+    "root_cause": "monitor_loop's Filter Layer 1 skipped a service for the whole cycle if ANY line of its log matched IGNORE_PATTERNS. That list contains TimedOut, DeprecationWarning, NetworkError and the getUpdates Conflict — all of which a polling Telegram bot emits routinely after any restart, and which then sit in the deployment log tail indefinitely. So the condition was satisfied nearly always, and analysis never ran. The guard itself was a correction of a real earlier defect, recorded in its own comment: ERROR_PATTERNS begins with 'Traceback', and the line 'Traceback (most recent call last):' contains no ignore pattern, so noise stack traces survived the per-line filter and were sent to Claude for analysis.",
+    "why_architecture": "Both the defect and its cure came from filtering the wrong unit. A Python traceback is one event spread over many lines; a per-line filter cannot express 'this exception is ignorable', so the first attempt let noise through and the second discarded whole services. The failure is invisible in the worst way: the monitor kept running, logging cheerfully at INFO, and the absence of repairs looked like an absence of bugs. The same multi-line shape produced the mirror failure one layer over, in the audit, where bare 'Traceback' lines counted as errors and reported a bot as broken every day over a single harmless restart.",
+    "fix": "strip_ignored_tracebacks() removes noise by block: a traceback is dropped together with its body when its exception line matches IGNORE_PATTERNS, and everything else survives. Filter Layer 1 now cleans the log instead of skipping the service, so a real bug sitting next to restart noise is still analysed. The same helper replaced the per-line filter in both audit paths. Also removed cutoff_ts, which was computed and never read while its comment promised a two-hour window — get_service_logs applies no time filter at all, so a start-up error was reported every day until redeploy.",
+    "status": "fixed",
+    "prevention": "Filter log noise at the unit the noise actually occupies: for tracebacks that is the block, keyed on the exception line, never the individual line. When suppressing false positives, check what the suppression costs on the true-positive side — 'skip the whole service' is a total loss of coverage disguised as a filter. A monitor that reports only what it skipped is indistinguishable from a healthy office; make it log what it kept and analysed too.",
+    "cause": "noise filter applied per line and then per service, when the noise unit was the traceback block",
+    "tag": "monitoring, filtering, false-negative, autofix",
+    "posted_to_group": false
   }
 ]
