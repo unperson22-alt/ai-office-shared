@@ -76,3 +76,72 @@ async def office_auth_middleware(request, handler):
     logger.warning("[office-auth] WARN %s %s — missing/invalid token (allowed: non-strict)",
                    request.method, path)
     return await handler(request)
+
+
+# ── Вайтлист пользователей: отказ должен быть ВИДЕН ───────────────────────────
+# ПРОБЛЕМА, которую решаем (инцидент 2026-08-12):
+#     У Яны сменился аккаунт. Она нажала /start у Крисса — и не получила НИЧЕГО:
+#     ни ответа, ни строки в логах, ни события в офис-группе. Причина: каждый
+#     гейт вайтлиста выглядел так
+#
+#         if update.effective_user.id not in ALLOWED_USERS:
+#             return
+#
+#     — голый return без единой записи. Снаружи это неотличимо от «бот умер»:
+#     полчаса ушло на проверку деплоя и здоровья сервиса, хотя бот работал
+#     штатно и просто не знал этого человека. Тот же класс, что и урок #73
+#     (подмена сообщения была невидима в логах) — отказ без следа не отлаживается.
+#
+# РЕШЕНИЕ:
+#     Одна функция на все боты. Отказ всегда пишется в лог и в office:logs.
+#     Пользователю по умолчанию по-прежнему не отвечаем (не светим бота
+#     посторонним), но у /start есть исключение — см. deny_message().
+
+async def note_denied_access(
+    redis_client,
+    bot_name: str,
+    user_id: int,
+    *,
+    username: str = "",
+    first_name: str = "",
+    kind: str = "message",
+) -> None:
+    """
+    Записать отказ по вайтлисту. Fail-silent: логирование не должно ронять хендлер.
+
+    Зовётся ВМЕСТО голого `return` в гейтах ALLOWED_USERS.
+
+    Args:
+        kind: что именно отклонили — "start" / "message" / "photo" / "callback".
+    """
+    who = f"@{username}" if username else (first_name or "без имени")
+    logger.warning(
+        "[access] %s: отказано %s (id=%s, %s) — нет в ALLOWED_USERS",
+        bot_name, who, user_id, kind,
+    )
+    try:
+        from .logging import log_event
+        await log_event(
+            redis_client, bot_name, "access_denied", level="warn",
+            user_id=user_id, username=username or first_name or "", kind=kind,
+        )
+    except Exception:
+        pass  # лог отказа сам по себе не критичен
+
+
+DENY_MESSAGE = (
+    "Привет! Я тебя пока не знаю — этот аккаунт не в списке доступа. "
+    "Напиши Владу, он добавит, и я сразу отвечу."
+)
+
+
+def deny_message() -> str:
+    """
+    Что ответить незнакомцу на /start.
+
+    Отвечаем ТОЛЬКО на /start, а не на каждое сообщение: ссылка на бота и так
+    публична, так что факт его существования мы не выдаём, зато человек сразу
+    понимает, что делать, вместо того чтобы гадать, сломан бот или нет. На
+    обычные сообщения по-прежнему молчим, чтобы не давать посторонним канал.
+    """
+    return DENY_MESSAGE
