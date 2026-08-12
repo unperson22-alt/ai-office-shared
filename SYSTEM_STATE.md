@@ -4,8 +4,8 @@
 > деплой нового бота, смена Redis-контракта, обновление shared lib, закрытие уязвимости.
 > Формат обновления — в конце файла.
 
-**Последнее обновление:** 2026-06-19 (автономное управление Силли: доска задач, рантайм-обучение, делегирование, проактивная петля)  
-**Версия shared lib:** v0.1.18  
+**Последнее обновление:** 2026-08-12 (межботовая коммуникация: единый реестр личностей, отправитель в /task, болталка)  
+**Версия shared lib:** v0.1.23  
 **Активных ботов:** 10 (+1 роутер)  
 **GitHub org:** unperson22-alt  
 **Платформа:** Railway + Cloudflare Workers
@@ -46,6 +46,40 @@
 Силли (еженедельно): анализ → предложение правок → /approve → GitHub push
 ```
 
+### Контракт POST /task (v0.1.23)
+
+```jsonc
+{
+  "message":   "текст",
+  "user_id":   391077101,
+  "group_ctx": "…",        // лента группы, опционально
+  "sender":    "Билли",    // ← КТО пишет. Обязательно для любого вызова
+  "source":    "BANTER",   // ФИЛЛИ | BANTER | CLAUDE | … ; пусто = прямой вызов
+  "depth":     1           // глубина нити болталки, 0 для обычного запроса
+}
+```
+
+`sender` обязателен. Без него принимающий бот получает анонимную строку и
+**придумывает автора** — 07.08.2026 Гослинг так принял реплику Билли за
+сообщение Влада и обратился к нему «Йодка». Принимающая сторона кладёт
+`[от {sender}]` в промт (`banter.sender_of(data)` нормализует написание).
+
+`source: "BANTER"` означает «реплика в общий чат»: отвечать коротко и постить в
+группу **независимо** от флага `notify`. Милли и Тилли этот флаг проверяли и
+молча выбрасывали сгенерированные реплики.
+
+⚠️ Филли намеренно НЕ проставляет `source` при обычном роутинге: Доктор глушит
+вывод в группу ровно при `source in (ФИЛЛИ|FILLY|DISPATCHER)`.
+
+### ⚠️ Telegram не доставляет боту сообщения других ботов
+
+Любая реакция бота на бота возможна ТОЛЬКО через HTTP `/task`. Хендлеры вида
+«если отправитель бот — ответить с шансом N%» не срабатывают никогда; такие
+ветки были у восьми ботов и удалены в v0.1.23. Оркестрацию делает Филли через
+`shared.banter.fanout()` после успешного роутинга и из `handle_bot_task`.
+Обмен затихает на `BANTER_MAX_DEPTH` (2 реплики).
+
+
 -----
 
 ## Ростер ботов
@@ -78,7 +112,13 @@
 |Переменная        |ID         |Роль                                          |
 |------------------|-----------|----------------------------------------------|
 |`YOUR_TELEGRAM_ID`|(из env)   |Влад — владелец, полный доступ                |
-|`LUK_USER_ID`     |`675773302`|Лук — особый гость, альтернативное приветствие|
+|`LUK_USER_ID`     |`331989769`|Лук (Саша) — особый гость, альтернативное приветствие ⁶|
+|—                 |`7354462052`|Ангелина                                     |
+|`MOM_USER_ID`     |`6507691976`|Мама — общается через Эллис                  |
+
+⁶ Подтверждено Владом 2026-08-12. Здесь и в Notion раньше стояло `675773302`;
+этот ID числится Луком ещё и в `ALLOWED_USERS` Крисса — **чей он, не выяснено**,
+доступ намеренно не отзываем. Канонический список людей — `shared.identity.PEOPLE`.
 
 -----
 
@@ -89,7 +129,10 @@
 
 |Ключ                           |Тип   |Owner (writer)                    |Consumer (reader)                   |TTL                  |Формат значения                                                           |
 |-------------------------------|------|----------------------------------|------------------------------------|---------------------|--------------------------------------------------------------------------|
-|`office:group:history`         |LIST  |Филли (`group_history_push`)      |Все боты (через `group_ctx`)        |7д                   |JSON `{"from": str, "text": str}`, LPUSH + LTRIM 20                       |
+|`office:group:history`         |LIST  |**Все боты** (`group_history.push`)|Все боты (через `group_ctx`)        |7д                   |JSON `{"from": str, "text": str}`, LPUSH + LTRIM 20. С v0.1.23 пишет каждый бот на своей отправке в группу, а не только Филли на сообщении человека — иначе в ленте односторонний монолог. `from` — каноническое имя (`Влад`, не `Yodka`) |
+|`office:members`               |STRING|Филли (`group_members_update`)    |Все боты (через `group_ctx`)        |30д                  |Профиль команды, собирает Haiku. Промт засеян `identity.roster_prompt()` и запрещает выдумывать участников — до v0.1.23 из строк `Yodka: …` выводился отдельный участник «Йодка» |
+|`office:members:schema`        |STRING|Филли (`group_members_invalidate_if_stale`)|Филли                      |∞                    |Версия схемы профиля. Не совпала → профиль сносится на старте                |
+|`office:banter:thread:{chat}`  |SET   |Филли (`banter.fanout`)           |Филли (`banter.pick`)               |5м                   |Кто уже вставил реплику в текущий всплеск — чтобы один бот не чирикал дважды |
 |`office:health:{AGENT}`        |STRING|Филли (`health_set`)              |Филли (`health_get` перед роутингом)|60с (up) / 30с (down)|`"up"` или `"down"`. **AGENT — UPPERCASE** (БИЛЛИ, ТИЛЛИ…)                |
 |`office:routing:misses`        |LIST  |Филли (`log_routing_miss`)        |Филли `/metrics`, Силли             |—                    |JSON `{"agent": UPPERCASE, "message": str, "ts": int}`, LPUSH + LTRIM 100 |
 |`office:quality:{bot}`         |HASH  |Каждый бот (`record_reaction`)    |Филли `/metrics`                    |—                    |Поля: `up` (int), `down` (int). **bot — lowercase** (билли, тилли…)       |
@@ -111,12 +154,12 @@
 ## Shared Library — ai_office_shared
 
 **Репо:** unperson22-alt/ai-office-shared (публичный)  
-**Установка:** `ai_office_shared @ git+https://github.com/unperson22-alt/ai-office-shared@v0.1.18`
+**Установка:** `ai_office_shared @ git+https://github.com/unperson22-alt/ai-office-shared@v0.1.23`
 
 |Модуль                |С версии|Что экспортирует                                                                                               |
 |----------------------|--------|---------------------------------------------------------------------------------------------------------------|
 |`shared.logging`      |v0.1.0  |`log_event(redis, bot, event, **kwargs)`                                                                       |
-|`shared.identity`     |v0.1.1  |`BOTS`, `canonical()`, `display()`, `redis_key()`                                                              |
+|`shared.identity`     |v0.1.23 |`BOTS` (route_key/url/username/persona), `canonical()`, `display()`, `redis_key()`, `route_key()`, `url()`, `bot_by_username()`, `PEOPLE`, `person()`, `person_by_alias()`, `who_is()`, `roster_prompt(me)` |
 |`shared.redis_helpers`|v0.1.2  |`redis_get_history`, `redis_save_history`, `redis_get_notes`, `redis_add_note`                                 |
 |`shared.tasks`        |v0.1.2  |`auto_extract_interests`, `weekly_review`                                                                      |
 |`shared.quality`      |v0.1.3  |`remember_my_message`, `reaction_owner`, `classify_reaction`, `record_reaction`, `REACTION_UP`, `REACTION_DOWN`|
@@ -127,12 +170,14 @@
 |`shared.media`        |v0.1.21 |`IMAGE_FILTER`, `extract_image`, `has_image`, `addressed_in_group`, `ImagePayload`, `ImageError`               |
 |`shared.dev_escalation`|v0.1.21|`DEV_FEATURE_PROMPT_BLOCK`, `parse_dev_feature_tag`, `strip_dev_feature_tag`, `request_dev_feature`            |
 |`shared.tasks`        |v0.1.21 |+ `spawn(coro, name)` — фоновые задачи с удержанием ссылки (GC-фикс)                                           |
+|`shared.group_history`|v0.1.23 |`push(redis, sender, text)`, `get_context(redis, n)`, `read()` — общая лента `office:group:history`, пишут ВСЕ боты |
+|`shared.banter`       |v0.1.23 |`fanout()`, `pick()`, `is_banter()`, `depth_of()`, `sender_of()`, `BANTER_POOL`, `BANTER_MAX_DEPTH` — межботовые реплики |
 
 ### ⚡ MIGRATION RULE
 
 > При любом касании бота по любой причине — **обязательно**:
 > 
-> 1. Поднять в `requirements.txt`: `ai_office_shared @ ...@v0.1.18`
+> 1. Поднять в `requirements.txt`: `ai_office_shared @ ...@v0.1.23`
 > 1. Заменить локальные копии на импорты из `ai_office_shared.shared`:
 >    `redis_get_history`, `redis_save_history`, `redis_get_notes`, `redis_add_note`,
 >    `auto_extract_interests`, `weekly_review`
@@ -464,7 +509,7 @@ Framework: ptb 21.3 + aiohttp + claude-haiku-4-5. Задеплоены 2026-05-3
 | Marketing-dept лог: убраны office:logs:нэлли/рэй | ✅ |
 | Ростер ботов: добавлены Нэлли и Рэй, исправлен Эллис URL/репо | ✅ |
 | Примечание Доктор ⚠: заменено на подтверждение отсутствия рассинхрона | ✅ |
-| LUK_USER_ID: исправлен 331989769 → 675773302 | ✅ |
+| LUK_USER_ID: исправлен 331989769 → 675773302 | ↩️ ОТМЕНЕНО 2026-08-12 — правка была ошибочной. Код всегда держал `331989769`, и Влад подтвердил, что это верный ID Лука. Тогда поправили документ, а не код, и рассинхрон жил дальше. Не применять снова. |
 | BOT_URLS: doctor-bot → dilly-bot, mama-bot → ellice-bot | ✅ |
 | FILLY_URL marketing-dept (marty/copy/lex): добавлен https:// | ✅ |
 | office:mom_queue owner: mama-bot → ellice-bot | ✅ |
