@@ -14,28 +14,61 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-OFFICE_AGENTS: dict[str, dict] = {
-    "СИЛЛИ":  {"url": "https://ai-office-shared-production.up.railway.app",
-               "desc": "код, автоматизация, технические задачи"},
-    "ТИЛЛИ":  {"url": "https://tilly-bot-production.up.railway.app",
-               "desc": "крипто, веб-поиск, актуальные данные, новости"},
-    "МИЛЛИ":  {"url": "https://milly-bot-production.up.railway.app",
-               "desc": "бизнес, монетизация, стратегия"},
-    "ДОКТОР": {"url": "https://dilly-bot-production-4a9b.up.railway.app",
-               "desc": "здоровье, медицинские советы"},
-    "БИЛЛИ":  {"url": "https://billy-bot-production.up.railway.app",
-               "desc": "мотивация, жизненные решения"},
-    "КРИСС":  {"url": "https://kriss-bot-production.up.railway.app",
-               "desc": "личный ассистент Влада, планирование"},
-    "ВИЛЛИ":  {"url": "https://villy-bot-production.up.railway.app",
-               "desc": "арт-директор, дизайн, визуал"},
-    "НЭЛЛИ":  {"url": "https://nelli-bot-production.up.railway.app",
-               "desc": "ноготочки, nail-бизнес, контент"},
-    "РЭЙ":    {"url": "https://ray-bot-production-d754.up.railway.app",
-               "desc": "партнёрки, travel, affiliate"},
-    "ПИЛЛИ":  {"url": "https://pilly-bot-production.up.railway.app",
-               "desc": "генерация изображений"},
-}
+from .identity import BOTS, canonical, route_key
+
+class _AgentRegistry(dict):
+    """
+    dict route_key → {url, desc}, который на чтение прощает любое написание имени.
+
+    Итерация отдаёт ровно по одной записи на бота (иначе списки агентов в промтах
+    Нэлли/Рэя раздулись бы дублями), а `.get("ДОКТОР")` и `.get("КРИСС")`
+    продолжают работать: в тегах [OFFICE:ИМЯ:...] исторически ходят оба
+    написания, и вызывающий код в других репо делает именно `.get(name.upper())`.
+    """
+
+    def __missing__(self, key):
+        canon = canonical(key)
+        if canon and canon in BOTS:
+            rk = BOTS[canon]["route_key"]
+            if rk != key and rk in self:
+                return dict.__getitem__(self, rk)
+        raise KeyError(key)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def __contains__(self, key):
+        if dict.__contains__(self, key):
+            return True
+        canon = canonical(key) if isinstance(key, str) else None
+        return bool(canon and dict.__contains__(self, BOTS[canon]["route_key"]))
+
+
+# OFFICE_AGENTS выводится из identity.BOTS, а не хардкодится вторым списком.
+# Раньше это были два независимых словаря (+ третий, BOT_URLS у Филли), и они
+# разъехались: КРИС/КРИСС, ДИЛЛИ/ДОКТОР, разные URL Доктора, Гослинга и Пророка
+# тут не было вовсе. Теперь адрес и написание имени ровно одно — в identity.
+# Филли исключена намеренно: она диспетчер, а не специалист — звать её тегом
+# [OFFICE:...] значит гонять сообщение по кругу.
+OFFICE_AGENTS: dict[str, dict] = _AgentRegistry({
+    meta["route_key"]: {"url": meta["url"], "desc": meta["persona"]}
+    for meta in BOTS.values()
+    if meta.get("url") and meta.get("role") != "router"
+})
+
+
+def resolve_agent_url(agent_name: str) -> tuple[str | None, str | None]:
+    """
+    (route_key, url) по любому написанию имени. Прощает КРИСС/КРИС и
+    ДОКТОР/ДИЛЛИ — историю двух написаний в тегах [OFFICE:ИМЯ:...] и в BOT_URLS.
+    """
+    canon = canonical(agent_name)
+    if not canon:
+        return None, None
+    return route_key(canon), BOTS[canon].get("url")
 
 
 async def call_office(
@@ -44,30 +77,40 @@ async def call_office(
     user_id: int,
     source: str = "BOT",
     timeout: float = 25.0,
+    sender: str = "",
 ) -> str:
     """
     Отправить задачу агенту офиса по имени.
 
+    Args:
+        sender: кто зовёт — display-имя бота или человека. Уезжает в payload,
+                чтобы принимающий знал, с кем разговаривает: без этого поля
+                бот получал голый текст и додумывал автора (инцидент 2026-08-07,
+                Гослинг принял Билли за Влада).
+
     Returns:
         Ответ агента или пустая строка при ошибке
     """
-    info = OFFICE_AGENTS.get(agent_name.upper())
-    if not info:
+    key, agent_url = resolve_agent_url(agent_name)
+    if not agent_url:
         logger.warning(f"[office] Unknown agent: {agent_name}")
         return ""
+    payload = {"message": message, "user_id": user_id, "source": source}
+    if sender:
+        payload["sender"] = sender
     try:
         from .auth import office_headers
         async with httpx.AsyncClient(timeout=timeout) as c:
             r = await c.post(
-                f"{info['url']}/task",
-                json={"message": message, "user_id": user_id, "source": source},
+                f"{agent_url}/task",
+                json=payload,
                 headers=office_headers(),
             )
         if r.status_code == 200:
             return r.json().get("response", "")
-        logger.warning(f"[office] {agent_name} returned {r.status_code}")
+        logger.warning(f"[office] {key} returned {r.status_code}")
     except Exception as e:
-        logger.warning(f"[office] {agent_name}: {e}")
+        logger.warning(f"[office] {key}: {e}")
     return ""
 
 

@@ -11,6 +11,10 @@
     impact_client — get_campaigns(), get_ads(), get_tracking_link()
     voice        — transcribe_voice(file_url) → (text, error)
     office       — OFFICE_AGENTS, call_office(), parse_office_tag()
+    identity     — canonical(), display(), route_key(), url(), PEOPLE, person(),
+                   roster_prompt() — единый реестр ботов и людей офиса
+    group_history — push(), get_context() — общая лента офис-группы (пишут ВСЕ боты)
+    banter       — fanout(), is_banter(), depth_of(), sender_of() — болталка ботов
     models       — MODEL_SONNET, MODEL_HAIKU, MODEL_OPUS (id моделей + env-override)
     prompt       — enhance_prompt() — уточнение запроса лёгкой моделью
     auth         — office_auth_middleware, office_headers(), check_office_token() — auth RPC-меша
