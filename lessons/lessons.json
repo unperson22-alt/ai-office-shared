@@ -1508,5 +1508,21 @@
     "cause": "platform-assumption + missing field in service contract + identity duplicated across prompts",
     "tag": "inter-bot",
     "posted_to_group": false
+  },
+  {
+    "id": 92,
+    "date": "2026-08-12",
+    "bot": "kriss-bot / family-dept / marketing-dept",
+    "layer": "access control / observability",
+    "title": "A whitelist rejection returned bare, logging nothing, so an unknown account was indistinguishable from a dead bot — and the same prompt-substitution fixed in July was still live in four hand-written copies",
+    "symptom": "Yana's Telegram account changed. She opened the Kris bot and pressed /start; nothing came back — no reply, no line in the service log, no event in the office log group. From the outside this reads as 'the bot is down', so the first minutes went into checking the deploy and /health, both of which were fine. Separately, Yana reported an older Kris bug: messages she sent were misread, and re-pasting the same text made Kris answer that it was 'a fragment from another AI' or that it could not understand it.",
+    "root_cause": "Two independent defects, both of the same shape: a failure that leaves no trace. (a) Every ALLOWED_USERS gate was `if user.id not in ALLOWED_USERS: return` — four of them in kriss-bot, two in billy-bot. No logger call, no log_event, no reply. The bot behaved correctly (the ID genuinely was not on the list) but emitted nothing to say so, so the diagnosis had to be guessed rather than read. The whitelist itself lives in a Railway env var, not in code, so grepping the repo for the old ID finds nothing either. (b) The prompt-substitution of lesson #73 — Haiku's rewrite replacing the user's own words before the messages array is built — was fixed in shared/prompt.py and at the kriss/mama/filly call sites, but four hand-written copies were never swept: family-dept/nelli, family-dept/ray, family-dept/elliss (which carried its own private `_enhance_prompt`) and marketing-dept/nelli. All four still did `history.append({'role':'user','content':enhanced})`. That is exactly the code path that made Kris reject Yana's real requests as text not meant for it.",
+    "why_architecture": "Both halves are the same failure mode as #73 itself, one level up: the system was not wrong, it was silent. A guard that rejects without a record cannot be debugged from the outside, and no amount of prompt or health checking substitutes for the one line that says who was refused. And a fix applied to the shared helper is not a fix of the behaviour — behaviour lives at every call site, including the hand-written ones that never imported the helper and therefore never appeared in the sweep that closed the ticket.",
+    "fix": "shared/auth.py gained note_denied_access() (WARN + an access_denied event in office:logs carrying user_id and username, so the person to add is named) and deny_message(). Kriss now answers an unknown user on /start with a neutral line telling them to ask Vlad, and logs every refusal; other handlers stay silent to the stranger but still log. The reply is limited to /start on purpose — the bot link is public so its existence is not a secret, but replying to every message would hand outsiders a channel. All four unguarded enhance copies now pass the candidate through validate_enhancement() from shared/prompt.py and inject it as a clearly-labelled hint in the SYSTEM prompt; the model always receives the user's original. elliss's private `_enhance_prompt` was renamed `_enhance_hint` so the name no longer invites substituting its result back into the message.",
+    "status": "fixed",
+    "prevention": "A rejection path must log. If a guard can end a request, it owes one line naming who and why — otherwise 'working as designed' and 'completely broken' look identical to whoever is debugging. When a defect is closed in a shared helper, grep for the BEHAVIOUR across every repo, not for the helper's name: the copies that never imported it are exactly the ones that will still be broken. And when access is granted by an env var rather than by code, note that in the code near the gate — otherwise the next person greps the repo, finds nothing, and concludes the whitelist is empty.",
+    "cause": "silent guard + shared-helper fix not swept across hand-written copies",
+    "tag": "observability",
+    "posted_to_group": false
   }
 ]
