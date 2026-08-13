@@ -31,6 +31,7 @@ TTL: открытые задачи живут бессрочно. При пер�
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 import uuid
@@ -57,7 +58,8 @@ STATUSES = {
 TERMINAL_STATUSES = {"done", "rejected"}
 
 # Поля, которые могут хранить произвольный текст — режем длину при записи.
-_TEXT_FIELDS = {"title": 500, "result": 4000}
+_TEXT_FIELDS = {"title": 500, "result": 4000,
+                "acceptance": 4000, "evidence": 8000}
 
 
 def task_key(task_id: str) -> str:
@@ -88,6 +90,28 @@ def _decode(raw):
     return raw
 
 
+def _dump_list(value) -> str:
+    """Список → JSON-строка для HASH. Пустое/мусор → "[]"."""
+    if not value:
+        return "[]"
+    try:
+        return json.dumps(list(value), ensure_ascii=False)[:_TEXT_FIELDS["evidence"]]
+    except (TypeError, ValueError):
+        return "[]"
+
+
+def _load_list(raw) -> list:
+    """JSON-строка из HASH → список. Битое значение не должно ронять чтение доски."""
+    raw = _decode(raw)
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+    except (TypeError, ValueError):
+        return []
+
+
 def _parse_task(data: dict) -> dict:
     """HASH → нормализованный dict с правильными типами."""
     out: dict = {}
@@ -99,6 +123,8 @@ def _parse_task(data: dict) -> dict:
     except (ValueError, TypeError):
         out["attempts"] = 0
     out["escalated"] = str(out.get("escalated", "")).lower() in ("1", "true", "yes")
+    out["acceptance"] = _load_list(out.get("acceptance"))
+    out["evidence"] = _load_list(out.get("evidence"))
     return out
 
 
@@ -111,9 +137,16 @@ async def create_task(
     status: str = "open",
     parent_id: str = "",
     task_id: Optional[str] = None,
+    acceptance: Optional[list] = None,
 ) -> Optional[str]:
     """
     Создаёт задачу на доске. Возвращает task_id или None при ошибке/без Redis.
+
+    Args:
+        acceptance: критерии приёмки — список проверяемых утверждений. Пишутся
+            ЗДЕСЬ, до раздачи задания, и дальше не меняются (см. set_acceptance).
+            Задача с критериями не сможет стать done, пока каждый из них не
+            закрыт уликой через add_evidence.
     """
     if redis_client is None:
         return None
@@ -129,6 +162,8 @@ async def create_task(
         "status": status,
         "parent_id": parent_id or "",
         "result": "",
+        "acceptance": _dump_list(acceptance),
+        "evidence": "[]",
         "attempts": "0",
         "escalated": "0",
         "created_at": now,
@@ -182,6 +217,104 @@ async def _touch(redis_client, task_id: str, fields: dict) -> bool:
         return False
 
 
+
+# ── Приёмка: критерии замораживаются ДО работы, улики собираются ПОСЛЕ ────────
+# ПРОБЛЕМА, которую решаем:
+#     Пока «выполнено» — это утверждение исполнителя, оно всегда истинно.
+#     Сегодняшний день дал два учебных примера: Милли считала задачу решённой,
+#     хотя её реплика молча выбрасывалась, а «баг починен» держалось ровно до
+#     момента, когда кто-то записал, что значит «починен».
+# ПРАВИЛО:
+#     Критерии пишутся при создании задачи, до раздачи, и после старта не
+#     меняются. Кто определяет успех, уже увидев результат, определит его так,
+#     чтобы результат подошёл.
+
+async def set_acceptance(redis_client, task_id: str, criteria: list) -> tuple[bool, str]:
+    """
+    Задать критерии приёмки. Разрешено только пока работа не началась.
+
+    Returns:
+        (получилось, причина_отказа)
+    """
+    if redis_client is None or not task_id:
+        return False, "нет redis или task_id"
+    if not criteria:
+        return False, "пустой список критериев"
+    task = await get_task(redis_client, task_id)
+    if not task:
+        return False, f"задача {task_id} не найдена"
+    if task.get("acceptance"):
+        return False, ("критерии уже заморожены и не переписываются — "
+                       "иначе успех подгоняется под результат")
+    if task.get("status") != "open" or int(task.get("attempts") or 0) > 0:
+        return False, (f"работа уже началась (status={task.get('status')}, "
+                       f"attempts={task.get('attempts')}) — критерии задаются до неё")
+    ok = await _touch(redis_client, task_id, {"acceptance": _dump_list(criteria)})
+    return (True, "") if ok else (False, "ошибка записи")
+
+
+async def add_evidence(
+    redis_client,
+    task_id: str,
+    criterion: str,
+    *,
+    passed: bool,
+    proof: str = "",
+    checked_by: str = "",
+) -> bool:
+    """
+    Приложить улику по одному критерию. Fail-silent.
+
+    Args:
+        criterion: текст критерия — ровно как он записан в acceptance.
+        proof:     чем подтверждено: код возврата, строка лога, диф, ответ HTTP.
+                   Прозаическое «проверил, работает» уликой не считается — но
+                   отличить это может только человек на ревью, поэтому здесь
+                   ограничение мягкое: пустой proof допустим для passed=False.
+        checked_by: кто проверял. Важно: не должен совпадать с исполнителем —
+                   проверять свою работу означает её подтвердить.
+    """
+    if redis_client is None or not task_id or not criterion:
+        return False
+    task = await get_task(redis_client, task_id)
+    if not task:
+        return False
+    ev = list(task.get("evidence") or [])
+    ev = [e for e in ev if not (isinstance(e, dict) and e.get("criterion") == criterion)]
+    ev.append({
+        "criterion": criterion,
+        "passed": bool(passed),
+        "proof": (proof or "")[:600],
+        "checked_by": _normalize_assignee(checked_by) or checked_by or "",
+        "at": _now_iso(),
+    })
+    return await _touch(redis_client, task_id, {"evidence": _dump_list(ev)})
+
+
+def acceptance_verdict(task: dict) -> tuple[bool, list, list]:
+    """
+    Сверяет критерии с уликами. Чистая функция — тестируется без Redis.
+
+    Returns:
+        (всё_закрыто, непокрытые_критерии, проваленные_критерии)
+    """
+    criteria = [c for c in (task.get("acceptance") or []) if c]
+    if not criteria:
+        return True, [], []   # задача без критериев ведёт себя как раньше
+    by_criterion = {
+        e.get("criterion"): e
+        for e in (task.get("evidence") or []) if isinstance(e, dict)
+    }
+    missing, failed = [], []
+    for c in criteria:
+        ev = by_criterion.get(c)
+        if ev is None:
+            missing.append(c)
+        elif not ev.get("passed"):
+            failed.append(c)
+    return (not missing and not failed), missing, failed
+
+
 async def update_status(
     redis_client,
     task_id: str,
@@ -194,6 +327,18 @@ async def update_status(
     if status not in STATUSES:
         _logger.warning("update_status: unknown status %r", status)
         return False
+    # Гейт: «готово» нельзя объявить, его надо доказать. Задача без критериев
+    # ведёт себя как раньше — гейт включается только там, где критерии заданы.
+    if status == "done":
+        task = await get_task(redis_client, task_id)
+        if task:
+            ok_all, missing, failed = acceptance_verdict(task)
+            if not ok_all:
+                _logger.warning(
+                    "update_status: %s не может стать done — не закрыто %d, "
+                    "провалено %d критериев", task_id, len(missing), len(failed))
+                return False
+
     fields: dict = {"status": status}
     if result is not None:
         fields["result"] = result[:_TEXT_FIELDS["result"]]
@@ -310,5 +455,15 @@ def format_board_for_prompt(tasks: list[dict], *, max_lines: int = 25) -> str:
         title = (t.get("title") or "").replace("\n", " ")[:80]
         att = t.get("attempts", 0)
         att_s = f" (попыток: {att})" if att else ""
-        lines.append(f"{m} [{t.get('id','?')}] {who}: {title}{att_s}")
+        # Прогресс по критериям — иначе Силли не видит, что задача не может
+        # закрыться, и будет пытаться объявить её готовой.
+        crit = [c for c in (t.get("acceptance") or []) if c]
+        acc_s = ""
+        if crit:
+            _, missing, failed = acceptance_verdict(t)
+            done_n = len(crit) - len(missing) - len(failed)
+            acc_s = f" | приёмка {done_n}/{len(crit)}"
+            if failed:
+                acc_s += f", провалено: {len(failed)}"
+        lines.append(f"{m} [{t.get('id','?')}] {who}: {title}{att_s}{acc_s}")
     return "[ДОСКА ЗАДАЧ ОФИСА]\n" + "\n".join(lines)
