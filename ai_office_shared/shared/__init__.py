@@ -15,6 +15,11 @@
                    roster_prompt() — единый реестр ботов и людей офиса
     group_history — push(), get_context() — общая лента офис-группы (пишут ВСЕ боты)
     banter       — fanout(), is_banter(), depth_of(), sender_of() — болталка ботов
+    taskboard    — + acceptance/evidence: критерии приёмки замораживаются до
+                   работы, done не выдаётся без улик (set_acceptance,
+                   add_evidence, acceptance_verdict)
+    phantom      — looks_like_phantom() — офф-персонажные заглушки Ollama
+    railway_vars — set_var_allowed() — что Силли можно писать в env
     models       — MODEL_SONNET, MODEL_HAIKU, MODEL_OPUS (id моделей + env-override)
     prompt       — enhance_prompt() — уточнение запроса лёгкой моделью
     auth         — office_auth_middleware, office_headers(), check_office_token() — auth RPC-меша
