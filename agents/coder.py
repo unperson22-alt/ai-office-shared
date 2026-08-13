@@ -1111,6 +1111,44 @@ async def get_service_logs(service_id: str, window_s: float | None = None) -> li
     return new_logs
 
 
+_ENV_CACHE: dict[str, str] = {}
+
+
+async def resolve_env_id(service_id: str) -> str:
+    """
+    environmentId сервиса — со СПРАВКОЙ у Railway, а не по таблице.
+
+    Зачем не хватает `_env_for`: он для незнакомого сервиса молча отдаёт
+    production awake-happiness. Пока чинились только сервисы из SERVICES, это
+    работало. Как только появился редеплой чужих отделов (family-dept,
+    marketing-dept, medical-dept — у каждого СВОЙ проект и своё окружение),
+    дефолт стал тихо неверным ответом: мутация ушла бы в другой проект.
+    Молча неправильный ID хуже отсутствующего — ошибки нет, эффекта тоже.
+
+    Порядок: статическая таблица (быстро, для своих) → запрос → дефолт.
+    """
+    known = SERVICE_ENV.get(service_id)
+    if known:
+        return known
+    if service_id in _ENV_CACHE:
+        return _ENV_CACHE[service_id]
+    try:
+        data = await railway_query(
+            "query($sid:String!){ service(id:$sid){ project{ environments{ edges{ node{ id name } } } } } }",
+            {"sid": service_id})
+        edges = (((data.get("data") or {}).get("service") or {})
+                 .get("project") or {}).get("environments", {}).get("edges") or []
+        envs = {e["node"]["name"]: e["node"]["id"] for e in edges}
+        env_id = envs.get("production") or (next(iter(envs.values()), "") if envs else "")
+        if env_id:
+            _ENV_CACHE[service_id] = env_id
+            return env_id
+        logger.warning("[railway] у сервиса %s не нашлось окружений", service_id)
+    except Exception as e:
+        logger.warning("[railway] не смог определить environment для %s: %s", service_id, e)
+    return _env_for(service_id)
+
+
 async def redeploy_service(service_id: str) -> bool:
     """Передеплоить сервис через Railway API."""
     try:
@@ -1118,7 +1156,7 @@ async def redeploy_service(service_id: str) -> bool:
             mutation($serviceId: String!, $environmentId: String!) {
               serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId)
             }
-        """, {"serviceId": service_id, "environmentId": _env_for(service_id)})
+        """, {"serviceId": service_id, "environmentId": await resolve_env_id(service_id)})
         return "errors" not in data
     except Exception as e:
         logger.error(f"redeploy failed for {service_id}: {e}")
@@ -1595,6 +1633,74 @@ async def outbound_paused() -> bool:
     return False
 
 
+# ── Приёмка dev-задачи: гейт пайплайна превращается в улики на доске ─────────
+# Пайплайн и так считает три вещи: компилируется ли финальный код, нет ли у
+# Рикки вердикта NEEDS_FIX и не схлопнулся ли файл. До сих пор эти результаты
+# жили только в локальных переменных: гейт срабатывал, но на доске оставалось
+# голое «awaiting_approval», а потом «done» — слово, за которым нечего
+# перепроверить. Теперь то же самое пишется критериями ДО работы и уликами
+# после, поэтому tb.update_status(..., "done") может отказать, если улик нет.
+DEV_ACCEPTANCE = [
+    "финальный код компилируется",
+    "ревью Рикки без вердикта NEEDS_FIX",
+    "файл не схлопнулся (гейт размера)",
+]
+
+
+async def record_dev_gate_evidence(
+    redis_client, board_id: str, *,
+    final_code: str, compile_ok: bool, se_info: str,
+    review_ok: bool, ricky_result: str, shrink_info: str,
+) -> None:
+    """
+    Переложить уже посчитанные результаты гейта в улики на доске.
+
+    Проверяющий — `tb.VERIFIER_GATE`, а не dev-dept: все три проверки
+    детерминированы (compile(), поиск подстроки, счёт строк), у них нет
+    интереса в исходе. Улика — наблюдённое значение, а не «проверено».
+
+    Fail-silent: доска вторична по отношению к самой работе.
+    """
+    if not redis_client or not board_id:
+        return
+    proofs = [
+        (DEV_ACCEPTANCE[0], compile_ok,
+         f"compile() ок, {len(final_code.splitlines())} строк" if compile_ok
+         else f"SyntaxError: {se_info}" if se_info else "финального кода нет"),
+        (DEV_ACCEPTANCE[1], review_ok,
+         "NEEDS_FIX в вердикте не встречается" if review_ok
+         else f"вердикт Рикки: {(ricky_result or '')[:150]}"),
+        (DEV_ACCEPTANCE[2], not shrink_info,
+         "размер файла в пределах гейта" if not shrink_info else shrink_info),
+    ]
+    for criterion, passed, proof in proofs:
+        try:
+            await tb.add_evidence(redis_client, board_id, criterion,
+                                  passed=passed, proof=proof,
+                                  checked_by=tb.VERIFIER_GATE)
+        except Exception as e:
+            logger.warning("[board] улика %r не записалась: %s", criterion[:40], e)
+
+
+async def close_task_reported(redis_client, task_id: str, result: str = "") -> bool:
+    """
+    Закрыть задачу — и, если приёмка не пропустила, сказать это вслух.
+
+    `tb.update_status(..., "done")` умеет ОТКАЗАТЬ: критерии заморожены, а улик
+    по ним нет. Молчаливый отказ — худший исход из возможных: задача остаётся
+    висеть в awaiting_approval, а офис уверен, что она закрыта, потому что
+    деплой-то прошёл. Отказ обязан быть виден там же, где случился.
+    """
+    ok = await tb.update_status(redis_client, task_id, "done", result=result)
+    if not ok:
+        t = await tb.get_task(redis_client, task_id)
+        await notify_office(
+            f"⚠️ Задача [{task_id}] не закрывается — приёмка не пройдена:\n"
+            + (tb.format_evidence_report(t) if t else "задача не найдена на доске")
+        )
+    return ok
+
+
 async def notify_office(text: str):
     if not OFFICE_CHAT_ID:
         return
@@ -1662,6 +1768,7 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
         r_tb, f"Фикс {service_name}: {fix_desc[:80]}",
         created_by="силли", assignee="dev-dept",
         status="in_progress", task_id=_task_id,
+        acceptance=DEV_ACCEPTANCE,   # заморожены ДО работы, см. record_dev_gate_evidence
     ) or _task_id
 
     # Точная спека для команды (claude-grade): атомарная, один файл, симптом→причина→
@@ -1721,6 +1828,15 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
         else:
             retry_feedback = (f"Гейт размера: {shrink_info}. "
                               f"Верни ПОЛНЫЙ файл целиком, ничего не выбрасывая.")
+
+    # Результаты гейта → улики на доске. Пишем ВСЕГДА, а не только на успехе:
+    # проваленная проверка — тоже факт, и без неё на доске не видно, почему
+    # задача не закрывается.
+    await record_dev_gate_evidence(
+        r_tb, board_id, final_code=final_code, compile_ok=compile_ok,
+        se_info=_se_info, review_ok=review_ok, ricky_result=ricky_result,
+        shrink_info=shrink_info,
+    )
 
     if final_code and review_ok and compile_ok and not shrink_info:
         # Гейт пройден — стейджим деплой на /approve (контракт deploy_fix без изменений).
@@ -2294,9 +2410,12 @@ async def run_daily_audit() -> str:
     # 1b. Сквозной аудит ВСЕХ проектов-отделов (а не только awake-happiness).
     #     Только видимость/алерт; авто-фикс остаётся лишь для известных репо из
     #     SERVICES — чужие отделы не чиним вслепую.
+    # Инициализация ДО try: other_fail читается ниже в итоговом статусе, и если
+    # блок упадёт на первой же строке, там будет NameError — падение аудита
+    # целиком вместо пропущенной секции.
+    other_fail, other_total = [], 0
     try:
         known_sids = set(SERVICES.keys())
-        other_fail, other_total = [], 0
         all_data = await railway_query(
             "{ projects { edges { node { name services { edges { node { id name } } } } } } }"
         )
@@ -2320,6 +2439,28 @@ async def run_daily_audit() -> str:
                     pass
         if other_fail:
             lines.append(f"❌ Другие отделы упали: {', '.join(other_fail)}")
+            # «Не чиним вслепую» — верно, но раньше это означало НЕ ДЕЛАТЬ
+            # НИЧЕГО: ни задачи, ни эскалации. Падение чужого отдела молча
+            # переезжало из отчёта в отчёт (family-dept/nelli-bot пролежал
+            # CRASHED сутки). Чинить вслепую по-прежнему не будем — но заведём
+            # задачу на доске, чтобы у падения был владелец и срок.
+            for _fail in other_fail:
+                _title = f"Упал сервис вне SERVICES: {_fail}"
+                try:
+                    _r_x = await get_redis()
+                    _open = await tb.list_tasks(_r_x, status={"open", "in_progress",
+                                                              "needs_fix", "blocked"},
+                                                limit=200)
+                    if any((t.get("title") or "") == _title for t in _open):
+                        continue      # уже заведена — второй раз не плодим
+                    await tb.create_task(_r_x, _title, created_by="силли",
+                                         assignee="влад", status="blocked")
+                    await notify_office(
+                        f"🚨 {_fail} — сервис вне списка автоматического ремонта.\n"
+                        f"Автофикс не применяю (чужой репо), задача на доске, нужен разбор."
+                    )
+                except Exception as _e:
+                    logger.error(f"[audit] задача по {_fail} не завелась: {_e}")
         elif other_total:
             lines.append(f"✅ Другие отделы ({other_total}): все деплои SUCCESS")
     except Exception as e:
@@ -2460,7 +2601,12 @@ async def run_daily_audit() -> str:
 
     # 5. Итог
     lines.append("")
-    status_icon = "🟢" if not deploy_fail and not health_fail and not error_services else "🟡"
+    # other_fail входит в условие с 2026-08-13. До этого отчёт мог в одном
+    # сообщении сказать «❌ Другие отделы упали: family-dept/nelli-bot:CRASHED»
+    # и тут же «🟢 Статус офиса: НОРМА». Противоречивый отчёт хуже отсутствующего:
+    # читатель верит итоговой строке и прокручивает детали.
+    status_icon = ("🟢" if not deploy_fail and not health_fail
+                   and not error_services and not other_fail else "🟡")
     lines.append(f"{status_icon} Статус офиса: {'НОРМА' if status_icon == '🟢' else 'ТРЕБУЕТ ВНИМАНИЯ'}")
 
     return "\n".join(lines)
@@ -4884,6 +5030,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
 - check_var: {"action":"check_var","service":"billy-bot","name":"REDIS_PROXY_TOKEN","expected":"опц. ожидаемая строка"} — читает переменную окружения сервиса в Railway (значение вернётся ЗАМАСКИРОВАННЫМ)
 - railway_logs: {"action":"railway_logs","service":"billy-bot","lines":30} — последние строки логов последнего деплоя сервиса в Railway (lines ≤ 100)
 - set_var: {"action":"set_var","service":"kriss-bot","name":"ALLOWED_USERS","value":"полное новое значение"} — записывает ОДНУ переменную окружения. value подставляется ЦЕЛИКОМ, дозаписи нет: сначала прочитай текущее через check_var, собери новое значение сам и передай его полностью. Секреты (TOKEN/KEY/SECRET/PASSWORD/URL подключения) записывать запрещено — их меняет человек.
+- redeploy: {"action":"redeploy","service":"nelli-bot"} — передеплоить сервис в Railway и ДОЖДАТЬСЯ терминального статуса. Работает для ЛЮБОГО отдела (family-dept, marketing-dept, medical-dept, trading-dept), не только для основного проекта: serviceId и environmentId резолвятся запросом. Не пиши код для редеплоя и не заявляй, что нет доступа — доступ есть, используй это действие.
 - send_message: {"action":"send_message","chat_id":-5194783850,"text":"..."} — в ОФИС ГРУППУ (-5194783850)
 - send_messages: {"action":"send_messages","chat_id":-5194783850,"texts":["msg1","msg2",...]} — батч до 5
 - done: {"action":"done","result":"итог для пользователя"}
@@ -5182,6 +5329,55 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                         await reply_func(f"❌ Задача остановлена: повторяющаяся ошибка — {err_str}")
                         break
 
+            elif action == "redeploy":
+                # ЗАЧЕМ ЭТО ДЕЙСТВИЕ (инцидент 2026-08-13):
+                #     Владу пришлось руками просить поднять упавший nelli-bot.
+                #     На прямой приказ «найди serviceId, передеплой, проверь
+                #     логи» петля выдала СГЕНЕРИРОВАННЫЙ python-скрипт и вывод
+                #     «нет RAILWAY_TOKEN для family-dept, доступа к проекту не
+                #     имею». Оба утверждения ложны: тем же токеном её же аудит
+                #     часом раньше перечислил сервисы family-dept и сообщил
+                #     nelli-bot:CRASHED. Причина не в доступе — в петле не было
+                #     действия «передеплоить», а модель без инструмента делает
+                #     то же, что и в июльском инциденте с set_var: пишет код и
+                #     правдоподобно объясняет отсутствие результата нехваткой
+                #     креденшелов. Дыру закрывает инструмент, не промпт.
+                a_service = action_data.get("service", "")
+                try:
+                    svc_id = next((sid for sid, (r, _) in SERVICES.items() if r == a_service), None)
+                    if not svc_id:
+                        svc_id = await railway_get_service_id(a_service)
+                    if not svc_id:
+                        raise Exception(f"сервис '{a_service}' не найден в Railway")
+
+                    if not await redeploy_service(svc_id):
+                        raise Exception("Railway отклонил serviceInstanceRedeploy")
+
+                    # Не «запустила и молодец»: ждём терминальный статус.
+                    # Запущенный деплой и удавшийся — разные события, и рапорт
+                    # о первом вместо второго уже приводил к «починили» поверх
+                    # сервиса, который так и не поднялся.
+                    st = await wait_for_deploy(svc_id)
+                    res = f"{a_service}: редеплой завершён со статусом {st}"
+                    if st != "SUCCESS":
+                        res += " — подними логи через railway_logs и разберись, что упало"
+                    steps_log.append({"action": f"redeploy({a_service})", "result": res})
+                    context += f"\n\n[redeploy] {res}"
+                    consecutive_failures = 0
+                    last_error = None
+                except Exception as e:
+                    err_str = str(e)
+                    steps_log.append({"action": f"redeploy({a_service})",
+                                      "result": f"ERROR: {err_str}"})
+                    if err_str == last_error:
+                        consecutive_failures += 1
+                    else:
+                        consecutive_failures = 1
+                        last_error = err_str
+                    if consecutive_failures >= 3:
+                        await reply_func(f"❌ Задача остановлена: повторяющаяся ошибка — {err_str}")
+                        break
+
             else:
                 steps_log.append({"action": action, "result": "UNKNOWN ACTION"})
                 await reply_func(f"⚠️ Неизвестное действие: {action}")
@@ -5267,6 +5463,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             _r_act, f"dev_task: {devvy_task[:80]}",
             created_by="силли", assignee="dev-dept",
             status="in_progress", task_id=_task_id,
+            acceptance=DEV_ACCEPTANCE,   # заморожены ДО работы
         ) or _task_id
 
         MAX_DEV_ATTEMPTS = 3
@@ -5277,6 +5474,11 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
         results: dict = {}
         retry_feedback = ""
         attempt = 0
+        # Инициализируем то, что ниже читают улики: обе переменные присваиваются
+        # внутри цикла, и если он оборвётся до присваивания — здесь будет
+        # NameError на пути отчёта, а не на пути работы.
+        ricky_result = ""
+        _se_info = ""
 
         while attempt < MAX_DEV_ATTEMPTS:
             attempt += 1
@@ -5345,6 +5547,13 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             await tb.add_subtask(_r_act, board_id,
                                  f"{_name}: {_res[:60].replace(chr(10), ' ')}",
                                  assignee=_name.lower(), status=_st)
+
+        # Результаты гейта → улики на доске (см. record_dev_gate_evidence).
+        await record_dev_gate_evidence(
+            _r_act, board_id, final_code=final_code, compile_ok=compile_ok,
+            se_info=_se_info, review_ok=review_ok, ricky_result=ricky_result,
+            shrink_info=shrink_info,
+        )
 
         # ── 3. Гейт: успех → стейджим деплой на /approve; провал → эскалация ─
         if final_code and review_ok and compile_ok and not shrink_info and dev_repo and dev_file_path:
@@ -5828,7 +6037,7 @@ async def _apply_pending_action(entry: dict) -> str:
                 how_to_avoid = analysis.get("lesson_avoid", ""),
             )
             if task_id:
-                await tb.update_status(r, task_id, "done", result=status)
+                await close_task_reported(r, task_id, status)
             return f"✅ Фикс применён ({payload['service_name']}), {status}"
 
         if atype == "deploy_devtask":
@@ -5859,7 +6068,7 @@ async def _apply_pending_action(entry: dict) -> str:
                 "approved dev_task push", payload["repo"], f"{action} {payload['path']}",
             ))
             if task_id:
-                await tb.update_status(r, task_id, "done", result=f"{action}: {url}")
+                await close_task_reported(r, task_id, f"{action}: {url}")
             return (f"✅ Код запушен в {payload['repo']}/{payload['path']} ({action}) — "
                     f"Railway задеплоит автоматически.\n{url}")
 
@@ -5869,7 +6078,8 @@ async def _apply_pending_action(entry: dict) -> str:
                 mode=payload.get("mode", "append"),
             )
             if task_id:
-                await tb.update_status(r, task_id, "done" if ok else "blocked")
+                await (close_task_reported(r, task_id) if ok
+                       else tb.update_status(r, task_id, "blocked"))
             who = payload.get("display", payload.get("canon", "?"))
             return (f"✅ Инструкция для {who} обновлена (mode={payload.get('mode','append')})"
                     if ok else f"⚠️ Не удалось обновить инструкцию для {who} (Redis?)")
@@ -6921,6 +7131,22 @@ async def _management_tick():
         tid = t.get("id")
         status = t.get("status")
         age = _age_seconds(t.get("updated_at", ""))
+        # Потолок раундов. До этого эскалация была только по ВРЕМЕНИ (задача
+        # висит >2ч). Задача, которая бодро крутит попытку за попыткой, под это
+        # не попадала: updated_at обновляется на каждом заходе, значит она
+        # «свежая» и может переделываться бесконечно. Считаем не время, а
+        # попытки.
+        if tb.should_escalate(t):
+            await tb.escalate(r, tid)
+            _fresh = await tb.get_task(r, tid)
+            await notify_office(
+                f"🚨 Задача [{tid}] упёрлась в потолок попыток "
+                f"({t.get('attempts')}/{tb.MAX_ROUNDS}): {t.get('title','')[:80]}\n"
+                + (tb.format_evidence_report(_fresh) if _fresh else "")
+                + "\nДальше сама не продвину, нужен твой разбор."
+            )
+            continue
+
         if status == "blocked" and not t.get("escalated"):
             await tb.update_status(r, tid, "blocked", escalated=True)
             await notify_office(
