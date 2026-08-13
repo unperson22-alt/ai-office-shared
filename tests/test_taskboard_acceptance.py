@@ -31,6 +31,16 @@ class FakeRedis:
     def __init__(self):
         self.h: dict = {}
         self.z: dict = {}
+        self.s: dict = {}   # обычные строковые ключи — для гейта redis_key
+
+    async def set(self, key, value):
+        self.s[key] = value
+
+    async def get(self, key):
+        return self.s.get(key)
+
+    async def exists(self, key):
+        return 1 if (key in self.s or key in self.h) else 0
 
     async def hset(self, key, mapping=None, **kw):
         self.h.setdefault(key, {}).update(mapping or {})
@@ -126,9 +136,13 @@ class TestDoneRequiresEvidence(unittest.TestCase):
         self.assertFalse(run(tb.update_status(self.r, tid, "done")))
 
     def test_done_allowed_when_every_criterion_proven(self):
-        tid = run(tb.create_task(self.r, "задача", acceptance=["A", "B"]))
-        run(tb.add_evidence(self.r, tid, "A", passed=True, proof="pytest: 142 passed"))
-        run(tb.add_evidence(self.r, tid, "B", passed=True, proof="HTTP 200"))
+        # Проверяющий назван и это не исполнитель — только такая улика считается.
+        tid = run(tb.create_task(self.r, "задача", assignee="билли",
+                                 acceptance=["A", "B"]))
+        run(tb.add_evidence(self.r, tid, "A", passed=True,
+                            proof="pytest: 142 passed", checked_by="тести"))
+        run(tb.add_evidence(self.r, tid, "B", passed=True,
+                            proof="HTTP 200", checked_by=tb.VERIFIER_GATE))
         self.assertTrue(run(tb.update_status(self.r, tid, "done")))
         self.assertEqual(run(tb.get_task(self.r, tid))["status"], "done")
 
@@ -145,7 +159,8 @@ class TestDoneRequiresEvidence(unittest.TestCase):
     def test_evidence_for_one_criterion_is_replaced_not_duplicated(self):
         tid = run(tb.create_task(self.r, "задача", acceptance=["A"]))
         run(tb.add_evidence(self.r, tid, "A", passed=False, proof="сначала упало"))
-        run(tb.add_evidence(self.r, tid, "A", passed=True, proof="после фикса ок"))
+        run(tb.add_evidence(self.r, tid, "A", passed=True,
+                            proof="после фикса ок", checked_by="тести"))
         ev = run(tb.get_task(self.r, tid))["evidence"]
         self.assertEqual(len(ev), 1)
         self.assertTrue(ev[0]["passed"])

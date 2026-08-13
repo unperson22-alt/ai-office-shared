@@ -17,7 +17,12 @@
     banter       — fanout(), is_banter(), depth_of(), sender_of() — болталка ботов
     taskboard    — + acceptance/evidence: критерии приёмки замораживаются до
                    работы, done не выдаётся без улик (set_acceptance,
-                   add_evidence, acceptance_verdict)
+                   add_evidence, acceptance_verdict); успех подписывает НЕ
+                   исполнитель; потолок раундов (should_escalate/escalate);
+                   отчёт таблицей улик (format_evidence_report)
+    gates        — run_gate() — детерминированная проверка критерия:
+                   компиляция, HTTP-код, ключ Redis, подстрока. Улика —
+                   наблюдённое значение, а не «проверил, работает»
     phantom      — looks_like_phantom() — офф-персонажные заглушки Ollama
     railway_vars — set_var_allowed() — что Силли можно писать в env
     models       — MODEL_SONNET, MODEL_HAIKU, MODEL_OPUS (id моделей + env-override)

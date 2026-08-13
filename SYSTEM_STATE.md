@@ -79,6 +79,46 @@
 `shared.banter.fanout()` после успешного роутинга и из `handle_bot_task`.
 Обмен затихает на `BANTER_MAX_DEPTH` (2 реплики).
 
+-----
+
+## Оркестрация: как задача доходит до «готово»
+
+Схема Влада — Силли планирует, боты работают по направлениям, Силли проверяет
+и отчитывается — реализуется на доске задач, а не на доверии к отчётам. Четыре
+правила, каждое закрывает конкретную дыру в схеме.
+
+**1. Критерии пишутся ДО работы и потом не меняются** (`set_acceptance`).
+Кто определяет успех, уже увидев результат, определит его так, чтобы результат
+подошёл. `update_status(..., "done")` отказывает, пока хоть один критерий не
+закрыт уликой. Задача без критериев ведёт себя как раньше.
+
+**2. Успех подписывает НЕ исполнитель** (`add_evidence`). `passed=True` от
+`assignee` и анонимное «работает» отклоняются: это не проверка, а повторное
+утверждение. `passed=False` принимается от кого угодно — признание провала не
+выгодно признающему, и барьер здесь заставил бы молчать о поломке.
+
+**3. Что можно померить — меряет код, а не модель** (`shared.gates`).
+`python_compile`, `http_status`, `redis_key`, `text_contains`, `text_absent`.
+Улика — наблюдённое значение (`GET … → 200`, `SyntaxError, строка 12`), а не
+«проверил, работает». Гейт подписывается именем `гейт` и правилу №2 не
+подчиняется: у него нет интереса в исходе. **Неисполнимый гейт — это провал, а
+не пропуск**: гейт, который не смог проверить, ничего не подтвердил.
+`verify_task()` прогоняет все гейты задачи разом; критерии без гейта остаются
+живому проверяющему.
+
+**4. У петли «доработай» есть потолок** (`MAX_ROUNDS = 3`). Модель, которой
+сказали «переделай», переделывает бесконечно и каждый раз уверена, что теперь
+всё. `should_escalate()` → `escalate()` ставит `blocked` + `escalated` и пишет
+причину: дешевле позвать человека на третьем круге, чем на тридцатом.
+
+**Отчёт — таблица улик** (`format_evidence_report`), не проза: по каждому
+критерию видно вердикт, чем подтверждён и кто подтвердил. Строку без улики
+видно сразу, а «всё сделал, работает» не отличить от невыполненной работы.
+
+**Модель по этапу** (`models.model_for_stage`): Opus — только план и финальный
+вердикт, Sonnet — исполнение, Haiku — роутинг. «Самая мощная модель везде»
+лечит не ту болезнь: отказы офиса были про отсутствующие инструменты, поля и
+логи, а не про качество рассуждений.
 
 -----
 
@@ -171,7 +211,7 @@ ID и создаёт ложное впечатление, что вайтлис�
 |`office:logs:{bot}:{date}`     |LIST  |Каждый бот (`log_event`)          |Силли (`read_logs()`)               |7д                   |JSON события. `bot` — lowercase, `date` — `YYYY-MM-DD`. LPUSH + LTRIM 1000|
 |`office:members`               |STRING|Филли (`group_members_update`)    |Филли (`group_members_get`)         |30д                  |Текстовый профиль команды, генерируется Haiku раз в неделю               |
 |`office:mom_queue`             |LIST  |Эллис (`ellice-bot`)                |Эллис (`/mention` endpoint)         |7д                   |JSON очередь сообщений мамы, сбрасывается при пинге из Филли             |
-|`office:task:{id}`             |HASH  |Силли (`taskboard.create_task`)   |Силли (`management_loop`), дашборд  |∞ / 30д у done       |Доска задач. Поля: `id,title,created_by,assignee,status,parent_id,result,attempts,escalated,created_at,updated_at`. Статусы: open/in_progress/needs_fix/blocked/awaiting_approval/done/rejected |
+|`office:task:{id}`             |HASH  |Силли (`taskboard.create_task`)   |Силли (`management_loop`), дашборд  |∞ / 30д у done       |Доска задач. Поля: `id,title,created_by,assignee,status,parent_id,result,acceptance,evidence,attempts,escalated,created_at,updated_at`. `acceptance`/`evidence` — JSON-списки. Статусы: open/in_progress/needs_fix/blocked/awaiting_approval/done/rejected |
 |`office:tasks:index`           |ZSET  |Силли (`taskboard`)               |Силли (`taskboard.list_tasks`)      |—                    |member=task_id, score=updated_at(epoch). ZREVRANGE → свежие первыми       |
 |`office:pending:{id}`          |STRING|Силли (`stage_pending`)           |Силли (`/approve`, `pop_pending`)   |24ч                  |JSON pending-действия approval-гейта. `type`: deploy_fix/deploy_devtask/update_instruction/delegate |
 |`office:instructions:{bot}`    |STRING|Силли (`set_bot_instruction`)     |Каждый бот (`build_system` через `office.instructions_suffix`)|∞|Рантайм-инструкция тимлида, аппендится к системному промпту БЕЗ редеплоя. `bot` — lowercase canonical |
@@ -197,6 +237,9 @@ ID и создаёт ложное впечатление, что вайтлис�
 |`shared.url_check`    |v0.1.7  |`check_url`, `filter_live_urls`, `extract_urls`, `verify_text_urls`                                            |
 |`shared.office`       |v0.1.18 |`call_office`, `OFFICE_AGENTS`, `parse_office_tag`, `instructions_suffix(redis, bot)` ← рантайм-обучение      |
 |`shared.taskboard`    |v0.1.18 |`create_task`, `update_status`, `set_result`, `incr_attempts`, `add_subtask`, `get_task`, `list_tasks`        |
+|`shared.taskboard`    |v0.1.24 |+ приёмка и роли: `set_acceptance`, `add_evidence`, `acceptance_verdict`, `verify_task`, `VERIFIER_GATE`, `MAX_ROUNDS`, `rounds_left`, `should_escalate`, `escalate`, `format_evidence_report` |
+|`shared.gates`        |v0.1.24 |`run_gate(spec, redis_client)`, `criterion_text()`, `criterion_gate()`, `GATE_KINDS` — детерминированная проверка критерия |
+|`shared.models`       |v0.1.24 |+ `model_for_stage(stage)`, `STAGE_PLAN/EXECUTE/ROUTE/REVIEW` — тяжёлая модель только на план и финальный вердикт |
 |`shared.prompt`       |v0.1.21 |`enhance_prompt` (с guard), `enhance_prompt_ex`, `EnhanceResult`, `intent_hint`                                |
 |`shared.media`        |v0.1.21 |`IMAGE_FILTER`, `extract_image`, `has_image`, `addressed_in_group`, `ImagePayload`, `ImageError`               |
 |`shared.dev_escalation`|v0.1.21|`DEV_FEATURE_PROMPT_BLOCK`, `parse_dev_feature_tag`, `strip_dev_feature_tag`, `request_dev_feature`            |
