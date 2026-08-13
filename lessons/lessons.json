@@ -1556,5 +1556,25 @@
     "cause": "Uncoordinated deployment of ai_office_shared without version synchronization with nelli-bot",
     "tag": "dependency",
     "posted_to_group": false
+  },
+  {
+    "id": 95,
+    "date": "2024-12-19",
+    "bot": "molly-trader",
+    "layer": "telegram",
+    "title": "Telegram network faults not retried at startup — transient outage crashes the service",
+    "symptom": "molly-trader crashes with telegram.error.NetworkError: Bad Gateway on Telegram API calls during normal operation",
+    "root_cause": "No exponential backoff or retry loop for transient Telegram errors. Unlike lesson #43 (get_me() at startup without retry), general network faults during normal operation lack any resilience mechanism.",
+    "why_architecture": "molly-trader depends on Telegram API for critical operations. A single transient network fault (Bad Gateway) crashes the entire service instead of being treated as a temporary external condition. No retry strategy means every temporary outage becomes a permanent failure.",
+    "fix": "Wrap all Telegram API calls (especially long-lived polling and initialization) in a retry loop with exponential backoff. Use tenacity or asyncio.sleep() with jitter for 3–5 retries before failing.",
+    "status": "open",
+    "prevention": "Treat every Telegram API call as potentially transient. Implement mandatory retry logic for all external API calls. Add circuit breaker patterns for cascading failure protection. Log and retry on NetworkError; never let a single Bad Gateway crash the service.",
+    "cause": "Missing retry mechanism and exponential backoff for transient Telegram API faults",
+    "tag": "resilience",
+    "posted_to_group": false,
+    "related": [
+      43,
+      64
+    ]
   }
 ]
