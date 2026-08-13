@@ -3584,6 +3584,30 @@ async def railway_set_variables(service_id: str, variables: dict) -> bool:
     )
     return data.get("data", {}).get("variableCollectionUpsert") is True
 
+from ai_office_shared.shared.railway_vars import set_var_allowed
+
+
+async def railway_set_variable(service_id: str, name: str, value: str) -> bool:
+    """Записать ОДНУ переменную окружения.
+
+    Сознательно НЕ variableCollectionUpsert (как в railway_set_variables): та
+    мутация заменяет НАБОР целиком — промах модели снёс бы остальные переменные
+    сервиса. Плюс прав на неё у токена нет, а на одиночный variableUpsert есть
+    (проверено 2026-08-12 при добавлении нового аккаунта Яны в ALLOWED_USERS).
+    """
+    data = await railway_graphql(
+        """mutation($input: VariableUpsertInput!) { variableUpsert(input: $input) }""",
+        {"input": {
+            "projectId": PROJECT_ID,
+            "environmentId": ENVIRONMENT_ID,
+            "serviceId": service_id,
+            "name": name,
+            "value": value,
+        }}
+    )
+    return data.get("data", {}).get("variableUpsert") is True
+
+
 async def railway_get_service_id(repo_name: str) -> str | None:
     """Найти service_id по имени сервиса в проекте."""
     data = await railway_graphql(
@@ -4859,6 +4883,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
 - push_file: {"action":"push_file","repo":"...","path":"...","content":"...","message":"..."} — правка НЕ идёт в main напрямую: она валидируется (пины/усадка) и открывается PR на ревью Владу; деплой будет только после мержа. Не жди мгновенного деплоя и не повторяй push.
 - check_var: {"action":"check_var","service":"billy-bot","name":"REDIS_PROXY_TOKEN","expected":"опц. ожидаемая строка"} — читает переменную окружения сервиса в Railway (значение вернётся ЗАМАСКИРОВАННЫМ)
 - railway_logs: {"action":"railway_logs","service":"billy-bot","lines":30} — последние строки логов последнего деплоя сервиса в Railway (lines ≤ 100)
+- set_var: {"action":"set_var","service":"kriss-bot","name":"ALLOWED_USERS","value":"полное новое значение"} — записывает ОДНУ переменную окружения. value подставляется ЦЕЛИКОМ, дозаписи нет: сначала прочитай текущее через check_var, собери новое значение сам и передай его полностью. Секреты (TOKEN/KEY/SECRET/PASSWORD/URL подключения) записывать запрещено — их меняет человек.
 - send_message: {"action":"send_message","chat_id":-5194783850,"text":"..."} — в ОФИС ГРУППУ (-5194783850)
 - send_messages: {"action":"send_messages","chat_id":-5194783850,"texts":["msg1","msg2",...]} — батч до 5
 - done: {"action":"done","result":"итог для пользователя"}
@@ -5102,6 +5127,52 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                 except Exception as e:
                     err_str = str(e)
                     steps_log.append({"action": f"check_var({a_service}/{a_name})", "result": f"ERROR: {err_str}"})
+                    if err_str == last_error:
+                        consecutive_failures += 1
+                    else:
+                        consecutive_failures = 1
+                        last_error = err_str
+                    if consecutive_failures >= 3:
+                        await reply_func(f"❌ Задача остановлена: повторяющаяся ошибка — {err_str}")
+                        break
+
+            elif action == "set_var":
+                a_service = action_data.get("service", "")
+                a_name    = action_data.get("name", "")
+                a_value   = action_data.get("value")
+                try:
+                    allowed, why = set_var_allowed(a_name)
+                    if not allowed:
+                        raise Exception(why)
+                    if a_value is None:
+                        raise Exception("value обязателен и подставляется целиком")
+                    svc_id = next((sid for sid, (r, _) in SERVICES.items() if r == a_service), None)
+                    if not svc_id:
+                        svc_id = await railway_get_service_id(a_service)
+                    if not svc_id:
+                        raise Exception(f"сервис '{a_service}' не найден")
+
+                    before = (await railway_get_variables(svc_id)).get(a_name)
+                    ok_set = await railway_set_variable(svc_id, a_name, str(a_value))
+                    if not ok_set:
+                        raise Exception("Railway вернул variableUpsert=false")
+                    # Читаем ФАКТ, а не верим ответу мутации.
+                    after = (await railway_get_variables(svc_id)).get(a_name)
+                    if str(after) != str(a_value):
+                        raise Exception(
+                            f"записали, но чтение вернуло другое: {str(after)[:80]!r}")
+
+                    res = (f"{a_name} на {a_service}: было {str(before)[:60]!r} → "
+                           f"стало {str(after)[:60]!r} (Railway передеплоит сервис)")
+                    logger.warning("[set_var] %s/%s изменена", a_service, a_name)
+                    steps_log.append({"action": f"set_var({a_service}/{a_name})", "result": res})
+                    context += f"\n\n[set_var] {res}"
+                    consecutive_failures = 0
+                    last_error = None
+                except Exception as e:
+                    err_str = str(e)
+                    steps_log.append({"action": f"set_var({a_service}/{a_name})",
+                                      "result": f"ERROR: {err_str}"})
                     if err_str == last_error:
                         consecutive_failures += 1
                     else:
