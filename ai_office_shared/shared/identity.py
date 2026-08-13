@@ -142,7 +142,11 @@ BOTS: dict[str, dict] = {
     "силли": {
         "display":    "Силли",
         "repo":       "ai-office-shared",  # живёт в agents/coder.py
-        "service_id": "efa6bd21-91d8-467f-8250-60f8a3853791",
+        # Проверено 2026-08-13 запросом deployments: efa6bd21-91d8-467f-8250-
+        # 60f8a3853791 отдаёт ПУСТОЙ список — такого сервиса нет. Реальный
+        # сервис Силли лежит в проекте dev-dept. Старый ID жил в identity,
+        # ops.md и skills/railway-deploy и уводил любой её деплой в никуда.
+        "service_id": "95999005-f1a9-4ce9-9cee-7e803394e14e",
         "aliases":    ["cilly", "силли", "СИЛЛИ", "Силли", "CILLY"],
         "role":       "meta",
         "route_key":  "СИЛЛИ",

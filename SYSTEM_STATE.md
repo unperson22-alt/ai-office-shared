@@ -137,7 +137,7 @@
 |**Доктор** |`ДИЛЛИ`             |`доктор`                |dilly-bot  |`d949c4d2`|dilly-bot-production.up.railway.app       |python-telegram-bot          |
 |**Вилли**  |`ВИЛЛИ`             |`вилли`                 |villy-bot  |`a5e37cc4`|villy-bot-production.up.railway.app       |python-telegram-bot          |
 |**Гослинг**|`ГОСЛИНГ`           |`гослинг`               |gosling-bot|`ed03c9d3`|gosling-bot-production.up.railway.app ³       |python-telegram-bot          |
-|**Силли**  |`СИЛЛИ`             |`силли`                 |ai-office-shared|`efa6bd21`|ai-office-shared-production.up.railway.app|aiogram 3.7 + Telethon       |
+|**Силли**  |`СИЛЛИ`             |`силли`                 |ai-office-shared|`95999005` ⁷|ai-office-shared-production.up.railway.app|aiogram 3.7 + Telethon       |
 |**Пророк** |`ПРОРОК`            |— ⁴                     |prophet-bot|—         |prophet-bot-production-df65.up.railway.app|python-telegram-bot          |
 
 **Примечания:**  
@@ -145,6 +145,7 @@
 ² Uppercase агент — `КРИС` (одна С), lowercase quality-ключ — `крисс` (две С). Не путать.  
 ³ Гослинг на internal URL — доступен только внутри Railway-сети. Внешний curl не сработает.  
 ⁵ Доктор — рассинхрон BOT_URLS/quality-ключей проверен 2026-06-11: ключи `office:quality:доктор/дилли` отсутствуют, рассинхрона нет.  
+⁷ Railway-сервис Силли — `95999005-f1a9-4ce9-9cee-7e803394e14e`, и он лежит в проекте **dev-dept**, а не в awake-happiness. Прежний `efa6bd21…` числился в шести местах (identity, ops.md, skills, CLAUDE_WORK_PROTOCOL, ollama_switch) и **мёртв**: запрос `deployments` по нему отдаёт пустой список. Проверено 13.08 запросом из рабочего скоупа.  
 ⁴ Пророк не в METRICS_BOTS, quality не трекается.
 
 **Специальные пользователи:**

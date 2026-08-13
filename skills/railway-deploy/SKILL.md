@@ -46,7 +46,8 @@ tilly-trader = 1c08bbcc-32bb-4e91-9bc9-d196c937c1c4   ✅ auto-deploy с main В
 
 **⚠️ ПРОТУХЛИ (не в активном списке проекта 271b40b7):**
 ```
-силли   = efa6bd21-...  → резолвится в УДАЛЁННЫЙ сервис "cilly-bot-<UUID>". Реальный неизвестен.
+силли   = 95999005-f1a9-4ce9-9cee-7e803394e14e  → проект dev-dept, НЕ awake-happiness.
+          Старый efa6bd21-… мёртв: запрос deployments отдаёт пустой список.
 эллис   = fa7c87cf-...  → не в проекте awake-happiness.
 доктор  = d949c4d2-...  → не в проекте awake-happiness.
 ```

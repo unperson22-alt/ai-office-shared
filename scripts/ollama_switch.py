@@ -34,7 +34,9 @@ BOTS = {
     "kriss":   "92f70bbb-70ea-474c-be0d-5cc1c9bd8f4e",
     "mama":    "fa7c87cf-454c-4946-ab25-6a5091f0ac47",
 }
-CILLY = "efa6bd21-91d8-467f-8250-60f8a3853791"
+# Проверено 2026-08-13: старый efa6bd21… отдаёт пустой
+# список деплоев — сервиса с таким ID нет. Реальный сервис в проекте dev-dept.
+CILLY = "95999005-f1a9-4ce9-9cee-7e803394e14e"
 
 
 def _call(query, variables=None):
