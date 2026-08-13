@@ -1540,5 +1540,21 @@
     "cause": "design",
     "tag": "orchestration",
     "posted_to_group": false
+  },
+  {
+    "id": 94,
+    "date": "2025-01-10",
+    "bot": "nelli-bot",
+    "layer": "dependency",
+    "title": "Missing constant in ai_office_shared dependency — import fails at startup",
+    "symptom": "nelli-bot crashes repeatedly with ImportError: cannot import name 'MIN_ENHANCE_LEN' from ai_office_shared.shared.prompt",
+    "root_cause": "The ai_office_shared package was updated or deployed without the MIN_ENHANCE_LEN constant that nelli-bot expects. Critical operations at module level cause immediate crash on import.",
+    "why_architecture": "nelli-bot depends on ai_office_shared as a shared service. No version pinning or import validation at startup means breaking changes in the shared package silently break all dependents. No startup check for required constants allows the bot to fail hard immediately.",
+    "fix": "Either: (1) add MIN_ENHANCE_LEN constant to ai_office_shared/shared/prompt.py, or (2) pin ai_office_shared to a version that has MIN_ENHANCE_LEN, or (3) remove the import and define MIN_ENHANCE_LEN locally in nelli-bot if it is a local constant",
+    "status": "open",
+    "prevention": "Breaking changes in shared dependencies must be coordinated with all consuming services. Add a deprecation window and version constraints. Test dependency updates against all dependent bots before deploying to shared packages. Add startup validation for required imports.",
+    "cause": "Uncoordinated deployment of ai_office_shared without version synchronization with nelli-bot",
+    "tag": "dependency",
+    "posted_to_group": false
   }
 ]
