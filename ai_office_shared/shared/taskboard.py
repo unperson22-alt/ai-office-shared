@@ -45,6 +45,8 @@ except Exception:  # pragma: no cover — на случай частичной �
     def canonical(name):  # type: ignore
         return name
 
+from .gates import criterion_gate, criterion_text, run_gate
+
 _logger = logging.getLogger("ai_office_shared.taskboard")
 
 INDEX_KEY = "office:tasks:index"
@@ -253,6 +255,12 @@ async def set_acceptance(redis_client, task_id: str, criteria: list) -> tuple[bo
     return (True, "") if ok else (False, "ошибка записи")
 
 
+# Имя проверяющего для улик, добытых детерминированным гейтом. Не бот и не
+# человек: у гейта нет интереса в исходе, поэтому правило «не проверяй сам
+# себя» на него не распространяется.
+VERIFIER_GATE = "гейт"
+
+
 async def add_evidence(
     redis_client,
     task_id: str,
@@ -261,34 +269,82 @@ async def add_evidence(
     passed: bool,
     proof: str = "",
     checked_by: str = "",
-) -> bool:
+) -> tuple[bool, str]:
     """
-    Приложить улику по одному критерию. Fail-silent.
+    Приложить улику по одному критерию.
+
+    Returns:
+        (записано, причина_отказа)
+
+    ПРАВИЛО РАЗДЕЛЕНИЯ РОЛЕЙ: успех подтверждает НЕ тот, кто делал работу.
+    `passed=True` от исполнителя отклоняется — это не проверка, а повторное
+    утверждение. `passed=False` принимается от кого угодно, включая
+    исполнителя и аноним: признание провала не выгодно тому, кто его признаёт,
+    и лишний барьер здесь только заставил бы молчать о поломке.
 
     Args:
         criterion: текст критерия — ровно как он записан в acceptance.
         proof:     чем подтверждено: код возврата, строка лога, диф, ответ HTTP.
-                   Прозаическое «проверил, работает» уликой не считается — но
-                   отличить это может только человек на ревью, поэтому здесь
-                   ограничение мягкое: пустой proof допустим для passed=False.
-        checked_by: кто проверял. Важно: не должен совпадать с исполнителем —
-                   проверять свою работу означает её подтвердить.
+        checked_by: кто проверял. VERIFIER_GATE — улика от гейта (см. verify_task).
     """
     if redis_client is None or not task_id or not criterion:
-        return False
+        return False, "нет redis, task_id или criterion"
     task = await get_task(redis_client, task_id)
     if not task:
-        return False
+        return False, f"задача {task_id} не найдена"
+
+    who = _normalize_assignee(checked_by) or checked_by or ""
+    if passed and who != VERIFIER_GATE:
+        if not who:
+            return False, ("улику об успехе должен подписать проверяющий — "
+                           "анонимное «работает» проверкой не считается")
+        if who == (task.get("assignee") or ""):
+            return False, (f"{who} — исполнитель этой задачи; свою работу "
+                           f"подтверждает не исполнитель, а проверяющий")
+
     ev = list(task.get("evidence") or [])
     ev = [e for e in ev if not (isinstance(e, dict) and e.get("criterion") == criterion)]
     ev.append({
         "criterion": criterion,
         "passed": bool(passed),
         "proof": (proof or "")[:600],
-        "checked_by": _normalize_assignee(checked_by) or checked_by or "",
+        "checked_by": who,
         "at": _now_iso(),
     })
-    return await _touch(redis_client, task_id, {"evidence": _dump_list(ev)})
+    ok = await _touch(redis_client, task_id, {"evidence": _dump_list(ev)})
+    return (True, "") if ok else (False, "ошибка записи")
+
+
+async def verify_task(redis_client, task_id: str) -> tuple[int, int, list]:
+    """
+    Прогнать все критерии задачи, у которых есть детерминированный гейт, и
+    записать улики от имени VERIFIER_GATE.
+
+    Критерии без гейта не трогаются — их закрывает проверяющий бот/человек
+    через add_evidence.
+
+    Returns:
+        (сколько_прошло, сколько_провалено, список_записей)
+    """
+    task = await get_task(redis_client, task_id)
+    if not task:
+        return 0, 0, []
+    passed_n = failed_n = 0
+    records: list[dict] = []
+    for item in (task.get("acceptance") or []):
+        gate = criterion_gate(item)
+        if gate is None:
+            continue
+        text = criterion_text(item)
+        ok, proof = await run_gate(gate, redis_client=redis_client)
+        await add_evidence(redis_client, task_id, text,
+                           passed=ok, proof=proof, checked_by=VERIFIER_GATE)
+        records.append({"criterion": text, "passed": ok, "proof": proof})
+        if ok:
+            passed_n += 1
+        else:
+            failed_n += 1
+    return passed_n, failed_n, records
 
 
 def acceptance_verdict(task: dict) -> tuple[bool, list, list]:
@@ -298,7 +354,8 @@ def acceptance_verdict(task: dict) -> tuple[bool, list, list]:
     Returns:
         (всё_закрыто, непокрытые_критерии, проваленные_критерии)
     """
-    criteria = [c for c in (task.get("acceptance") or []) if c]
+    criteria = [criterion_text(c) for c in (task.get("acceptance") or []) if c]
+    criteria = [c for c in criteria if c]
     if not criteria:
         return True, [], []   # задача без критериев ведёт себя как раньше
     by_criterion = {
@@ -366,6 +423,101 @@ async def incr_attempts(redis_client, task_id: str) -> int:
     except Exception as e:
         _logger.warning("incr_attempts failed id=%s: %s", task_id, e)
         return 0
+
+
+# ── Потолок раундов: цикл «доработай» обязан кончаться ────────────────────────
+# ПРОБЛЕМА: план→работа→ревью→доработка — петля без выхода. Модель, которой
+# сказали «не годится, переделай», переделывает бесконечно и каждый раз
+# уверена, что теперь-то всё. Токены жгутся, задача стоит, человек не знает,
+# что она стоит, потому что формально «идёт работа».
+# ПРАВИЛО: у петли есть счётчик (существующий attempts) и потолок. Упёрлись —
+# это не «ещё раз», а blocked + escalated: разбирается человек. Дешевле
+# позвать Влада на третьем круге, чем на тридцатом.
+
+MAX_ROUNDS = 3
+
+
+def rounds_left(task: dict, *, max_rounds: int = MAX_ROUNDS) -> int:
+    """Сколько попыток осталось у задачи. 0 — потолок исчерпан."""
+    try:
+        used = int(task.get("attempts") or 0)
+    except (ValueError, TypeError):
+        used = 0
+    return max(0, max_rounds - used)
+
+
+def should_escalate(task: dict, *, max_rounds: int = MAX_ROUNDS) -> bool:
+    """
+    True, если задачу пора отдать человеку: попытки исчерпаны, а задача всё
+    ещё не в терминальном статусе и ещё не эскалирована.
+    """
+    if not task:
+        return False
+    if task.get("status") in TERMINAL_STATUSES:
+        return False
+    if task.get("escalated"):
+        return False
+    return rounds_left(task, max_rounds=max_rounds) <= 0
+
+
+async def escalate(redis_client, task_id: str, reason: str = "") -> bool:
+    """
+    Снять задачу с автоматической петли и отдать человеку.
+
+    Ставит blocked + escalated=1 и пишет причину в result, чтобы у человека
+    сразу был контекст, а не только факт остановки.
+    """
+    task = await get_task(redis_client, task_id)
+    attempts = (task or {}).get("attempts", 0)
+    text = reason or f"исчерпан потолок попыток ({attempts}) — нужен человек"
+    return await update_status(redis_client, task_id, "blocked",
+                               result=text, escalated=True)
+
+
+def format_evidence_report(task: dict) -> str:
+    """
+    Отчёт по задаче таблицей улик, а не прозой.
+
+    Проза («всё сделал, работает») не проверяема: читатель не может отличить
+    выполненную работу от уверенно описанной. Таблица показывает по каждому
+    критерию, кто и чем его закрыл, — и сразу видно строки, где проверяющий
+    совпал бы с исполнителем или где улика пустая.
+    """
+    criteria = [criterion_text(c) for c in (task.get("acceptance") or []) if c]
+    criteria = [c for c in criteria if c]
+    title = (task.get("title") or "").replace("\n", " ")[:120]
+    head = f"[{task.get('id', '?')}] {title}"
+    if not criteria:
+        return f"{head}\nКритериев приёмки не было — проверить нечем."
+
+    by_criterion = {
+        e.get("criterion"): e
+        for e in (task.get("evidence") or []) if isinstance(e, dict)
+    }
+    ok_all, missing, failed = acceptance_verdict(task)
+    lines = [head, "", "| критерий | вердикт | чем подтверждено | кто |",
+             "|---|---|---|---|"]
+    for c in criteria:
+        ev = by_criterion.get(c)
+        if ev is None:
+            verdict, proof, who = "⬜ не проверен", "—", "—"
+        elif ev.get("passed"):
+            verdict = "✅"
+            proof = (ev.get("proof") or "—").replace("\n", " ")[:120]
+            who = ev.get("checked_by") or "—"
+        else:
+            verdict = "❌"
+            proof = (ev.get("proof") or "—").replace("\n", " ")[:120]
+            who = ev.get("checked_by") or "—"
+        lines.append(f"| {c[:80]} | {verdict} | {proof} | {who} |")
+
+    lines.append("")
+    if ok_all:
+        lines.append(f"Итог: приёмка пройдена, {len(criteria)}/{len(criteria)}.")
+    else:
+        lines.append(f"Итог: НЕ пройдена — не проверено {len(missing)}, "
+                     f"провалено {len(failed)} из {len(criteria)}.")
+    return "\n".join(lines)
 
 
 async def add_subtask(

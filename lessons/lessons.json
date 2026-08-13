@@ -1524,5 +1524,21 @@
     "cause": "silent guard + shared-helper fix not swept across hand-written copies",
     "tag": "observability",
     "posted_to_group": false
+  },
+  {
+    "id": 93,
+    "date": "2026-08-13",
+    "bot": "ai-office-shared (taskboard / gates / models)",
+    "layer": "orchestration / verification",
+    "title": "A plan-work-review loop where the worker also signs off its own success is not verification — it is the same claim made twice, and the loop it runs in has no exit",
+    "symptom": "The owner proposed an orchestration scheme: the team lead plans, dispatches work to each bot by specialty, the bots report back, the lead writes success criteria, dispatches verification, then reports. Run literally, every checkpoint in that chain is a bot describing its own output. Two failures from the same week show what that produces: Milly considered her task solved while her reply was being silently discarded downstream, and 'the bug is fixed' held right up until somebody wrote down what fixed meant.",
+    "root_cause": "Three separate holes, all of the form 'the artifact that proves the work is produced by the party with an interest in the outcome'. (a) Success criteria written after seeing the result get fitted to the result — the author is choosing a definition they already know the answer to. (b) The verifier was the same class of actor as the executor, and often literally the same bot; an LLM reviewing its own output agrees with itself on every borderline case. (c) The review loop had no round cap: a model told 'not good enough, redo it' redoes it indefinitely, is confident each time, and the task stalls while formally reading as in progress. None of the three is a reasoning failure, so none of them is fixed by using a stronger model.",
+    "why_architecture": "The office already had the substrate — office:tasks carried parent_id, needs_fix, attempts and escalated — but 'done' was a status anybody could write. Correctness lived in prose reports rather than in the data model, so nothing in the system could tell a finished task from a confidently described one.",
+    "fix": "Phase 1: acceptance criteria frozen at task creation (set_acceptance refuses to overwrite, and refuses entirely once work has started); update_status(...,'done') refuses while any criterion is uncovered or failed; tasks without criteria behave exactly as before. Phase 2: add_evidence rejects passed=True from the task's own assignee and from an anonymous checker, while accepting passed=False from anyone — admitting a failure is not in the admitter's interest, and a barrier there would only buy silence about breakage. New shared.gates runs deterministic checks (python_compile, http_status, redis_key, text_contains, text_absent) whose proof is the observed value; a gate that could not execute counts as FAILED, never as skipped. verify_task() closes every gated criterion under the reserved checker name 'gate', which is exempt from the self-check rule because it has no stake in the outcome. MAX_ROUNDS=3 with should_escalate()/escalate() turns an endless retry into blocked+escalated with the reason recorded. format_evidence_report() renders the outcome as a criterion/verdict/proof/checker table. models.model_for_stage() puts Opus on planning and the final verdict only.",
+    "status": "closed",
+    "prevention": "Whoever did the work does not certify it. If a criterion can be measured by code, it must be a gate rather than a sentence, or the check will be written as prose and pass by default. A verification step that cannot run is a failure, not a skip. Every retry loop needs a counter and a ceiling that ends in a human, decided before the loop is written. And reach for a bigger model only after checking that the failure is actually about reasoning — missing tools, missing fields and missing logs look like stupidity and are not.",
+    "cause": "design",
+    "tag": "orchestration",
+    "posted_to_group": false
   }
 ]
