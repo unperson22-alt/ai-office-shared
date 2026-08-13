@@ -38,7 +38,7 @@
 | doctor-bot | ✅ | d949c4d2-59fa-4cbe-8bb8-a0589a476607 |
 | milly-bot | ✅ | db277aff-6638-4b4a-970e-b016bd753608 |
 | office-dashboard | ✅ | 3dfc7336-2e91-4ade-950a-4f3d566baced |
-| cilly (ai-office-shared) | ✅ | efa6bd21-91d8-467f-8250-60f8a3853791 |
+| cilly (ai-office-shared) | ✅ | 95999005-f1a9-4ce9-9cee-7e803394e14e (исправлен 13.08: старый ID мёртв) |
 | prophet-bot | ✅ | 9db4108e-19f1-4c1f-a21c-3909442e137c |
 
 ### Pending / следующие шаги

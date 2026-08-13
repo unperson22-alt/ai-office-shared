@@ -69,7 +69,7 @@ mutation {
   variableUpsert(input: {
     projectId: "271b40b7-199a-429a-88ef-ca417f26a638"
     environmentId: "2efaaf60-ba39-492c-bf86-007fd505493f"
-    serviceId: "efa6bd21-91d8-467f-8250-60f8a3853791"
+    serviceId: "95999005-f1a9-4ce9-9cee-7e803394e14e"   # исправлен 13.08, старый ID мёртв
     name: "CILLY_MONITOR_PAUSED"
     value: "true"
   })
@@ -80,7 +80,10 @@ mutation {
 
 **Проверить статус паузы** перед работой:
 ```graphql
-{ variables(projectId: "271b40b7...", environmentId: "2efaaf60...", serviceId: "efa6bd21...") }
+{ variables(projectId: "...", environmentId: "...", serviceId: "95999005...") }
+⚠️ projectId/environmentId для Силли здесь НЕ подтверждены: её сервис живёт в
+проекте dev-dept, а 271b40b7/2efaaf60 — это awake-happiness. Брать из запроса,
+не из этой строки.
 # → смотреть CILLY_MONITOR_PAUSED
 ```
 
@@ -152,7 +155,7 @@ send_group_message, answer
 |---|---|
 | Project awake-happiness | `271b40b7-199a-429a-88ef-ca417f26a638` |
 | Environment production | `2efaaf60-ba39-492c-bf86-007fd505493f` |
-| Силли (cilly-bot) | `efa6bd21-91d8-467f-8250-60f8a3853791` |
+| Силли (cilly-bot) | `95999005-f1a9-4ce9-9cee-7e803394e14e` ⚠️ сервис в проекте **dev-dept**, не в awake-happiness |
 | Филли (filly-bot) | `5d61d403-feee-455e-9c0d-523f0e7c79d5` |
 | Redis | `b62bdd8d-237a-4f2b-b4dc-9fed787c168d` |
 | Watchdog | `e23833d2-8a05-4749-adce-c856ec026927` |
