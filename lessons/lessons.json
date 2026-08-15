@@ -1608,5 +1608,21 @@
     "cause": "copy-pasted helper + untested provider chain",
     "tag": "imagegen",
     "posted_to_group": false
+  },
+  {
+    "id": 98,
+    "date": "2026-08-15",
+    "bot": "office-wide (36 call sites across 19 repos)",
+    "layer": "service-to-service integration / observability",
+    "title": "An outgoing HTTP call whose status code nobody reads is an integration that dies silently — and when it also records success, it actively misleads the next person debugging it",
+    "symptom": "Three unrelated failures in one day turned out to be the same shape. Billy's ping to Gosling, the watchdog's notify_team call to the dev department, and Filly's _auto_heal call to the team lead all fired an HTTP POST and never looked at the response. Each would work right up until the far end returned 401 or 500, after which it would stop working permanently while logging nothing. Two of the three were found only while looking for something else. A sweep then found 36 such call sites across 19 repositories.",
+    "root_cause": "In async Python, `await client.post(...)` returns normally for every HTTP status — 401 and 500 included. Only transport errors raise. So the default behaviour of the most common line in this codebase is to treat a rejected request as a successful one. Review does not catch it either: the line looks complete, and the failure only appears under conditions that do not exist yet — the office is mid-rollout of OFFICE_RPC_STRICT, which will start returning 401 to every caller that omits the token. The worst instance was the banter fan-out: it appended the agent to the `pinged` list regardless of status, so on a 401 the office log would state 'pinged MILLY' while no reply was ever produced. A false success is worse than silence: silence leaves you searching, a false success sends you searching in the wrong place.",
+    "why_architecture": "The office is a mesh of small services calling each other over HTTP, and it is rolling out shared-secret auth. That combination guarantees a moment when every unchecked call starts failing at once, quietly. There was no shared convention for outgoing calls, so all 36 sites made the same omission independently.",
+    "fix": "Rule adopted: every call across a service boundary must read the status code and record the failure where a human will look — office:logs, not only stdout. Fixed: billy's Gosling ping, the watchdog's notify_team (which now also alerts the owner in Telegram when the dev department is unreachable — in that scenario both the lead and the team are down and the human is the last resort), Filly's _auto_heal, and the banter fan-out, which now checks status before counting a ping as delivered and reports failures in the banter_ping event alongside successes. Remaining sites are inventoried by repo and file; most are best-effort telemetry to logger-bot — lower priority but not exempt, because if logging dies quietly the office goes blind, which is how several of this week's incidents stayed hidden.",
+    "status": "partial",
+    "prevention": "Treat `await client.post(...)` as incomplete until the status is read. A call that cannot fail visibly will eventually fail invisibly. Never record success before confirming it: appending to a 'delivered' list on the strength of no exception is a lie the logs will repeat back to you during the next incident. And when rolling out authentication across a mesh, audit unchecked callers BEFORE enabling enforcement — the enforcement date is the date they all break at once.",
+    "cause": "design",
+    "tag": "integration",
+    "posted_to_group": false
   }
 ]
