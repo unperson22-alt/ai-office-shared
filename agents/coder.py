@@ -107,6 +107,39 @@ SERVICES = {
     "86dc28a1-b283-4038-9b64-b91741583da7": ("molly-trader",     "bot.py"),
 }
 
+# Свой собственный сервис — ОТДЕЛЬНО от SERVICES, и это не оплошность.
+#
+# SERVICES — список того, что чинится АВТОМАТИЧЕСКИ (аудит, автохил). Меня там
+# нет намеренно: иначе аудит принялся бы править мой же coder.py, что запрещено
+# после 01.07 (урок #70 — гейт пропустил заглушку на 8 строк вместо файла на
+# 5766, офис лёг целиком). Запрет остаётся.
+#
+# Но «не правлю себя автоматически» и «меня нельзя передеплоить по прямой
+# просьбе» — разные вещи, а до 16.08 это было одно и то же: интент deploy искал
+# service_id только в SERVICES и отвечал «Сервис ai-office-shared не найден».
+# Поиск по имени (railway_get_service_id) тоже не помогает: на Railway сервис
+# называется не по репозиторию, а автогенерённым «cilly-bot-<uuid>-<uuid>-<uuid>»
+# — совпадения с "ai-office-shared" не будет никогда. Поэтому здесь явный id.
+#
+# Кто поднимает меня, когда я лежу, — по-прежнему watchdog-bot: он опрашивает
+# /health каждые 120 с и не зависит от того, отвечаю ли я на HTTP (урок #99).
+SELF_REPO       = "ai-office-shared"
+SELF_SERVICE_ID = os.getenv("SELF_SERVICE_ID", "efa6bd21-91d8-467f-8250-60f8a3853791")
+
+
+def resolve_service_id(repo: str) -> str | None:
+    """repo → Railway service_id для ЯВНОЙ операции (деплой по просьбе).
+
+    Не для аудита и не для автохила: те ходят по SERVICES напрямую, и своего
+    сервиса там по-прежнему нет. Разделение намеренное — «что чинить самому»
+    и «что вообще существует» это два разных вопроса, и 16.08 они были
+    склеены в один.
+    """
+    if repo == SELF_REPO:
+        return SELF_SERVICE_ID
+    return next((sid for sid, (r, _) in SERVICES.items() if r == repo), None)
+
+
 def _render_railway_ids_block() -> str:
     """Блок RAILWAY IDs для системного промпта — генерируется из SERVICES.
 
@@ -4711,15 +4744,11 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         if not repo:
             await reply_func("❓ Укажи какой сервис задеплоить")
             return
-        service_id = next((sid for sid, (r, _) in SERVICES.items() if r == repo), None)
+        service_id = resolve_service_id(repo)
         if not service_id:
-            # SERVICES — список сервисов, которые Силли ЧИНИТ автоматически, и
-            # её самой там нет НАМЕРЕННО: иначе аудит принялся бы править её
-            # собственный coder.py (запрещено после 01.07). Но «не чиню сам» и
-            # «не умею передеплоить» — разные вещи. 16.08 автохил Филли попросил
-            # поднять Силли и получил «Сервис ai-office-shared не найден в
-            # SERVICES», то есть офис не смог перезапустить собственного лидера
-            # из-за списка, заведённого для другой цели.
+            # Имя на Railway может не совпадать с именем репозитория — тогда
+            # спрашиваем Railway. Тот же фолбэк стоит в create_bot и в четырёх
+            # ветках аудита.
             service_id = await railway_get_service_id(repo)
         if not service_id:
             await reply_func(
