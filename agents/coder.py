@@ -24,6 +24,7 @@ from anthropic import AsyncAnthropic
 import redis.asyncio as aioredis
 from ai_office_shared.shared.logging import log_event, read_logs
 from ai_office_shared.shared import taskboard as tb
+from ai_office_shared.shared.json_extract import first_json_object
 from ai_office_shared.shared.auth import office_auth_middleware, office_headers
 
 from shared.github_tools import (
@@ -69,6 +70,11 @@ GITHUB_USER     = "unperson22-alt"
 LESSONS_FILE    = "lessons/lessons.json"
 
 MONITOR_INTERVAL   = 300  # секунд между проверками логов
+# Сколько раз подряд агентная петля прощает модели неразобранный ответ.
+# Ноль означал бы прежнее поведение: одна кривая реплика — и вся задача
+# мертва. Больше двух смысла нет: если модель трижды не смогла вернуть
+# один объект, дело не в случайности.
+MAX_PARSE_RETRIES  = 2
 TEMPLATE_BOTS_FILE = "shared/template_bots.json"  # реестр ботов созданных по шаблону
 
 # Проактивная петля управления (management_loop): ревью доски задач + метрик
@@ -5050,6 +5056,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
         group_sends = 0           # анти-спам: сообщений в группу за задачу
         sent_texts = set()        # дедуп одинаковых сообщений
         _last_action_sig = None   # стоп-гард против зацикливания
+        parse_retries = 0         # подряд идущие неразобранные ответы модели
         _action_repeat = 0
 
         # agentic_task НЕ шлёт промежуточные шаги в чат — только финальный результат
@@ -5072,18 +5079,32 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             raw_action = await ask_claude(step_prompt, system=AGENTIC_SYSTEM, model="claude-sonnet-4-6")
             raw_action = raw_action.strip()
 
-            # Извлекаем JSON
-            start_j = raw_action.find("{")
-            end_j = raw_action.rfind("}") + 1
-            if start_j == -1:
-                await reply_func(f"❌ Шаг {step_num+1}: не получил JSON")
-                break
+            # Извлекаем JSON — ПЕРВЫЙ полный объект, а не срез «от первой
+            # скобки до последней». Старый срез захватывал два объекта разом,
+            # если модель их вернула подряд, и падал с «Extra data» (15.08:
+            # баг-репорт Влада через Крисса умер на шаге 10).
+            action_data = first_json_object(raw_action)
 
-            try:
-                action_data = json.loads(raw_action[start_j:end_j])
-            except Exception as e:
-                await reply_func(f"❌ Шаг {step_num+1}: ошибка парсинга: {e}")
-                break
+            if action_data is None:
+                # Кривая выдача модели — это НЕ провал задачи. Раньше здесь был
+                # break: одна неаккуратная реплика убивала всю работу, и человек
+                # видел «ошибка парсинга» вместо результата. Даём поправку и
+                # ещё попытку; если модель не понимает и её — тогда сдаёмся.
+                parse_retries += 1
+                snippet = raw_action[:200].replace("\n", " ")
+                logger.warning("[agentic] шаг %s: не разобрал ответ (%s попытка): %r",
+                               step_num + 1, parse_retries, snippet)
+                if parse_retries > MAX_PARSE_RETRIES:
+                    await reply_func(
+                        f"❌ Шаг {step_num+1}: {MAX_PARSE_RETRIES + 1} раза подряд "
+                        f"не смог разобрать собственный ответ. Последнее: {snippet[:120]}")
+                    break
+                context += ("\n\n[система] Предыдущий ответ не разобрался как JSON. "
+                            "Верни РОВНО ОДИН объект действия, без текста вокруг, "
+                            "без второго объекта, без markdown-ограждения.")
+                continue
+
+            parse_retries = 0
 
             action = action_data.get("action", "")
 
