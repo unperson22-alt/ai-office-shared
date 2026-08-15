@@ -214,6 +214,21 @@ class TestProcessPhotoContract(unittest.TestCase):
         self.assertIn("CF_ACCOUNT_ID", res.error)
 
 
+class TestIsPhotoRequest(unittest.TestCase):
+    """«Обработай» против «расскажи, что на фото» — иначе бот молча ретуширует
+    картинку вместо ответа на вопрос (и наоборот)."""
+
+    def test_processing_requests(self):
+        for text in ("убери фон", "сделай чб", "ярче на 30%", "стикер",
+                     "квадрат", "винтаж", "сожми"):
+            self.assertTrue(photo.is_photo_request(text), text)
+
+    def test_questions_about_photo_are_not_requests(self):
+        for text in ("", "что на этом фото?", "это где вообще?",
+                     "как называется это здание", "кто это рядом со мной"):
+            self.assertFalse(photo.is_photo_request(text), text)
+
+
 class TestHelpText(unittest.TestCase):
     def test_help_lists_real_presets(self):
         # Помощь врёт → пользователь просит несуществующий фильтр и получает «авто».

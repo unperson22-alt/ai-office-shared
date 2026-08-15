@@ -227,6 +227,24 @@ def parse_request(text: str) -> PhotoRequest:
     return PhotoRequest("preset", "авто")
 
 
+def is_photo_request(text: str) -> bool:
+    """
+    Просят ОБРАБОТАТЬ фото, а не рассказать что на нём?
+
+    Нужно ботам: «убери фон» — работа модуля, «что это за здание?» — вопрос к
+    vision-модели. parse_request на любой текст отвечает «авто», поэтому по нему
+    одному отличить нельзя — здесь именно проверка на явное совпадение.
+    """
+    low = (text or "").strip().lower()
+    if not low:
+        return False
+    if any(w in low for words in _OP_ALIASES.values() for w in words):
+        return True
+    if any(w in low for words in _PRESET_ALIASES.values() for w in words):
+        return True
+    return bool(_parse_tweaks(low)[0])
+
+
 def _parse_tweaks(low: str) -> tuple[dict, set]:
     """
     «ярче на 30%» → {'brightness': 1.3}; «контраст -20» → {'contrast': 0.8}.
