@@ -232,14 +232,15 @@ async def fanout(
         msg = (f"{BANTER_PROMPT}{sender_line}\n\n"
                f"Последнее в чате: {trigger_text[:200]}")
 
-        pinged = []
+        pinged: list[str] = []
+        failed: list[str] = []
         for agent in chosen:
             target = bot_url(agent)
             if not target:
                 continue
             try:
                 async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as c:
-                    await c.post(f"{target}/task", headers=office_headers(), json={
+                    resp = await c.post(f"{target}/task", headers=office_headers(), json={
                         "message":   msg,
                         "user_id":   user_id,
                         "group_ctx": group_ctx,
@@ -247,12 +248,25 @@ async def fanout(
                         "sender":    sender,
                         "depth":     depth + 1,
                     })
+                # Код ответа проверяем ЯВНО. Раньше pinged.append выполнялся
+                # независимо от него: при 401 (а он появится, как только
+                # включат OFFICE_RPC_STRICT) лог написал бы «позвал МИЛЛИ», в
+                # чате было бы пусто, и следующий разбор ушёл бы искать баг у
+                # Милли вместо auth. Ложный успех хуже молчания — молчание не
+                # уводит по ложному следу.
+                if resp.status_code not in (200, 202):
+                    logger.warning("[banter] %s ответил %s — реплики не будет",
+                                   agent, resp.status_code)
+                    failed.append(f"{agent}:{resp.status_code}")
+                    continue
                 pinged.append(agent)
                 logger.info(f"[banter] pinged {agent} (depth={depth + 1})")
             except Exception as e:
                 logger.info(f"[banter] {agent} ping failed: {e}")
+                failed.append(f"{agent}:{type(e).__name__}")
             await asyncio.sleep(random.uniform(1.5, 4.0))  # разносим во времени
         await _note("banter_ping", agents=",".join(pinged) or "нет",
+                    failed=",".join(failed) or "нет",
                     primary=str(_norm(primary_agent) or primary_agent),
                     depth=depth + 1)
         return pinged

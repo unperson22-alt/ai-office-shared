@@ -286,3 +286,48 @@ class TestEvidenceReport(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBanterPingIsVerified(unittest.TestCase):
+    """
+    Ложный успех хуже молчания: молчание не уводит по ложному следу.
+    Раньше pinged.append выполнялся независимо от кода ответа, и при 401 лог
+    сообщил бы «позвал МИЛЛИ», хотя реплики не будет.
+    """
+
+    def _run_with_status(self, status):
+        import asyncio
+        from ai_office_shared.shared import banter as b
+
+        class _Resp:
+            def __init__(self, code): self.status_code = code
+
+        class _Client:
+            def __init__(self, *a, **k): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def post(self, *a, **k): return _Resp(status)
+
+        class R:
+            async def smembers(self, k): return set()
+            async def sadd(self, k, *v): pass
+            async def expire(self, k, t): pass
+
+        orig = b.httpx.AsyncClient
+        b.httpx.AsyncClient = _Client
+        try:
+            return asyncio.run(b.fanout(R(), primary_agent="БИЛЛИ",
+                                        trigger_text="x", chance=1.0,
+                                        pool=["МИЛЛИ"]))
+        finally:
+            b.httpx.AsyncClient = orig
+
+    def test_200_counts_as_pinged(self):
+        self.assertEqual(self._run_with_status(200), ["МИЛЛИ"])
+
+    def test_401_is_not_reported_as_pinged(self):
+        # Ровно то, что произойдёт после включения OFFICE_RPC_STRICT.
+        self.assertEqual(self._run_with_status(401), [])
+
+    def test_500_is_not_reported_as_pinged(self):
+        self.assertEqual(self._run_with_status(500), [])
