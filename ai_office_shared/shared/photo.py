@@ -27,7 +27,9 @@ ai_office_shared.shared.photo — обработка фотографий для
 текстом пользователю.
 
 ENV-переменные (все опциональны):
-    PHOTO_REMBG=1        — включить локальное удаление фона (нужен пакет rembg)
+    PHOTO_REMBG=0        — выключить работу с фоном. По умолчанию она включена,
+                           если в окружении есть пакет rembg — отдельного флага
+                           «включить» не нужно, ставится он не всем ботам
     PHOTO_REMBG_MODEL    — модель rembg: u2netp (по умолчанию, 4.5 МБ, ~530 МБ RSS)
                            или u2net (176 МБ, ~1.1 ГБ RSS, аккуратнее по краям)
     CF_ACCOUNT_ID        — Cloudflare account id  ┐ AI-перерисовка (img2img):
@@ -650,7 +652,8 @@ async def _dispatch(raw: bytes, req: PhotoRequest) -> PhotoResult:
         data = await asyncio.to_thread(apply_preset, raw, "портрет")
         return PhotoResult(data, "jpeg", "preset",
                            "Вырезать фон здесь пока не могу (не подключён модуль rembg) — "
-                           "сделала портретную обработку. Скажи Силли включить PHOTO_REMBG=1.")
+                           "сделала портретную обработку. Скажи Силли добавить "
+                           "rembg[cpu] в requirements этого бота.")
 
     if req.op == "remove_bg":
         return PhotoResult(await remove_background(raw), "png", "remove_bg",
