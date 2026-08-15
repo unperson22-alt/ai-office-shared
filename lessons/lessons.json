@@ -1592,5 +1592,21 @@
     "cause": "process",
     "tag": "dependencies",
     "posted_to_group": false
+  },
+  {
+    "id": 97,
+    "date": "2026-08-15",
+    "bot": "kriss-bot / gosling-bot / filly-bot / billy-bot (any bot with generate_image)",
+    "layer": "prompt handling / provider chain",
+    "title": "Image generation sent the user's raw Russian message to the model, so it drew something unrelated — and the fallback chain was dead on both ends",
+    "symptom": "Users repeatedly got either a picture with nothing in common with the request ('Сыш, сгенерируй жирную мамашу, которая жрёт бургер сидя на унитазе' returned an anime girl holding a cat) or the flat message 'Не получилось нарисовать — оба провайдера недоступны'. Seen across Гослинг, Филли, Пилли and Билли in the office group.",
+    "root_cause": "Three independent faults stacked. (1) The whole chat message went into the model verbatim: Cyrillic plus the address and the command words ('Сыш', 'сгенерируй мне'). Text-to-image models are trained on English captions, so the prompt was noise — verified 2026-08-15 by generating the same subject on the same provider in RU and in EN: RU gave an unrelated image, EN matched. (2) The chain was Replicate → Pollinations: Replicate is paid and silently returned None without a token or credits, and anonymous Pollinations now exposes only the small `sana` model at 1 request per 15 seconds, so it answered 429. (3) The bot passed Pollinations' URL to reply_photo, so Telegram fetched the image itself — a slow or throttled provider failed outside our code, where no error handling could see it.",
+    "why_architecture": "The generation helper was copy-pasted into every bot, so the same three faults existed in four repos and no single place could be fixed. Prompt building, provider order and transport are one concern and belong in shared.",
+    "fix": "New module ai_office_shared/shared/imagegen.py: clean_request() strips the address and command words locally, build_prompt() translates and enriches the subject into an English prompt via MODEL_HAIKU (falls back to the cleaned text when no key), providers run Cloudflare Workers AI FLUX.1-schnell (free 10k neurons/day, ~150 images) → Pollinations → Replicate, and the result comes back as BYTES with a provider-specific reason on failure. kriss-bot now imports it and sends the file instead of a link.",
+    "status": "fixed",
+    "prevention": "Never hand a raw chat message to a generative model — strip the conversational wrapper and translate first. Never let Telegram fetch a third-party URL on our behalf: download the bytes so failures are ours to report. A provider chain must name which provider failed and why, otherwise 'both providers unavailable' hides a missing API token for months.",
+    "cause": "copy-pasted helper + untested provider chain",
+    "tag": "imagegen",
+    "posted_to_group": false
   }
 ]

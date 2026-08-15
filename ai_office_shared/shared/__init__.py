@@ -32,6 +32,9 @@
     currency     — get_rate(), get_rates(), get_rates_text()
     wiki         — wiki_summary(), wiki_search(), wiki_text()
     elevenlabs   — text_to_voice(text) → bytes (mp3)
+    imagegen     — generate_image(«нарисуй кота») → ImageResult; промпт
+                   переводится на английский, провайдеры Cloudflare FLUX →
+                   Pollinations → Replicate, отдаёт байты, а не ссылку
     photo_looks  — адаптивные рецепты обработки: параметры считаются по
                    гистограмме конкретного кадра, а не фиксированы процентами
     photo_ai     — арт-директор: модель смотрит на кадр и правит параметры
