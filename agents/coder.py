@@ -25,6 +25,7 @@ import redis.asyncio as aioredis
 from ai_office_shared.shared.logging import log_event, read_logs
 from ai_office_shared.shared import taskboard as tb
 from ai_office_shared.shared.json_extract import first_json_object
+from ai_office_shared.shared.target_repo import target_repo
 from ai_office_shared.shared.auth import office_auth_middleware, office_headers
 
 from shared.github_tools import (
@@ -3886,7 +3887,7 @@ def resilient_replace(content: str, old: str, new: str):
     return content.replace(orig, repl, 1), "normalized"
 
 
-async def handle_natural_language(message_text: str, chat_id: int, reply_func, history: list = None, silent: bool = False, repo_override: str = "", file_path_override: str = "", proposal_chat_id: int = 0):
+async def handle_natural_language(message_text: str, chat_id: int, reply_func, history: list = None, silent: bool = False, repo_override: str = "", file_path_override: str = "", proposal_chat_id: int = 0, sender: str = ""):
     """Process any natural language request — detect intent and execute."""
     # Читаем ops.md — лог последних действий Claude и Силли
     # Это даёт Силли контекст о том что уже было сделано
@@ -3940,13 +3941,27 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
     intent     = intent_data.get("intent", "answer")
     # Явный repo из payload (HTTP /task) приоритетнее догадки интента-LLM —
     # иначе планировщик путал репо (tilly-trader ↔ tilly-bot).
-    repo       = repo_override or intent_data.get("repo")
+    #
+    # А если явного нет — репозиторий выбирается ПО ФАКТАМ, а не догадкой.
+    # 15.08: заявка «убрать кнопки из /menu» пришла через Крисса, модель с
+    # уверенностью 0.92 отправила Силли в billy-bot (кнопки — у Крисса), она
+    # ничего не нашла и упёрлась в стоп-гард. Уверенность 0.92 тут особенно
+    # вредна: выглядит как знание, а модель просто не может знать, у кого какие
+    # кнопки. Названный в тексте бот и бот-отправитель — факты, они и решают.
+    repo = repo_override
+    _repo_why = "явный repo из payload"
+    if not repo:
+        repo, _repo_why = target_repo(
+            message_text, sender=str(sender or ""),
+            llm_guess=intent_data.get("repo") or "",
+        )
     path       = intent_data.get("path")
     task       = intent_data.get("task", message_text)
     _conf_raw = intent_data.get("confidence", 1.0)
     confidence = float(_conf_raw) if isinstance(_conf_raw, (int, float)) else {"high": 0.9, "medium": 0.6, "low": 0.3}.get(str(_conf_raw).lower(), 0.5)
 
-    logger.info(f"[nl] intent={intent} confidence={confidence:.2f} repo={repo}")
+    logger.info(f"[nl] intent={intent} confidence={confidence:.2f} "
+                f"repo={repo} ({_repo_why})")
 
     # Для деструктивных/долгих операций — требуем высокую уверенность
     DESTRUCTIVE = ("create_bot", "create_repo", "deploy", "push_code", "get_bot_token")
@@ -6723,6 +6738,9 @@ async def _handle_cilly_task_inner(data):
             await handle_natural_language(
                 f"[{agent}] {text}", int(chat_id) if chat_id else 0, collect,
                 silent=silent, repo_override=payload_repo, file_path_override=payload_file,
+                # Кто принёс заявку — факт, а не догадка: он решает, чей репо
+                # чинить, когда в тексте никто не назван (см. target_repo).
+                sender=str(data.get("sender") or agent or ""),
             )
         except Exception as bg_e:
             result_status = "error"
