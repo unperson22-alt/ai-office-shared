@@ -117,14 +117,24 @@ SERVICES = {
 # Но «не правлю себя автоматически» и «меня нельзя передеплоить по прямой
 # просьбе» — разные вещи, а до 16.08 это было одно и то же: интент deploy искал
 # service_id только в SERVICES и отвечал «Сервис ai-office-shared не найден».
-# Поиск по имени (railway_get_service_id) тоже не помогает: на Railway сервис
-# называется не по репозиторию, а автогенерённым «cilly-bot-<uuid>-<uuid>-<uuid>»
-# — совпадения с "ai-office-shared" не будет никогда. Поэтому здесь явный id.
+# Поиск по имени (railway_get_service_id) тоже не помогает: он ходит в
+# project(PROJECT_ID), а моего сервиса в этом проекте нет — там 13 ботов, и ни
+# один из них не отдаёт домен ai-office-shared-production.up.railway.app.
 #
-# Кто поднимает меня, когда я лежу, — по-прежнему watchdog-bot: он опрашивает
-# /health каждые 120 с и не зависит от того, отвечаю ли я на HTTP (урок #99).
+# Значение по умолчанию здесь НЕ ЗАШИТО, и это принципиально. 16.08 сюда был
+# записан efa6bd21-91d8-467f-8250-60f8a3853791 — id, взятый из переменной
+# SILLI_SERVICE_ID вачдога. Проверка показала: у этого сервиса
+# deletedAt = 2026-05-30, serviceInstances пуст, деплоев ноль. Правдоподобный
+# мёртвый id хуже пустого: редеплой уходит в никуда, а вызывающий получает
+# «ок». Пусто → честный отказ с указанием, что именно доставить.
+#
+# Кто поднимает меня, когда я лежу, — watchdog-bot: он опрашивает /health
+# каждые 120 с и не зависит от того, отвечаю ли я на HTTP (урок #99). Но его
+# SILLI_SERVICE_ID — тот самый мёртвый id, так что до его замены этот путь
+# тоже не работает. Настоящий id знает только Railway UI: проект, в котором
+# живёт этот сервис, моему токену не виден.
 SELF_REPO       = "ai-office-shared"
-SELF_SERVICE_ID = os.getenv("SELF_SERVICE_ID", "efa6bd21-91d8-467f-8250-60f8a3853791")
+SELF_SERVICE_ID = os.getenv("SELF_SERVICE_ID", "").strip()
 
 
 def resolve_service_id(repo: str) -> str | None:
@@ -136,7 +146,7 @@ def resolve_service_id(repo: str) -> str | None:
     склеены в один.
     """
     if repo == SELF_REPO:
-        return SELF_SERVICE_ID
+        return SELF_SERVICE_ID or None
     return next((sid for sid, (r, _) in SERVICES.items() if r == repo), None)
 
 
@@ -4751,6 +4761,18 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             # ветках аудита.
             service_id = await railway_get_service_id(repo)
         if not service_id:
+            if repo == SELF_REPO:
+                # Свой случай отдельный: дело не в опечатке, а в незаданной
+                # переменной, и без неё я не угадаю id — мой Railway-токен
+                # проекта с этим сервисом не видит.
+                await reply_func(
+                    "❌ Не могу передеплоить себя: не задан SELF_SERVICE_ID.\n"
+                    "Мой сервис лежит в проекте, которого мой токен не видит, "
+                    "а прежний id (efa6bd21…) удалён 30.05 — угадывать не буду.\n"
+                    "Влад: возьми service id из Railway UI и положи в "
+                    "SELF_SERVICE_ID у меня и в SILLI_SERVICE_ID у watchdog-bot "
+                    "— у него сейчас тот же мёртвый id.")
+                return
             await reply_func(
                 f"❌ Сервис {repo} не найден ни в SERVICES, ни в Railway. "
                 f"Проверь название репозитория.")

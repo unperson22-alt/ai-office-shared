@@ -11,12 +11,19 @@
      нет намеренно — иначе аудит принялся бы править собственный coder.py
      (запрещено после 01.07, урок #70);
   2. фолбэк «спросить Railway по имени репозитория» здесь не работает в
-     принципе: сервис на Railway называется не ai-office-shared, а
-     автогенерённым «cilly-bot-<uuid>-<uuid>-<uuid>» — совпадения не будет
-     никогда, сколько ни спрашивай.
+     принципе: railway_get_service_id ходит в project(PROJECT_ID), а сервиса
+     Силли в этом проекте нет — там 13 ботов, и ни один не отдаёт домен
+     ai-office-shared-production.up.railway.app.
 
-Отсюда явный SELF_SERVICE_ID и resolve_service_id(). Тесты ниже стерегут
-границу: своё имя резолвится, а список автопочинки при этом НЕ пополняется.
+Отсюда SELF_SERVICE_ID из окружения и resolve_service_id(). Тесты ниже
+стерегут границу: своё имя ходит своей веткой, список автопочинки при этом
+НЕ пополняется, а незаданная переменная даёт честный None.
+
+Отдельный тест — про пустой дефолт. Первая версия правки зашила сюда
+efa6bd21-91d8-467f-8250-60f8a3853791, взятый из SILLI_SERVICE_ID вачдога;
+проверка показала deletedAt = 2026-05-30, пустой serviceInstances и ноль
+деплоев. Правдоподобный мёртвый id хуже пустого: редеплой уходит в никуда,
+а вызывающий получает «ок».
 
 coder.py не импортируется: модуль на 5800 строк с побочными эффектами при
 импорте, и по правилу CLAUDE-СТАРТ правится только вручную. Нужные объявления
@@ -63,18 +70,37 @@ class TestResolveServiceId(unittest.TestCase):
     def setUpClass(cls):
         cls.ns, cls.src = load_from_coder()
 
-    def test_own_repo_resolves(self):
-        # РОВНО инцидент: до правки здесь был None и отказ в ответ Филли.
-        sid = self.ns["resolve_service_id"]("ai-office-shared")
-        self.assertTrue(sid, "свой сервис обязан резолвиться по прямой просьбе")
+    def test_own_repo_goes_down_its_own_branch(self):
+        # Своё имя обрабатывается отдельно от SERVICES — независимо от того,
+        # задана переменная или нет. Значение проверяют тесты ниже.
+        self.assertEqual(self.ns["resolve_service_id"]("ai-office-shared"),
+                         self.ns["SELF_SERVICE_ID"] or None)
 
-    def test_own_service_id_is_a_uuid(self):
+    def test_unset_variable_gives_honest_none(self):
+        # Пусто → None, а deploy отвечает «не задан SELF_SERVICE_ID» и говорит
+        # что доставить. Молча выдумать id нельзя.
+        ns, _ = load_from_coder()
+        ns["SELF_SERVICE_ID"] = ""
+        self.assertIsNone(ns["resolve_service_id"]("ai-office-shared"))
+
+    def test_no_hardcoded_id_in_source(self):
+        # Гейт против возврата зашитого дефолта. efa6bd21… удалён 30.05.2026:
+        # deletedAt проставлен, serviceInstances пуст, деплоев ноль. Любой
+        # литеральный UUID в этой строке — почти наверняка такой же протухший.
+        m = re.search(r"^SELF_SERVICE_ID\s*=\s*(.+)$", self.src, re.M)
+        self.assertIsNotNone(m, "объявление SELF_SERVICE_ID не найдено")
+        self.assertNotRegex(
+            m.group(1), r"[0-9a-f]{8}-[0-9a-f]{4}-",
+            "id своего сервиса зашит в код — он протухает молча, только env")
+
+    def test_value_if_set_looks_like_a_uuid(self):
         # Выдуманные хвосты UUID уже давали «Not Authorized» (см. коммент в
-        # _render_railway_ids_block). Форма — минимум, который можно проверить
-        # без сети.
-        self.assertRegex(
-            self.ns["SELF_SERVICE_ID"],
-            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        # _render_railway_ids_block). Если переменную задали — проверяем форму.
+        sid = self.ns["SELF_SERVICE_ID"]
+        if sid:
+            self.assertRegex(
+                sid,
+                r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
     def test_ordinary_bot_resolves_through_services(self):
         services = self.ns["SERVICES"]
@@ -97,18 +123,28 @@ class TestResolveServiceId(unittest.TestCase):
                          "свой сервис не должен попадать в список автопочинки")
 
     def test_self_id_is_not_a_duplicate_of_another_service(self):
-        self.assertNotIn(self.ns["SELF_SERVICE_ID"], self.ns["SERVICES"],
-                         "id своего сервиса совпал с чужим — опечатка в UUID")
+        if self.ns["SELF_SERVICE_ID"]:
+            self.assertNotIn(self.ns["SELF_SERVICE_ID"], self.ns["SERVICES"],
+                             "id своего сервиса совпал с чужим — опечатка в UUID")
 
     def test_deploy_branch_uses_the_resolver(self):
         # Гейт против отката: если ветку deploy снова напишут через прямой
         # обход SERVICES, свой сервис снова станет ненаходимым.
-        m = re.search(r"elif intent == \"deploy\":(.{0,700})", self.src, re.S)
+        m = re.search(r"elif intent == \"deploy\":(.{0,900})", self.src, re.S)
         self.assertIsNotNone(m, "ветка deploy не найдена — тест устарел")
         body = m.group(1)
         self.assertIn("resolve_service_id(repo)", body)
         self.assertNotIn("SERVICES.items()", body,
                          "deploy снова ходит в SERVICES напрямую")
+
+    def test_deploy_explains_what_is_missing(self):
+        # Отказ обязан называть переменную и того, кто её кладёт: иначе он
+        # неотличим от «сервис не найден, проверь название» и уводит не туда.
+        m = re.search(r"elif intent == \"deploy\":(.{0,1800})", self.src, re.S)
+        body = m.group(1)
+        self.assertIn("SELF_SERVICE_ID", body)
+        self.assertIn("SILLI_SERVICE_ID", body,
+                      "отказ должен упоминать и вачдога — id у него тот же")
 
 
 if __name__ == "__main__":
