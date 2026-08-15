@@ -3103,6 +3103,14 @@ async def monitor_loop():
     await asyncio.sleep(30)  # подождать пока бот стартует
     logger.info("[monitor] started")
     _railway_down_notified = False  # чтобы не спамить уведомлениями об outage
+    # Дребезг. Один неудачный probe — не outage: 15.08 офис получил четыре
+    # сообщения за час («недоступен» → «снова доступен» → и снова), потому что
+    # флаг сбрасывался на первом же успехе и следующий сбой снова алертил.
+    # Это то же правило, что записано про «Not Authorized» от Railway: один
+    # провалившийся запрос не диагноз. Цена шума высока — если алерты Силли
+    # начать пролистывать, пролистают и настоящий.
+    _railway_fails = 0
+    _RAILWAY_FAIL_THRESHOLD = 3   # подряд, при MONITOR_INTERVAL=300 это ~15 минут
 
     while True:
         if MONITOR_PAUSED():
@@ -3114,17 +3122,27 @@ async def monitor_loop():
         railway_ok = await _railway_is_available()
 
         if not railway_ok:
-            if not _railway_down_notified:
+            _railway_fails += 1
+            # На Redis-фолбэк переходим сразу (это дёшево и безопасно), а вот
+            # ОБЪЯВЛЯЕМ outage только после нескольких неудач подряд.
+            if _railway_fails >= _RAILWAY_FAIL_THRESHOLD and not _railway_down_notified:
                 await notify_office(
-                    "⚠️ *Railway API недоступен* — переключаюсь на Redis-мониторинг.\n"
+                    f"⚠️ *Railway API недоступен* ({_railway_fails} проверки подряд) — "
+                    "переключаюсь на Redis-мониторинг.\n"
                     "Фиксы через GitHub работают, Railway автодеплоит сам."
                 )
                 _railway_down_notified = True
-            logger.warning("[monitor] Railway API down — using Redis fallback for all services")
+            logger.warning("[monitor] Railway API down (%s/%s) — Redis fallback",
+                           _railway_fails, _RAILWAY_FAIL_THRESHOLD)
         else:
             if _railway_down_notified:
                 await notify_office("✅ Railway API снова доступен — возвращаюсь к полному мониторингу.")
                 _railway_down_notified = False
+            elif _railway_fails:
+                # Моргнуло и прошло — в группу не пишем, но след оставляем.
+                logger.info("[monitor] Railway API восстановился после %s неудач — "
+                            "порог не достигнут, офис не тревожим", _railway_fails)
+            _railway_fails = 0
 
         for service_id, (repo, main_file) in SERVICES.items():
             try:
