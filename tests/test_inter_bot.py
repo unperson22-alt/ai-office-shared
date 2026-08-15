@@ -214,3 +214,56 @@ class TestBanter(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBanterIsObservable(unittest.TestCase):
+    """
+    15.08: болталка отработала дважды и оба раза смолчала, и понять почему было
+    нельзя — все три выхода из fanout молчали. Теперь у каждого выхода есть след.
+    """
+
+    def test_every_silent_exit_reports_a_reason(self):
+        import asyncio
+        from ai_office_shared.shared import banter as b
+
+        seen = []
+
+        class R:  # минимальный фейк: болталке нужен только smembers/sadd/expire
+            async def smembers(self, k): return set()
+            async def sadd(self, k, *v): pass
+            async def expire(self, k, t): pass
+
+        async def fake_log_event(redis_client, bot, event, **kw):
+            seen.append((event, kw.get("reason")))
+
+        import ai_office_shared.shared.logging as _lg
+        orig = _lg.log_event
+        _lg.log_event = fake_log_event
+        try:
+            # 1. потолок глубины
+            asyncio.run(b.fanout(R(), primary_agent="БИЛЛИ", trigger_text="x",
+                                 depth=b.BANTER_MAX_DEPTH))
+            # 2. бросок не прошёл (chance=0 → всегда мимо)
+            asyncio.run(b.fanout(R(), primary_agent="БИЛЛИ", trigger_text="x",
+                                 chance=0.0))
+            # 3. некого звать (пул из одного, и он же primary)
+            asyncio.run(b.fanout(R(), primary_agent="БИЛЛИ", trigger_text="x",
+                                 chance=1.0, pool=["БИЛЛИ"]))
+        finally:
+            _lg.log_event = orig
+
+        reasons = [r for e, r in seen if e == "banter_skip"]
+        self.assertEqual(reasons, ["depth", "chance", "no_candidates"], seen)
+
+    def test_pick_explains_why_nobody_was_available(self):
+        import asyncio
+        from ai_office_shared.shared import banter as b
+
+        class R:
+            async def smembers(self, k): return set()
+            async def sadd(self, k, *v): pass
+            async def expire(self, k, t): pass
+
+        out = asyncio.run(b.pick(R(), "БИЛЛИ", pool=["БИЛЛИ"]))
+        self.assertEqual(out, [])
+        self.assertIn("некого звать", b.last_pick_reason["value"])
