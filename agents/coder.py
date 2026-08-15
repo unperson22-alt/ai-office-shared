@@ -4713,7 +4713,18 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             return
         service_id = next((sid for sid, (r, _) in SERVICES.items() if r == repo), None)
         if not service_id:
-            await reply_func(f"❌ Сервис {repo} не найден в SERVICES")
+            # SERVICES — список сервисов, которые Силли ЧИНИТ автоматически, и
+            # её самой там нет НАМЕРЕННО: иначе аудит принялся бы править её
+            # собственный coder.py (запрещено после 01.07). Но «не чиню сам» и
+            # «не умею передеплоить» — разные вещи. 16.08 автохил Филли попросил
+            # поднять Силли и получил «Сервис ai-office-shared не найден в
+            # SERVICES», то есть офис не смог перезапустить собственного лидера
+            # из-за списка, заведённого для другой цели.
+            service_id = await railway_get_service_id(repo)
+        if not service_id:
+            await reply_func(
+                f"❌ Сервис {repo} не найден ни в SERVICES, ни в Railway. "
+                f"Проверь название репозитория.")
             return
         await reply_func(f"🔄 Деплою {repo}...")
         ok = await redeploy_service(service_id)
