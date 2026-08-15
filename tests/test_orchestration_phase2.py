@@ -331,3 +331,71 @@ class TestBanterPingIsVerified(unittest.TestCase):
 
     def test_500_is_not_reported_as_pinged(self):
         self.assertEqual(self._run_with_status(500), [])
+
+
+class TestBanterSecondWave(unittest.TestCase):
+    """
+    Влад: «можно чтобы боты перекидывались между собой парой фраз?».
+    Раньше depth не доходил до 2, хотя BANTER_MAX_DEPTH=2 был заведён: каждый
+    бот получал пинг с «Последним говорил: Влад» и отвечал человеку. Со стороны
+    это хор в одну сторону, а не разговор коллег.
+    """
+
+    def _run(self, *, max_depth):
+        import asyncio
+        from ai_office_shared.shared import banter as b
+
+        seen = []          # (кому, кто_последним_говорил, глубина)
+
+        class _Resp:
+            status_code = 200
+            def json(self): return {"response": "ага, и не говори"}
+
+        class _Client:
+            def __init__(self, *a, **k): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def post(self, url, **kw):
+                j = kw.get("json") or {}
+                seen.append((url, j.get("sender"), j.get("depth")))
+                return _Resp()
+
+        class R:
+            def __init__(self): self.m = set()
+            async def smembers(self, k): return set(self.m)
+            async def sadd(self, k, *v): self.m.update(v)
+            async def expire(self, k, t): pass
+
+        orig_c, orig_d, orig_s = b.httpx.AsyncClient, b.BANTER_MAX_DEPTH, b.asyncio.sleep
+        b.httpx.AsyncClient = _Client
+        b.BANTER_MAX_DEPTH = max_depth
+        async def _nosleep(_): pass
+        b.asyncio.sleep = _nosleep
+        try:
+            asyncio.run(b.fanout(R(), primary_agent="БИЛЛИ", trigger_text="привет",
+                                 sender="Влад", chance=1.0,
+                                 pool=["МИЛЛИ", "ВИЛЛИ", "ТИЛЛИ"]))
+        finally:
+            b.httpx.AsyncClient, b.BANTER_MAX_DEPTH, b.asyncio.sleep = orig_c, orig_d, orig_s
+        return seen
+
+    def test_second_wave_is_sent_by_a_bot_not_by_the_human(self):
+        seen = self._run(max_depth=2)
+        senders = {s for _, s, _ in seen}
+        self.assertIn("Влад", senders, "первая волна — от человека")
+        self.assertTrue(senders - {"Влад"},
+                        f"второй волны от бота не случилось: {seen}")
+
+    def test_second_wave_carries_depth_2(self):
+        depths = {d for _, _, d in self._run(max_depth=2)}
+        self.assertIn(2, depths, "ответная реплика должна идти с depth=2")
+
+    def test_depth_one_means_no_second_wave(self):
+        # Потолок 1 — «перекинулись одной фразой», дальше тишина.
+        depths = {d for _, _, d in self._run(max_depth=1)}
+        self.assertEqual(depths, {1})
+
+    def test_nobody_speaks_twice_in_one_thread(self):
+        seen = self._run(max_depth=2)
+        urls = [u for u, _, _ in seen]
+        self.assertEqual(len(urls), len(set(urls)), f"повтор в одной нити: {urls}")

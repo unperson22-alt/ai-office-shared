@@ -36,7 +36,7 @@ import random
 
 import httpx
 
-from .identity import canonical, route_key, url as bot_url, who_is
+from .identity import canonical, display, route_key, url as bot_url, who_is
 
 logger = logging.getLogger("ai_office_shared.banter")
 
@@ -234,6 +234,7 @@ async def fanout(
 
         pinged: list[str] = []
         failed: list[str] = []
+        replies: list[tuple[str, str]] = []
         for agent in chosen:
             target = bot_url(agent)
             if not target:
@@ -260,6 +261,18 @@ async def fanout(
                     failed.append(f"{agent}:{resp.status_code}")
                     continue
                 pinged.append(agent)
+                # Ответ бота — повод для ВТОРОЙ волны: пусть коллега отреагирует
+                # на коллегу, а не снова на Влада. Без этого depth никогда не
+                # доходил до 2, хотя BANTER_MAX_DEPTH=2 заведён с самого начала:
+                # каждый бот получал пинг с «Последним говорил: Влад» и отвечал
+                # человеку. Со стороны это выглядит как коллеги, говорящие
+                # хором в одну сторону, а не как разговор между собой.
+                try:
+                    _reply = str((resp.json() or {}).get("response", "") or "").strip()
+                except Exception:
+                    _reply = ""
+                if _reply:
+                    replies.append((agent, _reply))
                 logger.info(f"[banter] pinged {agent} (depth={depth + 1})")
             except Exception as e:
                 logger.info(f"[banter] {agent} ping failed: {e}")
@@ -269,6 +282,28 @@ async def fanout(
                     failed=",".join(failed) or "нет",
                     primary=str(_norm(primary_agent) or primary_agent),
                     depth=depth + 1)
+
+        # ── Вторая волна: бот отвечает боту ──────────────────────────────────
+        # Берём ОДИН ответ, а не все: цель — «перекинуться парой фраз», а не
+        # устроить лавину. Глубина, шанс и дедуп нити ограничивают её сверху,
+        # причём дедуп гарантирует, что второй волне достанется тот, кто в этом
+        # всплеске ещё не говорил.
+        if replies and (depth + 1) < BANTER_MAX_DEPTH:
+            speaker, said = random.choice(replies)
+            speaker_name = display(speaker) or speaker
+            await fanout(
+                redis_client,
+                primary_agent=speaker,
+                trigger_text=f"{speaker_name}: {said}",
+                group_ctx=(group_ctx + f"\n{speaker_name}: {said[:200]}").strip(),
+                sender=speaker_name,
+                depth=depth + 1,
+                user_id=user_id,
+                thread_id=thread_id,
+                chance=chance,
+                health_check=health_check,
+                pool=pool,
+            )
         return pinged
     except Exception as e:
         logger.warning(f"[banter] fanout error: {e}")
