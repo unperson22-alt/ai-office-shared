@@ -25,7 +25,7 @@ import redis.asyncio as aioredis
 from ai_office_shared.shared.logging import log_event, read_logs
 from ai_office_shared.shared import taskboard as tb
 from ai_office_shared.shared.json_extract import first_json_object
-from ai_office_shared.shared.target_repo import target_repo
+from ai_office_shared.shared.target_repo import repo_looks_valid, target_repo
 from ai_office_shared.shared.file_window import (
     find_regions, summary as file_summary,
 )
@@ -5052,7 +5052,17 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
 - done — когда задача выполнена. Максимум 12 шагов."""
 
         steps_log = []
+        # Петля обязана ЗНАТЬ целевой репозиторий. Раньше здесь было
+        # `context = task`: резолвленный repo (см. target_repo) до модели не
+        # доходил, и она выбирала его в каждом действии сама. 15.08 из текста
+        # «убрать кнопки в /menu» она вывела репозиторий "/menu" и доложила
+        # «404 по всем попыткам» — то есть выдумала цель и отчиталась о ней
+        # как о проблеме доступа.
         context = task
+        if repo:
+            context = (f"[Целевой репозиторий: {repo}. Используй ИМЕННО его в "
+                       f"read_file/push_file. Не выводи название репозитория из "
+                       f"текста задачи — оно уже определено.]\n\n{task}")
         max_steps = 12
         consecutive_failures = 0
         last_error = None
@@ -5137,6 +5147,20 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                 a_repo = action_data.get("repo", "")
                 a_path = action_data.get("path", "")
                 a_find = str(action_data.get("find", "") or "").strip()
+                if not repo_looks_valid(a_repo):
+                    # Отличаем «репо недоступен» от «репо выдуман». Четыре 404
+                    # подряд выглядят как проблема доступа и уводят разбор в
+                    # сторону токенов — так и случилось 15.08.
+                    _hint = repo if repo else "уточни у постановщика"
+                    result = (f"Репозитория {a_repo!r} нет среди репозиториев офиса. "
+                              f"Целевой репозиторий этой задачи: {_hint}. "
+                              f"Повтори read_file с ним.")
+                    logger.warning("[agentic] выдуманный репозиторий %r (цель: %s)",
+                                   a_repo, repo or "—")
+                    steps_log.append({"action": f"read_file({a_repo}/{a_path})",
+                                      "result": result})
+                    context += f"\n\n[read_file] {result}"
+                    continue
                 try:
                     file_content = await read_file(a_repo, a_path)
                     # Окно чтения. Раньше срез прятал цель за границей видимости:

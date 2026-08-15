@@ -90,3 +90,30 @@ def target_repo(message: str, *, sender: str = "",
             return repo, f"заявку принёс {canonical(sender)}"
 
     return (llm_guess or None), "догадка модели"
+
+
+# Репозитории офиса. Нужны, чтобы отличить «репо не найден на GitHub» от
+# «модель выдумала название». 15.08 Силли four раза постучалась в репозиторий
+# "/menu" (кусок текста задачи «кнопки в /menu») и доложила «404 по всем
+# попыткам» — сообщение выглядит как проблема доступа, хотя такого репозитория
+# просто не существует. Проверка по списку превращает это в внятный отказ.
+_EXTRA_REPOS = (
+    "ai-office-shared", "tilly-trader", "molly-trader", "office-dashboard",
+    "logger-bot", "watchdog-bot", "vietnam-bot", "impact-client-bot",
+    "quote-reminder-bot", "railway-deployer-bot", "pilly-bot-bot",
+    "devvy-bot", "ricky-bot", "testi-bot", "sekky-bot", "scribbi-bot",
+    "dev-dept", "dev-dept-bot", "family-dept", "marketing-dept",
+    "trading-dept", "doctor-bot", "kriss-bot", "mama-bot", "prophet-bot",
+)
+
+
+def known_repos() -> set[str]:
+    """Все репозитории офиса: из реестра ботов плюс инфраструктурные."""
+    out = {r for r in (m.get("repo") for m in BOTS.values()) if r}
+    out.update(_EXTRA_REPOS)
+    return out
+
+
+def repo_looks_valid(name: str) -> bool:
+    """False — если это точно не репозиторий офиса (например кусок текста задачи)."""
+    return bool(name) and name.strip() in known_repos()

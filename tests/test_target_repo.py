@@ -76,3 +76,32 @@ class TestTargetRepo(unittest.TestCase):
     def test_unknown_sender_does_not_break(self):
         repo, _ = target_repo("почини", sender="кто-то", llm_guess="x-bot")
         self.assertEqual(repo, "x-bot")
+
+
+class TestKnownRepos(unittest.TestCase):
+    """
+    15.08: Силли четыре раза постучалась в репозиторий "/menu" — кусок текста
+    задачи «кнопки в /menu» — и доложила «404 по всем попыткам». Сообщение
+    выглядит как проблема доступа, хотя такого репозитория не существует.
+    """
+
+    def test_fragment_of_task_text_is_not_a_repo(self):
+        from ai_office_shared.shared.target_repo import repo_looks_valid
+        self.assertFalse(repo_looks_valid("/menu"))
+        self.assertFalse(repo_looks_valid("кнопки"))
+        self.assertFalse(repo_looks_valid(""))
+
+    def test_real_office_repos_pass(self):
+        from ai_office_shared.shared.target_repo import repo_looks_valid
+        for r in ("kriss-bot", "billy-bot", "ai-office-shared",
+                  "family-dept", "tilly-trader"):
+            self.assertTrue(repo_looks_valid(r), r)
+
+    def test_every_bot_repo_is_known(self):
+        # Реестр ботов и список репозиториев не должны разъезжаться.
+        from ai_office_shared.shared.identity import BOTS
+        from ai_office_shared.shared.target_repo import known_repos
+        known = known_repos()
+        for name, meta in BOTS.items():
+            if meta.get("repo"):
+                self.assertIn(meta["repo"], known, name)
