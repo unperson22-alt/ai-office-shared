@@ -57,7 +57,13 @@ MAX_SIDE = 2560
 JPEG_QUALITY = 92
 
 _REDIS_PROXY = "https://ai-office-shared-production.up.railway.app/redis"
-_CF_MODEL_IMG2IMG = "@cf/runwayml/stable-diffusion-v1-5-img2img"
+# Единственная img2img-модель бесплатного тира Cloudflare (в каталоге помечена
+# Beta). Качество — уровня Stable Diffusion 1.5, до нынешних редакторов ей
+# далеко, зато 10 000 нейронов/день это сотни картинок. Модель переопределяется
+# через CF_IMAGE_MODEL, но схема запроса ниже — из семейства SD 1.5; у моделей
+# с другим форматом входа (например flux-2-dev) параметры другие.
+_CF_MODEL_IMG2IMG = os.environ.get(
+    "CF_IMAGE_MODEL", "@cf/runwayml/stable-diffusion-v1-5-img2img").strip()
 _CF_TIMEOUT = 90.0
 
 
