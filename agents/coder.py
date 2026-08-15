@@ -786,11 +786,7 @@ async def search_lessons(error_logs: list[str]) -> dict:
         log_sample = "\n".join(error_logs[:20])
         prompt = f"Known bugs:\n{json.dumps(lessons)}\n\nNew error logs:\n{log_sample}"
         result = await ask_claude(prompt, system=LESSON_SEARCH_PROMPT, model="claude-haiku-4-5-20251001")
-        result = result.strip()
-        start, end = result.find("{"), result.rfind("}") + 1
-        if start != -1 and end > start:
-            result = result[start:end]
-        return json.loads(result)
+        return first_json_object(result) or {"match": False}
     except Exception as e:
         logger.debug(f"search_lessons failed: {e}")
         return {"match": False}
@@ -813,11 +809,11 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
             f"Return ONLY the JSON object, no markdown. Add id:{new_id} and ts field with today's date."
         )
         compact = await ask_claude(prompt, system="Return only valid JSON, no markdown.", model="claude-haiku-4-5-20251001")
-        compact = compact.strip()
-        start, end = compact.find("{"), compact.rfind("}") + 1
-        if start != -1 and end > start:
-            compact = compact[start:end]
-        lesson_obj = json.loads(compact)
+        lesson_obj = first_json_object(compact)
+        if lesson_obj is None:
+            # Урок, который не разобрался, дописывать в lessons.json нельзя:
+            # файл читает Силли на каждом аудите, мусор в нём дороже пропуска.
+            raise ValueError(f"урок не разобрался как JSON: {compact[:120]!r}")
         lessons.append(lesson_obj)
         await push_file("ai-office-shared", LESSONS_FILE, json.dumps(lessons, ensure_ascii=False, indent=2),
                         f"lesson({new_id}): {title[:50]}")
@@ -1462,10 +1458,10 @@ async def analyze_logs(service_name: str, logs: list[str], source_code: str) -> 
             if p.startswith("{"):
                 raw = p
                 break
-    start, end = raw.find("{"), raw.rfind("}") + 1
-    if start != -1 and end > start:
-        raw = raw[start:end]
-    return json.loads(raw)
+    obj = first_json_object(raw)
+    if obj is None:
+        raise ValueError(f"анализатор вернул не JSON: {raw[:120]!r}")
+    return obj
 
 
 async def generate_fix(source_code: str, fix_description: str) -> str:
@@ -2013,11 +2009,10 @@ async def analyze_bot_response(user_question: str, bot_response: str) -> dict:
     """Анализирует ответ бота — есть ли проблема с возможностями."""
     prompt = f"Вопрос пользователя: {user_question}\n\nОтвет агента: {bot_response}"
     raw = await ask_claude(prompt, system=RESPONSE_ANALYZER_PROMPT, model="claude-haiku-4-5-20251001")
-    raw = raw.strip()
-    start, end = raw.find("{"), raw.rfind("}") + 1
-    if start != -1 and end > start:
-        raw = raw[start:end]
-    return json.loads(raw)
+    obj = first_json_object(raw)
+    if obj is None:
+        raise ValueError(f"анализатор ответа вернул не JSON: {raw[:120]!r}")
+    return obj
 
 # Имя бота в группе → репо + файл
 BOT_REPOS = {
@@ -2171,8 +2166,7 @@ async def _handle_health_failures(health_fail: list[str], lines: list[str]) -> l
                 system="Ты senior DevOps. Анализируй логи и давай конкретный диагноз. JSON только.",
                 model="claude-haiku-4-5-20251001",
             )
-            s, e = analysis_raw.find("{"), analysis_raw.rfind("}") + 1
-            analysis = json.loads(analysis_raw[s:e]) if s != -1 else {}
+            analysis = first_json_object(analysis_raw) or {}
             crash_reason = analysis.get("reason", "неизвестна")
             can_autofix = analysis.get("can_autofix", False)
             fix_description = analysis.get("fix", "")
@@ -2347,8 +2341,7 @@ async def run_daily_audit() -> str:
                     model="claude-haiku-4-5-20251001"
                 )
                 try:
-                    s, e = analysis_raw.find("{"), analysis_raw.rfind("}") + 1
-                    analysis = json.loads(analysis_raw[s:e]) if s != -1 else {}
+                    analysis = first_json_object(analysis_raw) or {}
                     crash_reason = analysis.get("reason", "неизвестна")
                     can_autofix = analysis.get("can_autofix", False)
                     fix_description = analysis.get("fix", "редеплой")
@@ -3038,9 +3031,7 @@ async def _deep_diagnose_and_escalate(
             system=DEEP_ANALYSIS_PROMPT,
             model="claude-sonnet-4-6",
         )
-        raw = raw.strip()
-        s, e = raw.find("{"), raw.rfind("}") + 1
-        diagnosis = json.loads(raw[s:e]) if s != -1 else {}
+        diagnosis = first_json_object(raw) or {}
     except Exception as ex:
         logger.error(f"[deep_diagnose] claude analysis failed: {ex}")
         diagnosis = {"can_self_fix": False, "confidence": "low", "escalate_reason": f"анализ упал: {ex}"}
@@ -3911,13 +3902,8 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
     intent_input = message_text[:500] if len(message_text) > 500 else message_text
     raw = await ask_claude(intent_input, system=INTENT_PROMPT, model="claude-haiku-4-5-20251001")
     raw = raw.strip()
-    start, end = raw.find("{"), raw.rfind("}") + 1
-    if start != -1 and end > start:
-        raw = raw[start:end]
-
-    try:
-        intent_data = json.loads(raw)
-    except Exception:
+    intent_data = first_json_object(raw)
+    if intent_data is None:
         # Keyword fallback — better than failing silently
         msg_lower = message_text.lower()
         # Только явные императивные команды — не вопросы о процессе
@@ -4316,9 +4302,9 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             model="claude-haiku-4-5-20251001"
         )
         try:
-            setup_raw = setup_raw.strip()
-            s, e = setup_raw.find("{"), setup_raw.rfind("}") + 1
-            setup = json.loads(setup_raw[s:e])
+            setup = first_json_object(setup_raw)
+            if setup is None:
+                raise ValueError(f"параметры бота не разобрались: {setup_raw[:120]!r}")
             _raw_repo  = setup["repo"].lower().replace(" ", "-").replace("_", "-")
             bot_repo   = _raw_repo if _raw_repo.endswith("-bot") else _raw_repo + "-bot"
             bot_display = setup["display"]
@@ -4539,8 +4525,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             model="claude-haiku-4-5-20251001"
         )
         try:
-            s, e = extraction_raw.find("{"), extraction_raw.rfind("}") + 1
-            ext = json.loads(extraction_raw[s:e])
+            ext = first_json_object(extraction_raw) or {}
         except Exception:
             ext = {}
 
@@ -5445,8 +5430,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
         )
         plan_raw = await ask_claude(plan_prompt, system=CODER_PROMPT, model="claude-haiku-4-5-20251001")
         try:
-            ps, pe = plan_raw.find("{"), plan_raw.rfind("}") + 1
-            plan = json.loads(plan_raw[ps:pe]) if ps != -1 and pe > ps else {}
+            plan = first_json_object(plan_raw) or {}
         except Exception:
             plan = {}
 
@@ -6004,8 +5988,7 @@ async def _verify_delegation(task_text: str, response: str) -> dict:
            '{"ok": true|false, "reason": "1 короткое предложение"}')
     try:
         raw = await ask_claude(prompt, system=sys, model="claude-haiku-4-5-20251001")
-        s, e = raw.find("{"), raw.rfind("}") + 1
-        data = json.loads(raw[s:e]) if s != -1 and e > s else {}
+        data = first_json_object(raw) or {}
         return {"ok": bool(data.get("ok")), "reason": str(data.get("reason", ""))[:200]}
     except Exception as e:
         # Верификатор упал — не блокируем, но честно помечаем
