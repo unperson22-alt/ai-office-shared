@@ -26,6 +26,9 @@ from ai_office_shared.shared.logging import log_event, read_logs
 from ai_office_shared.shared import taskboard as tb
 from ai_office_shared.shared.json_extract import first_json_object
 from ai_office_shared.shared.target_repo import target_repo
+from ai_office_shared.shared.file_window import (
+    find_regions, summary as file_summary,
+)
 from ai_office_shared.shared.auth import office_auth_middleware, office_headers
 
 from shared.github_tools import (
@@ -5031,7 +5034,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
 Ты в agentic loop. На каждом шаге выбирай ОДНО действие и возвращай JSON.
 
 Доступные действия:
-- read_file: {"action":"read_file","repo":"...","path":"..."}
+- read_file: {"action":"read_file","repo":"...","path":"...","find":"опц. подстрока"} — без find возвращает начало файла (обрезается на 24000 симв.); с find возвращает строки ВОКРУГ совпадения с номерами. Для больших файлов (bot.py у ботов — 50К+ символов) сразу используй find с именем функции или куском целевой строки: иначе цель может лежать за окном и ты её не увидишь.
 - push_file: {"action":"push_file","repo":"...","path":"...","content":"...","message":"..."} — правка НЕ идёт в main напрямую: она валидируется (пины/усадка) и открывается PR на ревью Владу; деплой будет только после мержа. Не жди мгновенного деплоя и не повторяй push.
 - check_var: {"action":"check_var","service":"billy-bot","name":"REDIS_PROXY_TOKEN","expected":"опц. ожидаемая строка"} — читает переменную окружения сервиса в Railway (значение вернётся ЗАМАСКИРОВАННЫМ)
 - railway_logs: {"action":"railway_logs","service":"billy-bot","lines":30} — последние строки логов последнего деплоя сервиса в Railway (lines ≤ 100)
@@ -5133,17 +5136,35 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             elif action == "read_file":
                 a_repo = action_data.get("repo", "")
                 a_path = action_data.get("path", "")
+                a_find = str(action_data.get("find", "") or "").strip()
                 try:
                     file_content = await read_file(a_repo, a_path)
-                    # Раньше срез [:4000] прятал целевую строку типового bot.py за окном
-                    # видимости → модель перечитывала тот же файл и упиралась в стоп-гард
-                    # («зацикливание»). Окна хватает на весь bot.py; при обрезке — явный маркер.
+                    # Окно чтения. Раньше срез прятал цель за границей видимости:
+                    # 15.08 kriss-bot/bot.py вырос до 51 340 символов, целевая
+                    # строка оказалась примерно на 42 000-м — за окном 24 000, и
+                    # Силли не увидела того, что просили править. В июле окно уже
+                    # поднимали (4000 → 24000) по этой же причине. Порог, привязанный
+                    # к сегодняшнему размеру файлов, истекает молча вместе с их ростом,
+                    # поэтому лечим не порогом, а возможностью СПРОСИТЬ нужное место.
                     _CAP = 24000
-                    if len(file_content) > _CAP:
+                    if a_find:
+                        region = find_regions(file_content, a_find)
+                        if region:
+                            result = (f"[{a_path}: {file_summary(file_content)}; "
+                                      f"фрагменты вокруг {a_find!r}]\n{region}")
+                        else:
+                            # Честное «не найдено» вместо начала файла: увидев
+                            # валидный код без цели, модель заключает, что цели нет.
+                            result = (f"[{a_path}: {file_summary(file_content)}] "
+                                      f"строка {a_find!r} в файле НЕ найдена — "
+                                      f"попробуй другую подстроку.")
+                    elif len(file_content) > _CAP:
                         result = file_content[:_CAP] + (
                             f"\n\n[...файл обрезан: показано {_CAP} из {len(file_content)} символов. "
-                            "Ищи нужную функцию/строку в показанном фрагменте; если её здесь нет — "
-                            "не перечитывай тот же файл, а заверши done с уточнением...]")
+                            "Если нужной функции/строки здесь нет — НЕ перечитывай файл целиком, "
+                            "а повтори read_file с параметром find: {\"action\":\"read_file\","
+                            "\"repo\":\"...\",\"path\":\"...\",\"find\":\"имя_функции\"} — "
+                            "вернутся строки вокруг совпадения...]")
                     else:
                         result = file_content
                     steps_log.append({"action": f"read_file({a_repo}/{a_path})", "result": result})
