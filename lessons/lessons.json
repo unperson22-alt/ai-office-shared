@@ -1624,5 +1624,21 @@
     "cause": "design",
     "tag": "integration",
     "posted_to_group": false
+  },
+  {
+    "id": 99,
+    "date": "2026-08-16",
+    "bot": "filly-bot, ai-office-shared/agents/coder.py",
+    "layer": "incident response / self-healing",
+    "title": "A self-healing office must not route a service's recovery through that same service — and must announce an outage once, not once per user message",
+    "symptom": "The lead (Силли) went down. Влад wrote into the office group a few times and got, within one minute: '🔧 Силли не отвечает — Силли уже поднимает' twice, plus '⚠️ @cilly СИЛЛИ недоступен 2 раза подряд'. Meanwhile Силли herself answered two heal requests with '❌ Сервис ai-office-shared не найден в SERVICES'. Three messages, none of which described anything actually happening: nobody was raising Силли, and the office could not restart its own leader.",
+    "root_cause": "Three independent defects presenting as one mess. (1) Filly's _auto_heal POSTs 'передеплой X' to the lead's /task — so for X = the lead, the request travels to exactly the address that is not answering. Asking a downed service to raise itself cannot work by construction. (2) The group alert had a lower bound (count>=2) but no upper one, so misses 3, 4, 5 each produced another message; the same applied to _auto_heal, which re-sent an identical task on every user message although a Railway deploy takes ~90s. (3) On the lead's side, the deploy intent resolved service_id only through SERVICES — a list that deliberately excludes her own service so the audit never rewrites her own coder.py (lesson #70). The exclusion was written for auto-repair and silently also disabled manual redeploy.",
+    "why_architecture": "Self-healing is circular by nature: the healer is itself a service that can fail. Every heal path needs an answer to 'who heals the healer', and that answer cannot be the healer. The office already had the right answer — watchdog-bot polls /health every 120s and redeploys after two failures — but Filly did not know about it and kept calling the corpse. Separately, a list built for one purpose (what to auto-repair) was reused as the answer to a different question (what can be redeployed at all), which is how a deliberate safety exclusion turned into an unintended capability gap.",
+    "fix": "Filly: _auto_heal now returns early for СИЛЛИ with a logged reason naming watchdog-bot as the owner of that case, instead of POSTing into the void; a SET NX cooldown limits both the group alert (10 min per agent) and the heal request (5 min per agent), so an outage is one announcement rather than one per message; the user-facing reply now names the actual healer ('watchdog' when the lead is down, 'Силли' otherwise) instead of promising something untrue. Redis failure disables the dedup but never blocks the heal — an extra redeploy beats none. Coder: the deploy intent falls back to railway_get_service_id() when SERVICES misses, the same fallback already present in create_bot and four audit branches; refusal now happens only when the service exists in neither, and says so. SERVICES itself is unchanged — Силли still does not edit her own coder.py.",
+    "status": "fixed",
+    "prevention": "When a component's job is to fix others, write down who fixes it, and make every heal path check whether its target is itself. Give every automated alert an upper bound, not just a threshold: the question is not 'is it bad enough to report' but 'have I already reported it'. Prefer SET NX over read-then-write for that bound — two concurrent failures pass a plain check simultaneously. And when a list exists to restrict dangerous automation, do not let a lookup for an unrelated capability consult that list as if it were a registry: the exclusion means 'do not do this automatically', not 'this does not exist'.",
+    "cause": "design",
+    "tag": "self-healing",
+    "posted_to_group": false
   }
 ]
