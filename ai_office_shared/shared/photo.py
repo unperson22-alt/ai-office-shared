@@ -32,9 +32,19 @@ ENV-переменные (все опциональны):
                            «включить» не нужно, ставится он не всем ботам
     PHOTO_REMBG_MODEL    — модель rembg: u2netp (по умолчанию, 4.5 МБ, ~530 МБ RSS)
                            или u2net (176 МБ, ~1.1 ГБ RSS, аккуратнее по краям)
+    PHOTO_AI_DIRECTOR=1  — арт-директор: модель смотрит на кадр и назначает
+                           параметры обработки (см. photo_ai). Картинку она НЕ
+                           рисует — рендер локальный, в полном разрешении.
+                           Стоит один запрос к Anthropic на фото, поэтому
+                           выключено по умолчанию
     CF_ACCOUNT_ID        — Cloudflare account id  ┐ AI-перерисовка (img2img):
     CF_API_TOKEN         — Cloudflare API token   ┘ 10 000 нейронов/день бесплатно
                            (или Redis: office:secrets:cf_account_id / cf_api_token)
+
+СЛОИ ОБРАБОТКИ (каждый следующий опционален и не ломает предыдущий):
+    photo_looks — адаптивные рецепты: числа считаются по гистограмме кадра
+    photo_ai    — модель правит эти числа, глядя на сюжет (PHOTO_AI_DIRECTOR=1)
+    ai_restyle  — полная перерисовка чужой моделью (Cloudflare, платит нейронами)
 """
 
 from __future__ import annotations
@@ -89,46 +99,27 @@ def _err(text: str, op: str = "error") -> PhotoResult:
 
 
 # ── Пресеты ────────────────────────────────────────────────────────────────────
-# Каждый пресет — набор множителей и эффектов. Значения подобраны так, чтобы
-# результат был заметен на глаз, но не выглядел «фильтром из 2013-го»:
-# brightness/contrast/color/sharpness — множители (1.0 = без изменений),
-# tint — (r,g,b) множители по каналам, vignette/grain/fade — сила эффекта 0..1.
+# Сами обработки живут в photo_looks.LOOKS — там рецепты в терминах цели
+# («точка чёрного на 2, S-кривая, ч/б микшером каналов»), а конкретные числа
+# считаются под каждый кадр по его гистограмме. Здесь остаются только описания
+# для ответа пользователю: ключи обязаны совпадать с LOOKS (есть тест).
 
 PRESETS: dict[str, dict] = {
-    "авто":     {"auto": True, "sharpness": 1.25, "color": 1.06,
-                 "desc": "автокоррекция: выровняла свет, добавила цвета и резкости"},
-    "яркое":    {"brightness": 1.18, "contrast": 1.08, "color": 1.12,
-                 "desc": "подняла яркость и насыщенность"},
-    "сочное":   {"auto": True, "color": 1.45, "contrast": 1.12, "sharpness": 1.2,
-                 "desc": "сочные цвета, контраст, резкость"},
-    "нежное":   {"soften": 0.45, "brightness": 1.06, "color": 0.96, "fade": 0.10,
-                 "desc": "мягкий портретный свет, кожа ровнее"},
-    "портрет":  {"soften": 0.35, "auto": True, "color": 1.08, "sharpness": 1.15,
-                 "vignette": 0.18,
-                 "desc": "портретная обработка: кожа мягче, лицо в фокусе"},
-    "чб":       {"mono": True, "auto": True, "contrast": 1.15, "sharpness": 1.2,
-                 "desc": "чёрно-белое с контрастом"},
-    "нуар":     {"mono": True, "contrast": 1.45, "brightness": 0.92,
-                 "vignette": 0.45, "grain": 0.35,
-                 "desc": "нуар: жёсткий контраст, виньетка, зерно"},
-    "сепия":    {"tint": (1.20, 1.02, 0.82), "mono": True, "sepia": True,
-                 "contrast": 1.06, "desc": "сепия"},
-    "винтаж":   {"tint": (1.10, 1.00, 0.90), "fade": 0.22, "grain": 0.25,
-                 "vignette": 0.30, "contrast": 0.94,
-                 "desc": "винтаж: выцветшие тени, зерно, виньетка"},
-    "плёнка":   {"tint": (1.04, 1.00, 1.06), "fade": 0.15, "grain": 0.30,
-                 "contrast": 1.10, "color": 1.05,
-                 "desc": "плёночный вид: зерно и мягкие тени"},
-    "тепло":    {"tint": (1.12, 1.02, 0.90), "brightness": 1.04,
-                 "desc": "тёплый оттенок"},
-    "холод":    {"tint": (0.92, 1.00, 1.14), "contrast": 1.06,
-                 "desc": "холодный оттенок"},
-    "матовое":  {"fade": 0.28, "contrast": 0.92, "color": 0.94,
-                 "desc": "матовый пастельный вид"},
-    "чёткое":   {"clarity": 1.0, "sharpness": 1.35, "contrast": 1.08,
-                 "desc": "детали и микроконтраст вытянуты"},
-    "драма":    {"clarity": 1.4, "contrast": 1.30, "color": 1.15,
-                 "vignette": 0.35, "desc": "драматичный контраст"},
+    "авто":    {"desc": "автокоррекция: выровняла свет, цвет и резкость под этот кадр"},
+    "яркое":   {"desc": "подняла яркость и насыщенность"},
+    "сочное":  {"desc": "сочные цвета, контраст, резкость"},
+    "нежное":  {"desc": "мягкий портретный свет, кожа ровнее"},
+    "портрет": {"desc": "портретная обработка: кожа мягче, лицо в фокусе"},
+    "чб":      {"desc": "чёрно-белое через красный светофильтр — кожа светлая, небо глубокое"},
+    "нуар":    {"desc": "нуар: жёсткий контраст, зерно, виньетка"},
+    "сепия":   {"desc": "сепия"},
+    "винтаж":  {"desc": "винтаж: выцветшие тени, зерно, засветка"},
+    "плёнка":  {"desc": "плёночный вид: зерно, тёплые света, мягкие тени"},
+    "тепло":   {"desc": "тёплый оттенок"},
+    "холод":   {"desc": "холодный оттенок"},
+    "матовое": {"desc": "матовый пастельный вид"},
+    "чёткое":  {"desc": "детали и микроконтраст вытянуты"},
+    "драма":   {"desc": "драматичный контраст"},
 }
 
 # Синонимы к пресетам — как реально пишут в чате.
@@ -315,130 +306,71 @@ def _encode(im, fmt: str = "jpeg") -> bytes:
     return buf.getvalue()
 
 
-def _vignette(im, strength: float):
-    Image, _, ImageFilter, _ = _pil()
-    w, h = im.size
-    mask = Image.new("L", (w, h), 0)
-    # Радиальный градиент дёшево: эллипс + сильное размытие.
-    from PIL import ImageDraw
-    ImageDraw.Draw(mask).ellipse(
-        (-w * 0.15, -h * 0.15, w * 1.15, h * 1.15), fill=255)
-    mask = mask.filter(ImageFilter.GaussianBlur(min(w, h) * 0.18))
-    dark = Image.new("RGB", (w, h), (0, 0, 0))
-    return Image.composite(im.convert("RGB"), Image.blend(im.convert("RGB"), dark,
-                                                          min(0.9, strength)), mask)
-
-
-def _grain(im, strength: float):
-    """
-    Зерно через overlay, а НЕ через blend с серым шумом: blend подмешивает
-    нейтральный 128-й серый и вымывает чёрное — «нуар» на проверке выходил
-    пыльно-серым вместо контрастного. Overlay держит тона на месте.
-    """
-    from PIL import ImageChops
-    Image, _, _, _ = _pil()
-    im = im.convert("RGB")
-    noise = Image.effect_noise(im.size, 16 + 30 * strength).convert("L")
-    grained = ImageChops.overlay(im, Image.merge("RGB", (noise, noise, noise)))
-    return Image.blend(im, grained, min(0.55, strength))
-
-
-def _fade(im, strength: float):
-    """Матовые «поднятые» тени — как выцветшая плёнка."""
-    Image, _, _, _ = _pil()
-    veil = Image.new("RGB", im.size, (226, 222, 214))
-    return Image.blend(im.convert("RGB"), veil, min(0.4, strength))
-
-
-def _soften(im, strength: float):
-    """Мягкая кожа: размытый слой поверх, детали глаз/краёв возвращаем резкостью."""
-    Image, ImageEnhance, ImageFilter, _ = _pil()
-    blurred = im.filter(ImageFilter.GaussianBlur(max(1.2, min(im.size) / 400)))
-    mixed = Image.blend(im.convert("RGB"), blurred.convert("RGB"), min(0.7, strength))
-    return ImageEnhance.Sharpness(mixed).enhance(1.35)
-
-
-def _clarity(im, strength: float):
-    """
-    Микроконтраст. Радиус намеренно маленький и силу гоним через percent, а не
-    через радиус. Проверено на контровом портрете (тёмные волосы на светлом
-    небе — худший случай для ореолов): radius 6+ даёт светящуюся кайму по
-    контуру головы, radius 2–3 при percent 75–90 и threshold 5 вытягивает
-    волосы и фактуру ткани без гало.
-    """
-    _, _, ImageFilter, _ = _pil()
-    strength = min(1.5, max(0.1, strength))
-    return im.filter(ImageFilter.UnsharpMask(
-        radius=2 if strength <= 1.0 else 3,
-        percent=int(45 + 30 * strength),
-        threshold=5))
-
-
-def _autocontrast(im, cutoff: int = 1):
-    """
-    Автоуровни С СОХРАНЕНИЕМ ТОНА. Без preserve_tone Pillow тянет каналы
-    независимо и сносит баланс белого: закатный портрет на проверке уезжал
-    в синеву — золотой час превращался в пасмурный день. preserve_tone
-    появился в Pillow 9.5, на старых версиях откатываемся на обычный режим.
-    """
-    _, _, _, ImageOps = _pil()
-    im = im.convert("RGB")
-    try:
-        return ImageOps.autocontrast(im, cutoff=cutoff, preserve_tone=True)
-    except TypeError:                       # Pillow < 9.5
-        return ImageOps.autocontrast(im, cutoff=cutoff)
-
-
-def _tint(im, rgb: tuple[float, float, float]):
-    Image, _, _, _ = _pil()
-    r, g, b = im.convert("RGB").split()
-    r = r.point(lambda v, m=rgb[0]: min(255, int(v * m)))
-    g = g.point(lambda v, m=rgb[1]: min(255, int(v * m)))
-    b = b.point(lambda v, m=rgb[2]: min(255, int(v * m)))
-    return Image.merge("RGB", (r, g, b))
-
-
 def apply_preset(raw: bytes, preset: str = "авто", tweaks: Optional[dict] = None) -> bytes:
     """
-    Применяет пресет и точечные подкрутки. Синхронная, чистая функция —
-    именно её гоняют тесты. Бросает исключения (их ловит process_photo).
+    Применяет обработку. Синхронная, чистая функция — именно её гоняют тесты.
+    Бросает исключения (их ловит process_photo).
+
+    Числа не зашиты: photo_looks замеряет кадр (гистограмма, тени/света,
+    насыщенность, доля кожи) и считает параметры под него. Один и тот же
+    «винтаж» на тёмном и на пересвеченном кадре получит разные значения —
+    цель у рецепта одна, а исходное состояние разное.
+
+    tweaks («ярче на 40%») применяются ПОСЛЕ обработки и буквально: человек
+    попросил конкретную величину, подменять её адаптацией нельзя.
     """
-    Image, ImageEnhance, _, ImageOps = _pil()
-    spec = dict(PRESETS.get(preset, {}))
-    spec.update(tweaks or {})
+    from ai_office_shared.shared import photo_looks
 
-    im = _open(raw)
-    if im.mode == "RGBA":                      # эффекты считаем по RGB
-        bg = Image.new("RGB", im.size, (255, 255, 255))
-        bg.paste(im, mask=im.split()[-1])
-        im = bg
+    im = _flatten(_open(raw))
+    look = preset if preset in photo_looks.LOOKS else "авто"
+    im = photo_looks.render(im, photo_looks.plan(look, photo_looks.analyze(im)))
+    return _finish(im, tweaks)
 
-    if spec.get("auto"):
-        im = _autocontrast(im, cutoff=1)
-    if spec.get("mono"):
-        im = ImageOps.grayscale(im).convert("RGB")
-    if spec.get("sepia"):
-        im = _tint(im, (1.18, 1.02, 0.80))
-    if spec.get("tint") and not spec.get("sepia"):
-        im = _tint(im, spec["tint"])
-    if spec.get("soften"):
-        im = _soften(im, float(spec["soften"]))
-    if spec.get("clarity"):
-        im = _clarity(im, float(spec["clarity"]))
 
+def _flatten(im):
+    """RGBA → RGB на белом: эффекты и кодирование считаем без альфы."""
+    Image, _, _, _ = _pil()
+    if im.mode != "RGBA":
+        return im
+    bg = Image.new("RGB", im.size, (255, 255, 255))
+    bg.paste(im, mask=im.split()[-1])
+    return bg
+
+
+async def apply_look(raw: bytes, preset: str = "авто",
+                     tweaks: Optional[dict] = None, request: str = "") -> tuple[bytes, str]:
+    """
+    То же, что apply_preset, но с арт-директором: если PHOTO_AI_DIRECTOR=1 и
+    есть ключ Anthropic, модель смотрит на кадр и правит параметры под сюжет.
+
+    Директор НЕ рисует картинку — он возвращает только числа, рендер идёт
+    локально в полном разрешении. Выключен, недоступен, ответил мусором —
+    работаем по детерминированному плану и молчим об этом.
+
+    Returns:
+        (jpeg-байты, приписка о том, что решил директор — может быть пустой)
+    """
+    from ai_office_shared.shared import photo_ai, photo_looks
+
+    im = _flatten(_open(raw))
+    look = preset if preset in photo_looks.LOOKS else "авто"
+    if not photo_ai.director_enabled():
+        return await asyncio.to_thread(apply_preset, raw, look, tweaks), ""
+
+    params, why = await photo_ai.plan_with_director(im, look, request)
+    rendered = await asyncio.to_thread(photo_looks.render, im, params)
+    return await asyncio.to_thread(_finish, rendered, tweaks), why
+
+
+def _finish(im, tweaks: Optional[dict] = None) -> bytes:
+    """Точечные подкрутки пользователя поверх обработки + кодирование."""
+    _, ImageEnhance, _, _ = _pil()
     for key, cls in (("brightness", ImageEnhance.Brightness),
                      ("contrast", ImageEnhance.Contrast),
                      ("color", ImageEnhance.Color),
                      ("sharpness", ImageEnhance.Sharpness)):
-        if spec.get(key):
-            im = cls(im.convert("RGB")).enhance(float(spec[key]))
-
-    if spec.get("fade"):
-        im = _fade(im, float(spec["fade"]))
-    if spec.get("grain"):
-        im = _grain(im, float(spec["grain"]))
-    if spec.get("vignette"):
-        im = _vignette(im, float(spec["vignette"]))
+        if (tweaks or {}).get(key):
+            im = cls(im.convert("RGB")).enhance(float(tweaks[key]))
 
     return _encode(im, "jpeg")
 
@@ -466,7 +398,8 @@ def upscale(raw: bytes, factor: int = 2) -> bytes:
     if max(w, h) * factor > 4096:
         factor = max(1, 4096 // max(w, h))
     im = im.resize((w * factor, h * factor), Image.LANCZOS)
-    im = _clarity(im, 0.8)
+    from ai_office_shared.shared import photo_looks
+    im = photo_looks._clarity(im, 0.8, max(w, h) * factor / 1200)
     im = ImageEnhance.Sharpness(im).enhance(1.2)
     return _encode(im, "jpeg")
 
@@ -689,8 +622,10 @@ async def _dispatch(raw: bytes, req: PhotoRequest) -> PhotoResult:
         return await ai_restyle(raw, req.prompt)
 
     preset = req.preset or "авто"
-    data = await asyncio.to_thread(apply_preset, raw, preset, req.tweaks)
+    data, why = await apply_look(raw, preset, req.tweaks, req.prompt or preset)
     desc = PRESETS.get(preset, {}).get("desc", "подкрутила по твоей просьбе")
+    if why:
+        desc = f"{desc} · {why}"
     if len(data) > MAX_OUTPUT_BYTES:
         data = await asyncio.to_thread(compress, data, 5000)
     return PhotoResult(data, "jpeg", f"preset:{preset}", desc)
