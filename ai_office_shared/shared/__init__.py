@@ -32,6 +32,10 @@
     currency     — get_rate(), get_rates(), get_rates_text()
     wiki         — wiki_summary(), wiki_search(), wiki_text()
     elevenlabs   — text_to_voice(text) → bytes (mp3)
+    photo        — process_photo(raw, «сделай ярче») → PhotoResult; фильтры,
+                   кроп, апскейл, сжатие локально на Pillow (без лимитов и
+                   ключей); вырез/размытие фона через rembg (PHOTO_REMBG=1);
+                   AI-перерисовка через Cloudflare Workers AI (опц.)
     dev_pipeline — run_dev_pipeline(...) → dict (ПАРАЛЛЕЛЬНО: Девви → Рикки‖Тести‖Секки → Скрибби)
     dev_activity — publish_activity()/read_activity() — общий эфир действий dev-dept
 """

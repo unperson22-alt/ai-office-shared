@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir \
     "telethon>=1.34.0" \
     "httpx>=0.26.0" \
     "python-telegram-bot>=20.0" \
-    "requests>=2.31.0"
+    "requests>=2.31.0" \
+    "pillow>=10.0.0"
 
 CMD ["python", "agents/coder.py"]

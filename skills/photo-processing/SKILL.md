@@ -1,0 +1,94 @@
+# SKILL: photo-processing
+
+## Когда использовать
+Когда бота учат обрабатывать присланные фото: фильтры, ретушь, фон, кроп под
+Инсту, стикеры, апскейл, сжатие. Модуль общий — `ai_office_shared.shared.photo`.
+
+Приём картинки (photo/document, группа/ЛС) — не здесь, а в `shared/media.py`.
+Этот skill начинается с момента, когда байты уже на руках.
+
+## Что уже готово в shared
+
+| Операция | Как просят в чате | Лимиты |
+|---|---|---|
+| 15 фильтров (авто, сочное, портрет, нежное, чб, нуар, сепия, винтаж, плёнка, тепло, холод, матовое, чёткое, драма, яркое) | «винтаж», «сделай чб» | нет |
+| Точечная подкрутка | «ярче на 40%», «контраст -30», «резче» | нет |
+| Кроп | «квадрат», «стори», «на аву» | нет |
+| Апскейл ×2 / сжатие | «увеличь», «сожми» | нет |
+| Вырез фона / размытие фона / белый фон | «убери фон», «размой фон» | нет, но нужен `rembg` |
+| Стикер 512px PNG | «сделай стикер» | нужен `rembg` для прозрачности |
+| AI-перерисовка (img2img) | «преврати меня в…», «в стиле…» | 10 000 нейронов/день на аккаунт Cloudflare |
+
+Замеры на Railway-контейнере (фото 800×1000): фильтр 20–140 мс, апскейл ~300 мс,
+вырез фона ~1.5 с (модель `u2netp`), стикер ~0.5 с.
+
+## Патч бота (PTB)
+
+**1. requirements бота:** добавить `pillow>=10.0.0`.
+Для работы с фоном дополнительно `rembg[cpu]>=2.0.50` (+ env `PHOTO_REMBG=1`)
+— это ~200 МБ образа и ~530 МБ RSS, ставить только тем ботам, кому фон реально нужен
+(Крисс — да, торговым ботам — нет).
+
+**2. Хендлер:**
+
+```python
+import base64
+from ai_office_shared.shared.media import IMAGE_FILTER, extract_image, ImageError
+from ai_office_shared.shared.photo import process_photo, PHOTO_HELP
+
+async def handle_photo(update, context):
+    img = await extract_image(update.message, context.bot)
+    if isinstance(img, ImageError):
+        await update.message.reply_text(img.user_message)
+        return
+
+    note = await update.message.reply_text("🎨 обрабатываю…")
+    res = await process_photo(base64.b64decode(img.b64), img.caption)
+    await note.delete()
+
+    if res.error:
+        await update.message.reply_text(res.error)      # молчать нельзя никогда
+        return
+
+    stream, filename = res.as_file()
+    # document, а не photo: Telegram пережимает photo и съедает всю резкость
+    await update.message.reply_document(document=stream, filename=filename,
+                                        caption=f"✅ {res.caption}")
+
+ptb.add_handler(MessageHandler(IMAGE_FILTER, handle_photo))
+```
+
+**3. Подсказка в /help бота:** добавить `PHOTO_HELP` — иначе пользователь не
+узнает про фильтры и будет каждый раз получать автокоррекцию.
+
+## Грабли, уже собранные
+
+- **Отдавать `reply_photo`** — Telegram пережмёт результат и обработка станет
+  незаметной. Отдавать `reply_document` (для стикера — `reply_sticker`/document PNG).
+- **Забыть EXIF-поворот** — фото с телефона вернётся лёжа. В `photo.py` уже
+  `exif_transpose`, но если пишешь свою обработку мимо модуля — грабли твои.
+- **Тянуть `rembg` во все боты** — образ +200 МБ и RSS +500 МБ на каждый сервис.
+  Модуль сам это переживает: без `rembg` запрос «убери фон» отдаёт портретную
+  обработку и объясняет, чего не хватает.
+- **Ставить AI-перерисовку условием работы** — Cloudflare может не ответить или
+  упереться в дневной лимит. Фильтры и фон обязаны работать всегда.
+
+## Ключи (опционально, для AI-перерисовки)
+
+Регистрация: dash.cloudflare.com → бесплатный аккаунт → Workers AI. Бесплатно
+10 000 нейронов/день (сотни картинок 512×512), карта не нужна.
+
+```
+CF_ACCOUNT_ID=...    # Dashboard → Workers & Pages → Account ID
+CF_API_TOKEN=...     # My Profile → API Tokens → шаблон Workers AI (Read/Run)
+```
+Кладутся в Railway-переменные бота или в Redis: `office:secrets:cf_account_id`,
+`office:secrets:cf_api_token` (модуль читает env, потом Redis — как elevenlabs).
+
+## Проверка перед деплоем
+
+```
+python scripts/photo_probe.py фото.jpg --out /tmp/probe
+```
+Гоняет все 13 операций на реальном файле, печатает время/вес/ошибки и
+показывает, подключены ли `rembg` и ключи Cloudflare. Выход ≠ 0 — не деплоить.
