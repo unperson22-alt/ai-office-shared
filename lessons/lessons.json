@@ -1689,5 +1689,21 @@
     "cause": "design",
     "tag": "prompting",
     "posted_to_group": false
+  },
+  {
+    "id": 103,
+    "date": "2026-08-16",
+    "bot": "filly-bot (роутер), gosling-bot (телеграм-хендлер)",
+    "layer": "routing / message intake",
+    "title": "Two independent paths answering the same question is not redundancy — it is two answers that can disagree, and the office had both kinds at once",
+    "symptom": "Two complaints that looked like one: «теперь всё роутит только Гослингу по умолчанию», and «я прям чётко спросил Гослинга с пересланным сообщением, а Филли роутит к Билли». Neither was a routing regression. In the 08:41 window Гослинг answered a single «С добрым утром» TWICE — a one-liner at 08:42:01 and a half-screen monologue at 08:42:06. At 08:43:50 a forwarded Гослинг message plus «Чё за идеи?» went to Билли, who replied «Контекст потерял», while Гослинг independently answered the same message correctly with three ideas.",
+    "root_cause": "Two separate instances of the same shape. (1) Гослинг is the only bot with a live Telegram group handler — HUMAN_REPLY_CHANCE=0.40 answers 40% of all human group messages without consulting the router, while Билли at the same point does a bare `return`. When Филли ALSO routed the message to him over HTTP, both paths fired: each had its own threshold for «should I speak» and neither had a ceiling for «did I already». (2) The question «who is this message for» is answered in two places by different code: Филли's _reply_target read only reply_to_message, and no file in filly mentioned forward_origin at all, while Гослинг's handler checks its own mention/reply conditions. A forwarded message is invisible to the first and visible to the second, so the two disagreed — and the one that was wrong was the one that decides routing.",
+    "why_architecture": "A second intake path is invisible in the router's logs: from Филли's side the 08:41 exchange looks like one clean route to ГОСЛИНГ, and the duplicate reply only exists in Гослинг's own MSG_OUT lines. So 'everything goes to Гослинг' read as a router bug for as long as nobody compared the two logs. And a per-bot intake rule cannot stay in sync with a central router by discipline alone: the router grew reply-thread handling on 07.08 and the bots did not, then Bot API 7.0 replaced forward_from with forward_origin and neither noticed, because nothing fails when one of two copies is missing a case — the other copy still answers, just differently.",
+    "fix": "filly: _forward_sender() reads all three shapes Telegram has used for a forward's author (typed forward_origin on PTB ≥20.8, the same field raw in api_kwargs on the pinned PTB 20.7, legacy forward_from), and _identify() is now the single bot-or-human resolver shared by reply and forward. Reply still outranks forward — it points at a message in THIS chat. gosling: claim_answer(), SET NX + TTL on a hash of the normalized text (message_id is unavailable on the HTTP path), claimed after the chance roll so a failed roll does not mute the routed call; banter pings are exempt; a deduplicated HTTP call answers 200 with an empty response and logs answer_deduped. 10 tests in filly, 13 in gosling (that repo had none).",
+    "status": "fixed",
+    "prevention": "Before calling a routing complaint a router bug, check whether the bot could have answered without the router at all — compare the router's decision log against the bot's own MSG_IN, and look at who the sender field names: the direct Telegram path carries the raw Telegram display name, the routed path carries the normalized one, so «От: YodkaWayne» and «От: Влад» on the same text is the duplicate, visible at a glance. More generally: when two components both decide the same thing, the cheap fix is to make one of them the only one; when that is not possible, the surviving duplicate needs a ceiling (SET NX + TTL) so that a disagreement costs one wrong answer rather than two competing ones. And when a platform renames a field, grep for the OLD name across every consumer — the code that never mentioned either name is the code that silently lost the feature.",
+    "cause": "design",
+    "tag": "routing",
+    "posted_to_group": false
   }
 ]
