@@ -15,7 +15,9 @@
     identity     — canonical(), display(), route_key(), url(), PEOPLE, person(),
                    roster_prompt() — единый реестр ботов и людей офиса
     group_history — push(), get_context() — общая лента офис-группы (пишут ВСЕ боты)
-    banter       — fanout(), is_banter(), depth_of(), sender_of() — болталка ботов
+    banter       — fanout(), is_banter(), depth_of(), sender_of() — болталка ботов;
+                   build_message()/clip() — транскрипт чата в промт званого,
+                   BANTER_COOLDOWN — потолок частоты всплесков
     taskboard    — + acceptance/evidence: критерии приёмки замораживаются до
                    работы, done не выдаётся без улик (set_acceptance,
                    add_evidence, acceptance_verdict); успех подписывает НЕ

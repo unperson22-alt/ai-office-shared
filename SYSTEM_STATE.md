@@ -79,6 +79,25 @@
 `shared.banter.fanout()` после успешного роутинга и из `handle_bot_task`.
 Обмен затихает на `BANTER_MAX_DEPTH` (2 реплики).
 
+**Что уезжает в `message` званому боту.** Не сообщение Влада, а транскрипт
+последних `BANTER_CTX_LINES` (4) реплик чата в виде `Кто: что`, собранный из
+`office:group:history` + реплики этой же волны по мере их поступления. До
+16.08 в промт шёл только `trigger_text[:200]` — строка ЧЕЛОВЕКА; ответ
+основного агента званые не видели и отвечали Владу хором, а второй бот в волне
+получал ровно тот же текст, что первый, и повторял его своими словами.
+Проводка при этом была зелёной: `banter_ping` подтверждает HTTP-хоп и ничего не
+говорит о содержимом payload. Правила реплики — `BANTER_RULES`, обрезка —
+`banter.clip()` (по границе слова), сборка — `banter.build_message()`.
+
+| env | по умолчанию | что делает |
+|---|---|---|
+|`BANTER_CHANCE`  |`0.7` (в проде filly `0.9`)| порог: шуметь ли после ответа агента |
+|`BANTER_MAX_DEPTH`|`2`  | глубина нити: волна и ответ на неё |
+|`BANTER_COOLDOWN`|`60` с| **потолок**: минимум между всплесками, `SET NX`+TTL на `office:banter:cooldown:{chat}`. `0` отключает. Занимается ПОСЛЕ броска шанса — несработавший бросок чужое окно не съедает |
+
+Дедуп нити (`office:banter:thread:{chat}`, TTL 300 с) — про «кто уже говорил»,
+кулдаун — про «как часто начинаем». Это разные ограничения, оба нужны.
+
 -----
 
 ## Оркестрация: как задача доходит до «готово»
@@ -289,7 +308,7 @@ curl -H "X-Office-Token: $OFFICE_RPC_TOKEN" \
 |`shared.dev_escalation`|v0.1.21|`DEV_FEATURE_PROMPT_BLOCK`, `parse_dev_feature_tag`, `strip_dev_feature_tag`, `request_dev_feature`            |
 |`shared.tasks`        |v0.1.21 |+ `spawn(coro, name)` — фоновые задачи с удержанием ссылки (GC-фикс)                                           |
 |`shared.group_history`|v0.1.23 |`push(redis, sender, text)`, `get_context(redis, n)`, `read()` — общая лента `office:group:history`, пишут ВСЕ боты |
-|`shared.banter`       |v0.1.23 |`fanout()`, `pick()`, `is_banter()`, `depth_of()`, `sender_of()`, `BANTER_POOL`, `BANTER_MAX_DEPTH` — межботовые реплики |
+|`shared.banter`       |v0.1.23 |`fanout()`, `pick()`, `is_banter()`, `depth_of()`, `sender_of()`, `BANTER_POOL`, `BANTER_MAX_DEPTH` — межботовые реплики; `build_message()`, `clip()`, `strip_self_prefix()`, `BANTER_RULES`, `BANTER_COOLDOWN` — качество реплики |
 
 ### ⚡ MIGRATION RULE
 
