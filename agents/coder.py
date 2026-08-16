@@ -25,6 +25,7 @@ import redis.asyncio as aioredis
 from ai_office_shared.shared.logging import log_event, read_logs
 from ai_office_shared.shared import taskboard as tb
 from ai_office_shared.shared.json_extract import first_json_object
+from ai_office_shared.shared.verify import extract_code
 from ai_office_shared.shared.target_repo import repo_looks_valid, target_repo
 from ai_office_shared.shared.file_window import (
     find_regions, summary as file_summary,
@@ -1696,6 +1697,47 @@ DEV_ACCEPTANCE = [
 ]
 
 
+def extract_ricky_code(ricky_result: str) -> str:
+    """Финальный код из ответа Рикки.
+
+    Раньше здесь стоял срез от «```python» до ближайшего «```». Он промахивался
+    трижды подряд, а пайплайн объявлял «Рикки не вернул финальный код» — хотя
+    код был:
+
+      • «```py» и голый «```» не совпадали с литералом вовсе;
+      • забор ``` не вложенный, поэтому файл, который сам содержит тройные
+        кавычки, обрезался на внутреннем заборе и отдавал обрубок.
+
+    Ровно это 01.08.2026 дало три попытки «unterminated triple-quoted string» —
+    и тогда же в shared/verify.py появился extract_code: он берёт несколько
+    кандидатов (внешний срез и самый длинный блок) и предпочитает тот, что
+    компилируется. Сюда его просто не принесли, и наивный срез остался в двух
+    местах на 16.08, когда команда шесть раз подряд «не давала код» по
+    villy-bot.
+
+    Отдельно — ответ вида «ERROR: …»: воркер так сообщает, что не смог довести
+    код до проверки. Кода в нём нет намеренно, и говорить ему в ответ «ты забыл
+    забор» бессмысленно — retry_feedback ниже отдаёт настоящую причину.
+    """
+    if not ricky_result:
+        return ""
+    if ricky_result.lstrip().startswith("ERROR:"):
+        return ""
+    return extract_code(ricky_result)
+
+
+def ricky_failure_reason(ricky_result: str) -> str:
+    """Почему кода нет — словами воркера, а не догадкой вызывающего."""
+    text = (ricky_result or "").strip()
+    if not text:
+        return "Рикки не ответил вообще (пустой ответ от воркера)."
+    if text.startswith("ERROR:"):
+        # Воркер уже назвал причину и приложил последнюю ошибку компилятора.
+        return f"Рикки вернул отказ: {text[:400]}"
+    return ("Рикки не вернул финальный код: в ответе нет распознаваемого блока "
+            "кода. Верни ПОЛНЫЙ файл одним ```python-блоком.")
+
+
 async def record_dev_gate_evidence(
     redis_client, board_id: str, *,
     final_code: str, compile_ok: bool, se_info: str,
@@ -1847,12 +1889,7 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
         )
         ricky_result = pipe.get("final_code_artifact", "") or pipe.get("ricky", "")
         commit_msg = pipe.get("commit_msg", "")
-        final_code = ""
-        if "```python" in ricky_result:
-            cs = ricky_result.find("```python") + 9
-            ce = ricky_result.find("```", cs)
-            if ce > cs:
-                final_code = ricky_result[cs:ce].strip()
+        final_code = extract_ricky_code(ricky_result)
 
         review_ok = "NEEDS_FIX" not in (ricky_result or "").upper()
         compile_ok = True
@@ -1869,7 +1906,7 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
             break
         await tb.incr_attempts(r_tb, board_id)
         if not final_code:
-            retry_feedback = "Рикки не вернул финальный код (блок ```python отсутствует/пуст)."
+            retry_feedback = ricky_failure_reason(ricky_result)
         elif not review_ok:
             retry_feedback = "Рикки вернул NEEDS_FIX — код требует доработки. " + ricky_result[:600]
         elif not compile_ok:
@@ -5649,12 +5686,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
 
             # Финальный код — из ревью Рикки (FINAL_CODE блок), иначе из кода Девви
             ricky_result = pipe.get("final_code_artifact", "") or pipe.get("ricky", "")
-            final_code = ""
-            if "```python" in ricky_result:
-                cs = ricky_result.find("```python") + 9
-                ce = ricky_result.find("```", cs)
-                if ce > cs:
-                    final_code = ricky_result[cs:ce].strip()
+            final_code = extract_ricky_code(ricky_result)
 
             # Гейт качества: вердикт Рикки + компиляция + размер файла
             review_ok = "NEEDS_FIX" not in (ricky_result or "").upper()
@@ -5675,7 +5707,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             # Провал гейта: считаем попытку, формируем фидбек на следующий заход
             await tb.incr_attempts(_r_act, board_id)
             if not final_code:
-                retry_feedback = "Рикки не вернул финальный код (блок ```python отсутствует/пуст)."
+                retry_feedback = ricky_failure_reason(ricky_result)
             elif not review_ok:
                 retry_feedback = "Рикки вернул NEEDS_FIX — код требует доработки. " + ricky_result[:600]
             elif not compile_ok:

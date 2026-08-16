@@ -1641,5 +1641,21 @@
     "tag": "self-healing",
     "posted_to_group": false,
     "open": "Настоящий service_id Силли неизвестен коду. Требуется Влад: Railway UI → сервис ai-office-shared → id → SELF_SERVICE_ID (Силли) и SILLI_SERVICE_ID (watchdog-bot). До этого автоподъём лидера не работает — как не работал с 30.05."
+  },
+  {
+    "id": 100,
+    "date": "2026-08-16",
+    "bot": "ai-office-shared/agents/coder.py (оба dev-пайплайна)",
+    "layer": "parsing / pipeline feedback",
+    "title": "A hardened parser that lives in shared but was never carried into the caller is not a fix — it is a fix someone else is still missing",
+    "symptom": "The office group got «⛔ Cilly: баг в villy-bot — команда за 3 попыток не дала код, прошедший ревью», and office:logs showed Девви receiving the same villy-bot task roughly every two minutes for hours. Every attempt failed with the same line: «Рикки не вернул финальный код (блок ```python отсутствует/пуст)». Рикки was returning code the whole time.",
+    "root_cause": "coder.py extracted the final file with a literal slice: find(\"```python\") to the next \"```\". It missed «```py» and bare «```» entirely, and because a fence is not nested, any file that itself contains triple backticks got cut at the inner fence and yielded a stub that would not compile. The office already had the correct parser — shared/verify.extract_code, written 01.08.2026 after this exact failure produced three consecutive «unterminated triple-quoted string» attempts. It takes several candidates (outermost slice, longest block) and prefers the one that compiles. It was never carried into coder.py, where the naive slice survived in two places. A second defect compounded it: a worker answer beginning «ERROR: …» means the worker itself could not get the code past verification, and deliberately carries no code — the pipeline answered that with «you forgot the fence», so all three retries told Рикки to fix the wrong thing.",
+    "why_architecture": "Shared modules make the fixed version available; they do not make it used. Nothing failed when coder.py kept its own copy — the copy worked for the common case, so nobody noticed it was the pre-fix version. The retry loop then hid the cost: a deterministic parse miss looks exactly like a flaky model, and three automatic attempts plus periodic re-triggering turn one wrong regex into hours of paid work and a false escalation to the owner.",
+    "fix": "Both call sites now go through extract_ricky_code(), a thin wrapper over shared extract_code that additionally treats an «ERROR:» answer as 'no code' rather than something to parse. ricky_failure_reason() replaces the hardcoded diagnosis: an empty answer, a worker refusal (quoted verbatim, with its compiler error) and a genuinely fence-less answer are now three different messages, so the retry feedback tells the worker what actually went wrong. Tests cover ```py, bare fences, a file containing triple quotes (asserting the old slice produces a SyntaxError and the new one compiles), worker errors, and a gate asserting no third copy of the naive slice appears.",
+    "status": "fixed",
+    "prevention": "When you harden a parser, grep for the pattern you just replaced across every caller before closing the task — the duplicate you leave behind is the one that will fail, and it will fail looking like a model problem, not a parsing problem. And never let an automated retry invent the reason for a failure: if the far side reported why it failed, quote it; if it said nothing, say that. A retry loop fed a wrong diagnosis does not converge, it just spends three times as much confirming it.",
+    "cause": "design",
+    "tag": "parsing",
+    "posted_to_group": false
   }
 ]
