@@ -1657,5 +1657,21 @@
     "cause": "design",
     "tag": "parsing",
     "posted_to_group": false
+  },
+  {
+    "id": 101,
+    "date": "2026-08-16",
+    "bot": "ai-office-shared (Силли: GET /logs, shared/log_query.py)",
+    "layer": "observability",
+    "title": "A system that can only dump its logs cannot answer questions about itself — and during an incident, a truncated dump answers nothing at all",
+    "symptom": "Diagnosing why the dev department had failed six times in a row on villy-bot needed exactly one number: how often Девви was being handed the same task. There was no way to ask. Four consecutive attempts through Силли's /task returned the raw event list, cut off at 3000 characters — no count, no first timestamp, no last, no interval. The ~2-minute cadence had to be counted by eye off the fragment, and the tail was never visible, so 'is the loop still running right now' stayed unanswered.",
+    "root_cause": "The office had log_event() for writing and read_logs() for reading, and nothing in between. Every question about logs went through the agentic loop, which reads a Redis key and echoes it; the reply path then truncates at 3000 chars. So the answer to 'how many' was a prefix of the data, and the answer to 'when did it stop' was structurally unavailable — the tail is exactly what truncation removes. Instructing the model to 'answer with one line, no dumps' did not help: it complied with the retrieval and ignored the formatting, four times.",
+    "why_architecture": "Aggregation has to happen before the transport limit, not after. Any observability path that ships raw records through a bounded channel degrades to 'a prefix of the truth' precisely when volume is high — and high volume IS the incident signal. The office also has two populations of log writers: the 15 bots in identity.BOTS, and the dev-department workers (девви, рикки, тести, секки, скрибби) which are not in the registry at all. Anything that enumerates 'all bots' from the registry silently omits the five that mattered here.",
+    "fix": "shared/log_query.py: summarize() returns total, first/last timestamp, span, per-event and per-level counts, and the MEDIAN interval between consecutive occurrences of the dominant event — median rather than mean so one long pause does not mask a steady beat. discover_bots() enumerates writers by scanning Redis keys instead of trusting the registry. GET /logs on Силли exposes it with bot/days/event/level/limit/format; the summary is always present and entries are opt-in (limit defaults to 0), so the answer to 'what is happening' is one line rather than a truncated list. Documented in SYSTEM_STATE next to the office:logs key contract.",
+    "status": "fixed",
+    "prevention": "Give every store of operational data a query path that returns aggregates, not just a dump — and build it before the incident, because during one you will reach for whatever exists. When a channel truncates, aggregate on the far side of the truncation. And when enumerating 'everything of a kind', derive the list from the data (which keys exist) rather than from a registry (which names we remembered to add): the entries missing from the registry are disproportionately the ones nobody is watching.",
+    "cause": "gap",
+    "tag": "observability",
+    "posted_to_group": false
   }
 ]
