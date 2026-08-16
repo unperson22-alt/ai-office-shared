@@ -7097,6 +7097,61 @@ async def handle_envcheck(request):
     return web.json_response({"set": vars_set, "missing": vars_missing})
 
 
+async def handle_logs(request):
+    """GET /logs — спросить логи и получить ЦИФРЫ, а не дамп.
+
+    16.08 разбор цикла в dev-отделе упёрся не в сложность, а в то, что спросить
+    «как часто Девви получал ту же задачу» было негде: четыре попытки через
+    /task вернули сырой список, обрезанный на 3000 символах. Ни счёта, ни
+    первой метки, ни последней, ни интервала.
+
+    Параметры (все необязательные):
+        bot    — каноническое имя; пусто → все, у кого есть логи за период.
+                 Имя берётся из ключей Redis, а не из реестра identity.BOTS:
+                 воркеров dev-отдела в реестре нет, а нужны были именно они.
+        days   — сколько последних суток (UTC), по умолчанию 1, потолок 30
+        event  — фильтр по имени события
+        level  — фильтр по уровню (info/warn/error)
+        limit  — сколько записей приложить к сводке; 0 → только сводка
+        format — text (по умолчанию) или json
+
+    Сводка есть ВСЕГДА, записи — опционально. Ответ на «что происходит» почти
+    никогда не требует всех строк, а обрезанный дамп не отвечает ни на что.
+    """
+    from ai_office_shared.shared.log_query import query as _log_query
+
+    r = await get_redis()
+    if not r:
+        return web.json_response({"error": "redis unavailable"}, status=503)
+
+    q = request.rel_url.query
+    try:
+        days  = int(q.get("days", 1))
+        limit = int(q.get("limit", 0))
+    except ValueError:
+        return web.json_response(
+            {"error": "days и limit должны быть числами"}, status=400)
+
+    try:
+        data = await _log_query(
+            r,
+            bot=q.get("bot", "").strip().lower(),
+            days=days,
+            event=q.get("event", "").strip(),
+            level=q.get("level", "").strip(),
+            limit=max(0, min(limit, 200)),
+        )
+    except Exception as e:
+        logger.error("[/logs] failed: %s", e)
+        return web.json_response({"error": f"{type(e).__name__}: {e}"}, status=500)
+
+    if q.get("format", "text") == "json":
+        return web.json_response(data)
+    body = "\n".join(data["lines"]) or "записей нет"
+    return web.Response(text=body + "\n", content_type="text/plain",
+                        charset="utf-8")
+
+
 async def handle_redis(request):
     """Proxy Redis commands for Claude diagnostics. Auth required."""
     auth = request.headers.get("X-Auth-Token", "")
@@ -7383,6 +7438,7 @@ async def main():
     app.router.add_post("/promote_bots", handle_promote_bots)
     app.router.add_get("/health", handle_health)
     app.router.add_get("/envcheck", handle_envcheck)
+    app.router.add_get("/logs", handle_logs)   # сводка по office:logs, см. handle_logs
     app.router.add_post("/redis", handle_redis)
     app.router.add_post("/add_lessons", handle_add_lessons)
     app.router.add_post("/web_search", handle_web_search)

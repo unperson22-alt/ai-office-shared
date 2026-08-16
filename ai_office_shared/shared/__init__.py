@@ -2,6 +2,7 @@
 
 Доступные модули:
     logging      — log_event()
+    log_query    — query()/summarize(): «сколько, когда, с каким тактом» вместо дампа
     redis_helpers — redis_get_history, redis_save_history, redis_get_notes, redis_add_note
     tasks        — auto_extract_interests, schedule_loop, ...
     routing      — forward_to_filly, make_reply_handler, is_routed
