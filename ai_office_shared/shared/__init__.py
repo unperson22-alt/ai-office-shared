@@ -15,6 +15,9 @@
     identity     — canonical(), display(), route_key(), url(), PEOPLE, person(),
                    roster_prompt() — единый реестр ботов и людей офиса
     group_history — push(), get_context() — общая лента офис-группы (пишут ВСЕ боты)
+    dedup        — claim_answer() — SET NX с TTL: один ответ на одно сообщение
+                   у ботов с двумя входами в группу (свой телеграм-хендлер +
+                   HTTP /task от Филли)
     banter       — fanout(), is_banter(), depth_of(), sender_of() — болталка ботов;
                    build_message()/clip() — транскрипт чата в промт званого,
                    BANTER_COOLDOWN — потолок частоты всплесков
