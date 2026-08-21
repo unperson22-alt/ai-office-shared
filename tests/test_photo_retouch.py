@@ -64,11 +64,13 @@ def _face(size=(400, 460)) -> Image.Image:
             row = k // 48
             d.line([x0, by + 4 - row * 3, x0 + 3, by - 3 - row * 3],
                    fill=(70, 55, 45), width=2)
-    for k in range(1200):                               # борода на подбородке
-        x0 = 148 + (k * 17) % 104
-        y0 = 370 + (k * 23) % 30
+    # Борода занимает нижнюю треть лица — как на настоящем портрете. Мелкий
+    # клочок в тестах читался не как волосы, а как пятно на коже.
+    for k in range(6000):
+        x0 = 120 + (k * 37) % 160
+        y0 = 330 + (k * 53) % 85
         d.line([x0, y0, x0 + 1, y0 + 3], fill=(80, 65, 55), width=2)
-    d.ellipse([160, 330, 240, 360], fill=(170, 80, 85))  # губы
+    d.ellipse([165, 355, 235, 380], fill=(170, 80, 85))  # губы поверх бороды
     return im
 
 
@@ -126,10 +128,11 @@ class TestRouting(unittest.TestCase):
         self.assertEqual(parse_request("сделай мягче").op, "preset")
 
     def test_strength_words(self):
-        self.assertEqual(retouch_strength("ретушь"), 1.0)
+        self.assertEqual(retouch_strength("ретушь"), 0.8)
         self.assertEqual(retouch_strength("трохи підретушуй"), 0.55)
         self.assertEqual(retouch_strength("чуть-чуть ретуши"), 0.55)
         self.assertEqual(retouch_strength("ретушь посильнее"), 1.0)
+        self.assertEqual(retouch_strength("зроби шкіру гладкою"), 1.0)
 
 
 @unittest.skipUnless(HAS_PIL, "Pillow не установлен")
@@ -187,17 +190,21 @@ class TestRetouchQuality(unittest.TestCase):
                             - _patch_mean(self.dirty, stubble, half=18)), 6,
                         "щетину замылили")
 
-    def test_touches_only_a_small_part_of_the_frame(self):
+    def test_background_and_non_skin_are_untouched(self):
         """
-        Ретушь — точечная операция. Если изменилось больше нескольких
-        процентов кадра, это уже не «убрала дефекты», а «замылила лицо»:
-        на реальном портрете первая версия трогала 19% кадра.
+        Ретушь выравнивает тон КОЖИ, поэтому доля изменённых пикселей уже не
+        мала — но за пределы лица она выходить не имеет права. Первая версия
+        считала «кожей» половину кадра вместе с деревянным шкафом на фоне.
         """
         from PIL import ImageChops
         diff = ImageChops.difference(self.dirty, self.out).convert("L")
+        for xy in ((20, 20), (380, 440), (20, 440)):
+            self.assertLess(_patch_mean(diff, xy, half=12), 4,
+                            f"фон в точке {xy} тронут")
         w, h = self.dirty.size
         changed = sum(c for v, c in enumerate(diff.histogram()) if v > 6) / (w * h)
-        self.assertLess(changed, 0.06, f"изменено {changed * 100:.1f}% кадра")
+        self.assertLess(changed, 0.40,
+                        f"изменено {changed * 100:.1f}% кадра — это больше, чем лицо")
 
 
 @unittest.skipUnless(HAS_PIL, "Pillow не установлен")
@@ -271,12 +278,31 @@ class TestRetouchContract(unittest.TestCase):
                                 "бровь затёрли на тёмном кадре")
             from PIL import ImageChops
             diff = ImageChops.difference(dirty, out).convert("L")
-            w, h = dirty.size
-            changed = sum(c for v, c in enumerate(diff.histogram()) if v > 6) / (w * h)
-            self.assertLess(changed, 0.03,
-                            f"на тёмном кадре тронуто {changed * 100:.1f}% — это уже мазня")
+            for xy in ((20, 20), (380, 440)):
+                self.assertLess(_patch_mean(diff, xy, half=12), 4,
+                                "фон тронут на тёмном кадре")
         finally:
             module.SKIN = original
+
+    def test_tone_is_evened_by_default_and_can_be_switched_off(self):
+        """
+        Под «ретушью» люди имеют в виду и убрать дефекты, И выровнять тон:
+        версия, которая трогала только изолированные точки, на реальном лице
+        возвращала фото без единого видимого изменения (фото Влада, 21.08.2026).
+        Отказ от выравнивания — отдельная просьба словами.
+        """
+        from ai_office_shared.shared.photo import wants_spots_only
+        self.assertFalse(wants_spots_only("ретушь"))
+        self.assertFalse(wants_spots_only("прибери недоліки"))
+        self.assertTrue(wants_spots_only("убери только прыщи"))
+        self.assertTrue(wants_spots_only("тон не трогай"))
+
+        raw = _jpeg(_spotted(_face()))
+        toned, note, _ = retouch(raw)
+        spots_only, note2, _ = retouch(raw, even_tone=False)
+        self.assertNotEqual(toned, spots_only, "выравнивание ничего не изменило")
+        self.assertIn("тон", note)
+        self.assertNotIn("тон", note2)
 
     def test_large_photo_is_handled(self):
         """Путь с уменьшенной копией для масок (кадр длиннее _WORK_SIDE)."""
