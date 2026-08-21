@@ -11,6 +11,7 @@ ai_office_shared/shared/auth.py
 ai_office_shared/shared/banter.py
 ai_office_shared/shared/crypto.py
 ai_office_shared/shared/currency.py
+ai_office_shared/shared/dedup.py
 ai_office_shared/shared/dev_activity.py
 ai_office_shared/shared/dev_escalation.py
 ai_office_shared/shared/dev_pipeline.py
@@ -32,6 +33,7 @@ ai_office_shared/shared/phantom.py
 ai_office_shared/shared/photo.py
 ai_office_shared/shared/photo_ai.py
 ai_office_shared/shared/photo_looks.py
+ai_office_shared/shared/photo_retouch.py
 ai_office_shared/shared/prompt.py
 ai_office_shared/shared/quality.py
 ai_office_shared/shared/railway_vars.py
@@ -48,6 +50,7 @@ ai_office_shared/shared/wiki.py
 ai_office_shared/shared/worker.py
 tests/test_answer_text.py
 tests/test_banter_quality.py
+tests/test_dedup.py
 tests/test_file_window.py
 tests/test_imagegen.py
 tests/test_inter_bot.py
@@ -57,6 +60,7 @@ tests/test_orchestration_phase2.py
 tests/test_phantom.py
 tests/test_photo.py
 tests/test_photo_looks.py
+tests/test_photo_retouch.py
 tests/test_railway_vars.py
 tests/test_ricky_code.py
 tests/test_self_service_id.py

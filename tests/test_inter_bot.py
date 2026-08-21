@@ -267,3 +267,35 @@ class TestBanterIsObservable(unittest.TestCase):
         out = asyncio.run(b.pick(R(), "БИЛЛИ", pool=["БИЛЛИ"]))
         self.assertEqual(out, [])
         self.assertIn("некого звать", b.last_pick_reason["value"])
+
+
+class TestSpeakerPrompt(unittest.TestCase):
+    """
+    «Кто пишет прямо сейчас» — инцидент 2026-08-21: Крисс ответил Яне «Влад,
+    я розумію задачу...». Ростер офиса в промте был, автора сообщения — не было.
+    """
+
+    def test_known_person_is_named(self):
+        text = ident.speaker_prompt(8993567246)          # Яна
+        self.assertIn("Яна", text)
+        self.assertIn("8993567246", text)
+
+    def test_known_person_excludes_everyone_else(self):
+        text = ident.speaker_prompt(8993567246)
+        self.assertIn("НЕ Влад", text)
+        self.assertNotIn("НЕ Яна", text)
+
+    def test_owner_gets_his_own_block(self):
+        text = ident.speaker_prompt(391077101)           # Влад
+        self.assertIn("Влад", text)
+        self.assertIn("НЕ Яна", text)
+
+    def test_unknown_id_falls_back_to_telegram_name(self):
+        text = ident.speaker_prompt(1234567, "Olena")
+        self.assertIn("Olena", text)
+        self.assertIn("Влада", text)                     # запрет подставлять Влада
+
+    def test_nothing_known_says_nothing(self):
+        # Выдумывать имя нельзя — лучше пустой блок.
+        self.assertEqual(ident.speaker_prompt(0), "")
+        self.assertEqual(ident.speaker_prompt(None, ""), "")
