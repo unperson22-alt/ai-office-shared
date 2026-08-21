@@ -188,8 +188,9 @@ HELP_LINES = [
     "• «улучши» / «авто» — автокоррекция света, цвета и резкости",
     "• фильтры: " + ", ".join(f"«{k}»" for k in PRESETS if k != "авто"),
     "• «ярче на 30%», «контраст +20», «насыщенность -15» — точечная подкрутка",
-    "• «ретушь» / «убери прыщи» — точечная ретушь лица: пятна убираю, кожу и "
-    "текстуру оставляю (можно «чуть-чуть» или «сильнее»)",
+    "• «ретушь» / «убери прыщи» — точечная ретушь лица: убираю сами пятна, "
+    "текстуру кожи, брови и ресницы не трогаю. «Ретушь сильнее» — ещё и "
+    "выровнять тон, «чуть-чуть» — вполсилы",
     "• «убери фон» / «размой фон» / «белый фон» — работа с фоном",
     "• «стикер» — 512px PNG для стикерпака, «аватар» — квадрат 640×640",
     "• «квадрат» / «стори» — кроп под Инсту, «увеличь» — апскейл ×2, «сожми» — вес",
@@ -418,7 +419,22 @@ def retouch_strength(text: str) -> float:
     return 1.0
 
 
-def retouch(raw: bytes, strength: float = 1.0) -> tuple[bytes, str, float]:
+def wants_even_tone(text: str) -> bool:
+    """
+    Просят ли ВЫРОВНЯТЬ кожу поверх точечной ретуши.
+
+    По умолчанию ретушь трогает только сами пятна. Общее смягчение кожи —
+    отдельная просьба, а не бонус: 21.08.2026 оно шло всегда и съело брови,
+    ресницы и бороду на фото Влада.
+    """
+    low = (text or "").lower()
+    return any(w in low for w in (
+        "сильн", "гладк", "ровн", "разглад", "розглад", "выровн", "вирівн",
+        "смягч", "пом'якш", "помякш", "как в журнал", "glam", "smooth"))
+
+
+def retouch(raw: bytes, strength: float = 1.0,
+            even_tone: bool = False) -> tuple[bytes, str, float]:
     """
     Точечная ретушь лица: убрать дефекты кожи, не тронув глаза, губы и фон.
     Синхронная и чистая — её же гоняют тесты. Сама обработка в photo_retouch.
@@ -429,7 +445,7 @@ def retouch(raw: bytes, strength: float = 1.0) -> tuple[bytes, str, float]:
     from ai_office_shared.shared import photo_retouch
 
     im = _flatten(_open(raw))
-    out, report = photo_retouch.retouch(im, strength)
+    out, report = photo_retouch.retouch(im, strength, even_tone)
     return _encode(out, "jpeg"), report.note, report.skin
 
 
@@ -664,7 +680,7 @@ async def _dispatch(raw: bytes, req: PhotoRequest) -> PhotoResult:
         return PhotoResult(data, "jpeg", "white_bg", "поставила белый фон")
     if req.op == "retouch":
         data, note, skin = await asyncio.to_thread(
-            retouch, raw, retouch_strength(req.prompt))
+            retouch, raw, retouch_strength(req.prompt), wants_even_tone(req.prompt))
         if skin < 0.02:
             # Кожи в кадре нет — врать «отретушировала» нельзя. Отдаём честную
             # автокоррекцию и говорим, чего не нашли.
