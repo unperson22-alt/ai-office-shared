@@ -28,6 +28,7 @@ from ai_office_shared.shared.json_extract import first_json_object
 from ai_office_shared.shared.verify import extract_code
 from ai_office_shared.shared.target_repo import repo_looks_valid, target_repo
 from ai_office_shared.shared.telegram_text import split_for_telegram
+from ai_office_shared.shared.fault_evidence import dispatch_refusal, failure_evidence
 from ai_office_shared.shared import dev_queue
 from ai_office_shared.shared.file_window import (
     find_regions, summary as file_summary,
@@ -846,6 +847,7 @@ ANALYZER_PROMPT = """Анализатор багов Python/Telegram/Railway. JS
 {"is_bug":bool,"confidence":"high|low","bug_type":"crash|logic|config|network|external|unknown","description":"1-2 предл","affected_file":"path|null","fix_description":"конкретно","lesson_title":"","lesson_symptom":"","lesson_cause":"","lesson_fix":"","lesson_avoid":""}
 high=явный crash/NameError/ImportError/SyntaxError/KeyError→автофикс. low=логика→спросить.
 ВНЕШНЕЕ (НЕ наш баг): если корневая причина — недоступность СТОРОННЕГО сервиса (Telegram/Railway API, DNS, сеть: NetworkError, ConnectError, RemoteProtocolError, Bad Gateway, 502/503/504), а наш код её просто пробрасывает → is_bug=false, bug_type="external". Баг — ТОЛЬКО если НАШ код не обрабатывает сбой и крашится в цикле (CrashLoop).
+БАГ — ЭТО ТО, ЧТО ПОКАЗАЛИ ЛОГИ. Исходник дан, чтобы ОБЪЯСНИТЬ наблюдавшийся отказ, а не чтобы искать в нём недостатки. Нет трейсбека/ошибки в логах → is_bug=false, bug_type="unknown", description="в логах нет отказа". Не пиши «в логах пусто, НО в коде видно…» — это ревью кода, а не разбор инцидента, и оно стоит отделу трёх попыток (23.08.2026: villy-bot был здоров, «await log(event,msg) вызвана всего с 2 аргументами» — функция объявлена с двумя параметрами, файл компилируется, pyflakes чист).
 Поля lesson_* (lesson_title/lesson_symptom/lesson_cause/lesson_fix/lesson_avoid) — ВСЕГДА на английском (English), даже если логи/контекст на русском."""
 
 FIXER_PROMPT = """Фиксер Python кода. Верни ТОЛЬКО полный исправленный файл целиком. Минимум изменений — только то что нужно для фикса. Сохраняй стиль оригинала. Без markdown, без объяснений.
@@ -3048,6 +3050,11 @@ async def _run_office_scan(target: str = "", *, proposal_chat_id: int = 0) -> di
                 (result["external"] if analysis.get("bug_type") == "external"
                  else result["healthy"]).append(repo)
                 continue
+            _no_proof = dispatch_refusal(analysis, error_lines)
+            if _no_proof:
+                logger.info(f"[office-scan] {repo}: находку не отдаю отделу — {_no_proof}")
+                result["healthy"].append(repo)
+                continue
             outcome = await handle_bug(sid, repo, repo, main_file, analysis,
                                        proposal_chat_id=proposal_chat_id) or {}
             st = outcome.get("status")
@@ -3626,6 +3633,20 @@ async def monitor_loop():
                     logger.info(f"[monitor] {repo}: анализатор — не наш баг ({analysis.get('bug_type')}), молчу")
                     continue
 
+                # Третий слой, детерминированный: находка без улики отдел не занимает.
+                # is_bug — суждение той же модели, которой показали ВЕСЬ исходник, и на
+                # пустых логах она начинает ревьюить код вместо разбора инцидента.
+                _no_proof = dispatch_refusal(analysis, error_logs)
+                if _no_proof:
+                    logger.info(f"[monitor] {repo}: находку не отдаю отделу — {_no_proof}. "
+                                f"Заявление: {str(analysis.get('description',''))[:200]}")
+                    continue
+
+                # Что именно посчитали отказом — в лог, рядом с решением занять
+                # отдел. Иначе разбор «почему Силли туда пошла» снова сведётся
+                # к «модель что-то решила».
+                logger.info(f"[monitor] {repo}: отдаю отделу, улика: "
+                            f"{failure_evidence(error_logs)[:160]!r}")
                 await handle_bug(service_id, repo, repo, main_file, analysis)
 
             except Exception as e:
