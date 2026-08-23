@@ -117,6 +117,15 @@ async def _call_worker(
                                          headers=office_headers())
             resp.raise_for_status()
             out = resp.json().get("response", "")
+            if not str(out or "").strip():
+                # HTTP 200 с пустым response — это НЕ ответ. Возвращая "", мы
+                # делали провал воркера неотличимым от «мне нечего сказать»:
+                # дальше по цепочке пустота выглядела как отсутствующий блок
+                # кода, и вызывающий сообщал про НЕ ТОГО воркера (23.08.2026,
+                # заявка 62ffa25b5e30 — «Рикки не ответил» при живых пяти
+                # воркерах). Та же форма, что у урока #81: провал чтения не
+                # должен возвращать то же, что пустое чтение.
+                raise ValueError("HTTP 200, но поле response пустое")
             await publish_activity(redis_client, task_id, name, "done",
                                    _short_summary(out))
             return out

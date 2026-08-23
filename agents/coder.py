@@ -1746,6 +1746,30 @@ def ricky_failure_reason(ricky_result: str) -> str:
             "кода. Верни ПОЛНЫЙ файл одним ```python-блоком.")
 
 
+def dev_failure_reason(pipe: dict) -> str:
+    """Почему кода нет — по ответам ВСЕЙ цепочки, а не одного Рикки.
+
+    23.08.2026 заявка 62ffa25b5e30 упала с диагнозом «Рикки не ответил вообще»,
+    хотя все пять воркеров отвечали на /health. Причина диагноза, а не сбоя:
+    при провале Девви `dev_pipeline` обрывает фан-аут, кладёт
+    `final_code_artifact=""` и ключа `ricky` в ответе не оставляет вовсе —
+    а вызывающий звал `ricky_failure_reason("")`, которая по пустой строке
+    всегда отвечает «Рикки не ответил». Отчёт указывал на воркера, которого
+    в этом прогоне даже не вызывали.
+
+    Урок #100 ровно про это: если дальняя сторона сказала, почему упала —
+    цитируй её; если промолчала — так и скажи, но не выдумывай виноватого.
+    """
+    devvy = (pipe.get("devvy") or "").strip() if isinstance(pipe, dict) else ""
+    if not devvy:
+        return ("Девви не ответил вообще (пустой ответ от воркера) — "
+                "остальные воркеры не вызывались.")
+    if devvy.startswith("ERROR:"):
+        return (f"Девви вернул отказ: {devvy[:400]} — фан-аут не запускался, "
+                f"Рикки/Тести/Секки в этом прогоне не участвовали.")
+    return ricky_failure_reason(pipe.get("final_code_artifact") or pipe.get("ricky") or "")
+
+
 async def record_dev_gate_evidence(
     redis_client, board_id: str, *,
     final_code: str, compile_ok: bool, se_info: str,
@@ -1762,15 +1786,28 @@ async def record_dev_gate_evidence(
     """
     if not redis_client or not board_id:
         return
+
+    # 🔴 Кода нет — значит НИ ОДНА из трёх проверок не исполнялась, и ни одна
+    # не имеет права отчитаться «пройдено». Иначе выходит ровно то, что 23.08
+    # увидел владелец по заявке 62ffa25b5e30: «compile() ок, 0 строк», «NEEDS_FIX
+    # не встречается» и «размер в пределах гейта» — три галочки за пустоту.
+    # Механика была такая: compile_ok инициализируется True и сбрасывается лишь
+    # внутри `if final_code`, пустая строка не содержит NEEDS_FIX, а гейт размера
+    # при пустом коде не вызывается вовсе. Проверка, которой не на чем было
+    # исполниться, — провал, а не пропуск (урок #93).
+    has_code = bool((final_code or "").strip())
+    nothing_to_check = "финального кода нет — проверять было нечего"
     proofs = [
-        (DEV_ACCEPTANCE[0], compile_ok,
-         f"compile() ок, {len(final_code.splitlines())} строк" if compile_ok
-         else f"SyntaxError: {se_info}" if se_info else "финального кода нет"),
-        (DEV_ACCEPTANCE[1], review_ok,
-         "NEEDS_FIX в вердикте не встречается" if review_ok
-         else f"вердикт Рикки: {(ricky_result or '')[:150]}"),
-        (DEV_ACCEPTANCE[2], not shrink_info,
-         "размер файла в пределах гейта" if not shrink_info else shrink_info),
+        (DEV_ACCEPTANCE[0], compile_ok and has_code,
+         f"compile() ок, {len(final_code.splitlines())} строк" if (compile_ok and has_code)
+         else f"SyntaxError: {se_info}" if se_info else nothing_to_check),
+        (DEV_ACCEPTANCE[1], review_ok and has_code,
+         "NEEDS_FIX в вердикте не встречается" if (review_ok and has_code)
+         else f"вердикт Рикки: {(ricky_result or '')[:150]}" if has_code
+         else nothing_to_check),
+        (DEV_ACCEPTANCE[2], (not shrink_info) and has_code,
+         "размер файла в пределах гейта" if ((not shrink_info) and has_code)
+         else shrink_info or nothing_to_check),
     ]
     for criterion, passed, proof in proofs:
         try:
@@ -1883,7 +1920,7 @@ async def run_dev_chain(
         # Провал гейта: считаем попытку, формируем фидбек на следующий заход
         await tb.incr_attempts(redis_client, board_id)
         if not final_code:
-            retry_feedback = ricky_failure_reason(ricky_result)
+            retry_feedback = dev_failure_reason(pipe)
         elif not review_ok:
             retry_feedback = "Рикки вернул NEEDS_FIX — код требует доработки. " + ricky_result[:600]
         elif not compile_ok:
@@ -7473,6 +7510,22 @@ async def _run_queued_dev_task(payload: dict, board_id: str) -> None:
         await _escalate_vlad(refusal)
         return
 
+    # Слот один на весь офис: две одобренные заявки не должны идти параллельно.
+    # Если слот занят, заявку НЕ теряем и не запускаем следом — возвращаем в
+    # очередь. Тихо проглотить одобрение владельца было бы худшим исходом:
+    # он нажал кнопку, а не произошло ничего.
+    if not await dev_queue.acquire_run_slot(r, board_id):
+        busy = await dev_queue.current_run(r)
+        await tb.update_status(r, board_id, "open",
+                               result=f"жду очереди: сейчас идёт заявка {busy or '—'}")
+        await dev_queue.release_claim(r, board_id)
+        await dev_queue.clear_asked(r, board_id)
+        await _escalate_vlad(
+            f"⏳ Заявка [{board_id}] вернулась в очередь: сейчас отдел занят "
+            f"заявкой {busy or '—'}. Спрошу снова, когда освободится."
+        )
+        return
+
     branch  = f"cilly/dev-{board_id}"
     pr_url  = ""
     pr_num  = 0
@@ -7600,6 +7653,7 @@ async def _run_queued_dev_task(payload: dict, board_id: str) -> None:
                                result=f"ошибка исполнения: {e}", escalated=True)
         await _escalate_vlad(f"⛔ Заявка [{board_id}] оборвалась ошибкой: {e}")
     finally:
+        await dev_queue.release_run_slot(r, board_id)
         await dev_queue.release_claim(r, board_id)
         await dev_queue.clear_asked(r, board_id)
 
@@ -7614,6 +7668,13 @@ async def _dev_queue_tick(r) -> None:
     остаётся быстрым и не задерживает остальную петлю управления.
     """
     if not dev_queue.queue_enabled():
+        return
+    # Пока отдел занят, новый вопрос задавать незачем: одобрение по нему всё
+    # равно упрётся в слот и вернёт заявку в очередь. Лучше не спрашивать, чем
+    # спросить и отказать.
+    busy = await dev_queue.current_run(r)
+    if busy:
+        logger.info(f"[dev_queue] отдел занят заявкой {busy}, вопросов не задаю")
         return
     try:
         tasks = await tb.list_tasks(r, status="open",
