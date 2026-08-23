@@ -2026,6 +2026,7 @@
       "ai_office_shared/shared/log_redaction.py:install_secret_redaction",
       "ai_office_shared/shared/log_redaction.py:redact"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T18:32:43.845954+00:00"
   }
 ]
