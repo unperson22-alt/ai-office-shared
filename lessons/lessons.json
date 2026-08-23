@@ -1901,5 +1901,25 @@
     ],
     "tag": "process",
     "posted_to_group": false
+  },
+  {
+    "id": 114,
+    "date": "2026-08-23",
+    "bot": "ai-office-shared (agents/coder.py, shared/telegram_text.py)",
+    "layer": "publishing / error handling",
+    "title": "One oversized lesson locked the whole publication queue for eleven days, and the only signal was a log line nobody read",
+    "symptom": "The Bug Lessons group stood at lesson #90 from 2026-08-03 while lessons.json had moved on to #113 — twenty-three records, eleven days. Nothing appeared to be broken: no alert, no failed deploy, no complaint. The owner noticed only by comparing the group against the file by eye.",
+    "root_cause": "Lesson #91 (2026-08-12) formats to 5035 characters against Telegram's hard 4096 limit, so send_message answered «message is too long». publish_pending_lessons caught that and executed `break`, which was written deliberately and for a good reason — «непосланное НЕ помечаем» — but converts the failure of ONE record into the failure of every record behind it. Because #91 sits first in the queue, the loop died on its first iteration on every run, and the function returned 0 having published nothing. The startup task ran on every redeploy, five times on 23.08 alone, and failed identically each time. The only trace was a single logger.error; the function's own success path reports «Новых уроков нет», so a total blockage and an empty queue produce the same visible outcome.",
+    "why_architecture": "The retry-and-skip decision was made per-batch when it needed to be made per-record: one bad message is a data problem, a string of failures is an infrastructure problem, and a loop that cannot tell them apart must choose one behaviour for both. It chose the pessimistic one, which is safe for correctness and catastrophic for liveness. The second half is observability: a failure whose only manifestation is a log line in a service nobody tails is indistinguishable from success. Length was never checked anywhere, and lessons had been growing steadily — #87–90 ran 2000–2400 characters, so the ceiling was approached gradually and crossed without ceremony.",
+    "fix": "shared/telegram_text.split_for_telegram() cuts a message by descending meaningfulness — paragraphs, then lines, then hard characters — and marks the parts [i/n]; text that fits is returned untouched and unmarked, since marking the normal case to serve the exception disfigures every ordinary message. Nothing is truncated: a silently cut tail reads as a complete lesson. In publish_pending_lessons the `break` became a skip that records the id and continues, stopping only after three consecutive failures — by then it is Telegram that is unavailable, not one malformed record — and the flag is still set only after a successful send, so the original guarantee holds. Failures are now reported to the owner directly rather than to the log. A test asserts every record in the archive is sendable after splitting, so a future long lesson cannot re-block the queue.",
+    "status": "fixed",
+    "prevention": "Decide skip-versus-stop per item, not per batch: one bad record is a data defect and deserves a skip, several in a row are an outage and deserve a stop. When a function reports «nothing to do» on the success path, make sure a total failure cannot produce the same message — that ambiguity is what buys eleven days of silence. And any payload sent to a third-party API with a hard size limit needs that limit asserted in a test against real data, because content grows gradually and crosses the ceiling without any single change looking responsible.",
+    "cause": "design",
+    "tag": "observability",
+    "anchors": [
+      "ai_office_shared/shared/telegram_text.py:split_for_telegram",
+      "agents/coder.py:publish_pending_lessons"
+    ],
+    "posted_to_group": false
   }
 ]

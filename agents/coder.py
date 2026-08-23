@@ -27,6 +27,7 @@ from ai_office_shared.shared import taskboard as tb
 from ai_office_shared.shared.json_extract import first_json_object
 from ai_office_shared.shared.verify import extract_code
 from ai_office_shared.shared.target_repo import repo_looks_valid, target_repo
+from ai_office_shared.shared.telegram_text import split_for_telegram
 from ai_office_shared.shared import dev_queue
 from ai_office_shared.shared.file_window import (
     find_regions, summary as file_summary,
@@ -1652,17 +1653,35 @@ async def publish_pending_lessons(reply_func=None, limit: int = 100) -> int:
 
     capped = pending[:limit]
     posted = 0
+    failed: list = []
+    consecutive = 0
     now_iso = _dt.now(_tz.utc).isoformat()
     for lesson in capped:
         try:
-            await _GLOBAL_BOT.send_message(chat_id=BUG_LESSONS_CHAT, text=_format_lesson(lesson))
+            # Урок #91 форматируется в 5035 символов при лимите Telegram 4096:
+            # 12.08 он встал первым в очереди и запер за собой всё остальное на
+            # одиннадцать дней. Режем по абзацам, а не обрезаем: потерянный хвост
+            # выглядел бы как целый урок.
+            for part in split_for_telegram(_format_lesson(lesson)):
+                await _GLOBAL_BOT.send_message(chat_id=BUG_LESSONS_CHAT, text=part)
+                await asyncio.sleep(0.4)
             lesson["posted_to_group"] = True
             lesson["posted_at"] = now_iso
             posted += 1
+            consecutive = 0
             await asyncio.sleep(0.8)
         except Exception as e:
+            # Раньше здесь стоял break: непосланное не помечалось (это верно), но
+            # отказ ОДНОЙ записи становился отказом всех последующих. Пропускаем
+            # её — флаг всё равно ставится только после успешной отправки, — а
+            # останавливаемся лишь когда сыпется подряд: это уже не кривая запись,
+            # а недоступный Telegram, и долбиться в него бессмысленно.
             logger.error(f"publish_pending_lessons #{lesson.get('id')} failed: {e}")
-            break  # непосланное НЕ помечаем; коммитим только то, что успели
+            failed.append((lesson.get("id"), str(e)[:120]))
+            consecutive += 1
+            if consecutive >= 3:
+                logger.error("publish_pending_lessons: 3 отказа подряд, останавливаюсь")
+                break
 
     if posted:
         try:
@@ -1671,9 +1690,18 @@ async def publish_pending_lessons(reply_func=None, limit: int = 100) -> int:
                             f"chore(lessons): mark {posted} posted_to_group")
         except Exception as e:
             logger.error(f"publish_pending_lessons commit failed: {e}")
+    if failed:
+        # Тихая остановка неотличима от «новых уроков нет» — ровно поэтому
+        # публикация стояла одиннадцать дней при единственном logger.error.
+        names = ", ".join(f"#{lid}: {why}" for lid, why in failed[:5])
+        await _escalate_vlad(
+            f"⚠️ Уроки не ушли в Bug Lessons ({len(failed)} из {len(capped)}):\n{names}\n"
+            f"Опубликовано за этот заход: {posted}."
+        )
     if reply_func:
         extra = f" (ещё {len(pending) - posted} в очереди)" if len(pending) > posted else ""
-        await reply_func(f"✅ Опубликовано {posted} новых уроков в Bug Lessons{extra}")
+        fail_note = f", не ушло {len(failed)}" if failed else ""
+        await reply_func(f"✅ Опубликовано {posted} новых уроков в Bug Lessons{extra}{fail_note}")
     return posted
 
 
