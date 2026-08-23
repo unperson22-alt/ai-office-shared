@@ -79,6 +79,37 @@ class TestRetryableStaysRetryable(unittest.TestCase):
         self.assertEqual(unrecoverable_provider_error("", None, "   "), "")
 
 
+class TestFailureAlwaysNamesSomething(unittest.TestCase):
+    """Провал обязан назвать того, кто упал, — даже когда тот промолчал.
+
+    23.08.2026 в офис-группу пришло «Причина провала: Девви вернул отказ:
+    ERROR: — фан-аут не запускался». После двоеточия не было НИЧЕГО. Причина:
+    last_err = str(e), а у всех таймаутов httpx и asyncio строковое
+    представление пустое. Самый вероятный отказ воркера давал самое бесполезное
+    сообщение, и выглядело оно как обрезанный текст, а не как молчание.
+    """
+
+    def test_every_silent_exception_still_names_its_class(self):
+        import asyncio as _a
+        import httpx as _h
+        for exc in (_h.ReadTimeout(""), _h.ConnectTimeout(""), _h.PoolTimeout(""),
+                    _h.WriteTimeout(""), _h.RemoteProtocolError(""), _a.TimeoutError()):
+            got = dp.describe_exc(exc)
+            self.assertTrue(got.strip(), f"{type(exc).__name__} дал пустое описание")
+            self.assertIn(type(exc).__name__, got)
+
+    def test_a_talking_exception_is_quoted_not_replaced(self):
+        got = dp.describe_exc(ValueError("HTTP 200, но поле response пустое"))
+        self.assertIn("поле response пустое", got)
+        self.assertIn("ValueError", got)
+
+    def test_the_description_is_never_empty_for_anything(self):
+        class Mute(Exception):
+            def __str__(self):
+                return "   "
+        self.assertTrue(dp.describe_exc(Mute()).strip())
+
+
 # ── Поведение самой цепочки: обрыв сразу и без сожжённого раунда ─────────────
 # coder.py не импортируется — функции достаются из AST, как в test_ricky_code.
 

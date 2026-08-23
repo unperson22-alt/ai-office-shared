@@ -55,7 +55,16 @@ _WORKER_NAME = {
     SEKKY_URL: "секки", SCRIBBI_URL: "скрибби",
 }
 
-_TIMEOUT       = float(os.getenv("DEV_WORKER_TIMEOUT", "120"))   # на один вызов воркера
+# Терпение вызывающего обязано покрывать работу вызываемого, иначе бюджет
+# вызываемого — мёртвый код. Внутри ОДНОГО HTTP-запроса воркер делает до четырёх
+# обращений к модели: первое + до WORKER_VERIFY_ATTEMPTS(=3) переписываний по
+# конкретной ошибке компилятора. Каждое рождает файл целиком, то есть десятки
+# секунд. При 120 с вызывающий сдавался раньше, чем воркер успевал вторую
+# попытку, — и цикл самопроверки из урока #82, ради которого отдел вообще начал
+# компилировать код, был недостижим ровно тогда, когда он нужен: когда код
+# требует правки. Замер 23.08: Девви отвечал в среднем за ~96 с, вплотную к
+# прежнему потолку.
+_TIMEOUT       = float(os.getenv("DEV_WORKER_TIMEOUT", "300"))   # на один вызов воркера
 _MAX_RETRIES   = int(os.getenv("DEV_WORKER_RETRIES", "2"))       # доп. попытки сверх первой
 _MAX_CONC      = int(os.getenv("DEV_MAX_CONCURRENCY", "6"))      # одновременных вызовов на процесс
 
@@ -105,6 +114,26 @@ def unrecoverable_provider_error(*texts) -> str:
         if needle in blob:
             return reason
     return ""
+
+
+def describe_exc(e: BaseException) -> str:
+    """Описание исключения, которое НИКОГДА не пустое.
+
+    23.08.2026 в офис-группу пришло «Причина провала: Девви вернул отказ:
+    ERROR: — фан-аут не запускался». После двоеточия не было ничего: код брал
+    `str(e)`, а у httpx.ReadTimeout, ConnectTimeout, PoolTimeout, WriteTimeout,
+    RemoteProtocolError и asyncio.TimeoutError строковое представление ПУСТОЕ.
+    То есть самый вероятный отказ воркера — таймаут — давал самое бесполезное
+    сообщение из возможных, и выглядело оно как обрезанный текст, а не как
+    молчание.
+
+    Инвариант офиса: провал называет того, кто упал. Сказала дальняя сторона
+    почему — цитируем; промолчала — говорим, что промолчала, и называем хотя бы
+    класс сбоя. Пустая строка не делает ни того, ни другого.
+    """
+    name = type(e).__name__
+    text = str(e).strip()
+    return f"{name}: {text}" if text else f"{name} без сообщения"
 
 
 def _short_summary(text: str, limit: int = 160) -> str:
@@ -173,9 +202,13 @@ async def _call_worker(
                                    _short_summary(out))
             return out
         except Exception as e:
-            last_err = str(e)
+            last_err = describe_exc(e)
+            if isinstance(e, (httpx.TimeoutException, asyncio.TimeoutError)):
+                # Таймаут — единственный класс, где полезен не текст, а цифра:
+                # сколько ждали. Без неё «не ответил» неотличимо от «упал».
+                last_err = f"{last_err} — не ответил за {_TIMEOUT:.0f} с"
             logger.warning("[dev_pipeline] %s attempt %d/%d failed: %s",
-                           name, attempt + 1, _MAX_RETRIES + 1, e)
+                           name, attempt + 1, _MAX_RETRIES + 1, last_err)
             if attempt < _MAX_RETRIES:
                 await asyncio.sleep(2 ** attempt)   # 1s, 2s, 4s ...
 

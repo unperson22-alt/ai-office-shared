@@ -1945,5 +1945,24 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-08-23T14:32:03.936646+00:00"
+  },
+  {
+    "id": 115,
+    "date": "2026-08-23",
+    "bot": "ai-office-shared (shared/dev_pipeline.py)",
+    "layer": "error reporting / timeouts",
+    "title": "The most likely worker failure produced the least informative message, and the caller's patience made the worker's retry budget unreachable",
+    "symptom": "The office group received «⛔ Cilly: баг в villy-bot — команда за 3 попыток не дала код… Причина провала: Девви вернул отказ: ERROR: — фан-аут не запускался». After the colon there was nothing at all. The report named the failing stage correctly but said nothing about why it failed, and the empty tail reads as a truncated message rather than as silence.",
+    "root_cause": "Two defects, one visible and one hidden behind it. (a) _call_worker stored `last_err = str(e)`, and every timeout in this stack stringifies to the empty string: httpx.ReadTimeout, ConnectTimeout, PoolTimeout, WriteTimeout, RemoteProtocolError and asyncio.TimeoutError all have empty __str__. A timeout is the single most likely way a worker call fails, so the most common failure produced the least usable message. (b) The timeout itself was 120 s, while inside ONE HTTP request the worker makes up to four model calls — the first plus up to WORKER_VERIFY_ATTEMPTS=3 rewrites against a concrete compiler error — each generating a whole source file. The caller therefore gave up before the callee could finish its second attempt, which means the self-correction loop introduced in lesson #82 was unreachable exactly when it was needed: when the code required fixing. Measurement on 23.08 put Devvy's typical response at ~96 s, flush against the old ceiling.",
+    "why_architecture": "The reporting defect survived because an empty string is a valid value that looks like data: nothing crashed, nothing was logged as missing, and a reader sees «ERROR: » and assumes truncation somewhere downstream. The timeout defect survived because it is a constant in one module silently disabling a loop in another: nobody owns the relationship between a caller's patience and a callee's declared budget, and neither file mentions the other. Both are invisible to tests that check behaviour on the happy path.",
+    "fix": "describe_exc() never returns an empty description: it prefixes the exception class and falls back to «<Class> без сообщения» when __str__ is empty, so a silent failure is reported as silence rather than as an empty quote. Timeouts additionally carry the number that matters — how long we waited — because «did not answer» is otherwise indistinguishable from «crashed». DEV_WORKER_TIMEOUT's default moved from 120 to 300 s so the caller's patience covers the callee's declared budget; the value stays env-tunable. Tests assert that every silent exception in this stack still names its class, that a talking exception is quoted rather than replaced, and that no exception can produce a blank description.",
+    "status": "fixed",
+    "prevention": "When reporting a failure, never interpolate str(e) directly: many exception classes carry their meaning only in the type name, and an empty message renders as a truncated one. Say the class, and say explicitly when the far side was silent. And whenever one component sets a deadline for another, check that the deadline exceeds the other's own declared retry budget — otherwise the inner budget is dead code, and it dies silently, in exactly the cases it was written for.",
+    "cause": "design",
+    "tag": "orchestration",
+    "anchors": [
+      "ai_office_shared/shared/dev_pipeline.py:describe_exc"
+    ],
+    "posted_to_group": false
   }
 ]
