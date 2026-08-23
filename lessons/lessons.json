@@ -1511,7 +1511,8 @@
     "prevention": "If a feature depends on a platform delivering an event, verify the platform delivers it before writing the handler — and when the answer is no, delete the handler rather than leaving it as documentation of an intention. Any message that crosses a service boundary must name its sender; a bot that has to infer the author will invent one, confidently. Identity of people and services is data with exactly one owner, never prose duplicated across prompts, and never a summary an LLM regenerates from logs — a display name is not a person. When a handler has a suppression gate like notify, enumerate every caller before adding a new one: Milly and Tilly were paying for replies nobody ever saw. And a registry copied into a second place is already drifting; derive it instead.",
     "cause": "platform-assumption + missing field in service contract + identity duplicated across prompts",
     "tag": "inter-bot",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T14:30:39.145201+00:00"
   },
   {
     "id": 92,
@@ -1527,7 +1528,8 @@
     "prevention": "A rejection path must log. If a guard can end a request, it owes one line naming who and why — otherwise 'working as designed' and 'completely broken' look identical to whoever is debugging. When a defect is closed in a shared helper, grep for the BEHAVIOUR across every repo, not for the helper's name: the copies that never imported it are exactly the ones that will still be broken. And when access is granted by an env var rather than by code, note that in the code near the gate — otherwise the next person greps the repo, finds nothing, and concludes the whitelist is empty.",
     "cause": "silent guard + shared-helper fix not swept across hand-written copies",
     "tag": "observability",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T14:30:39.145201+00:00"
   },
   {
     "id": 93,
@@ -1543,12 +1545,13 @@
     "prevention": "Whoever did the work does not certify it. If a criterion can be measured by code, it must be a gate rather than a sentence, or the check will be written as prose and pass by default. A verification step that cannot run is a failure, not a skip. Every retry loop needs a counter and a ceiling that ends in a human, decided before the loop is written. And reach for a bigger model only after checking that the failure is actually about reasoning — missing tools, missing fields and missing logs look like stupidity and are not.",
     "cause": "design",
     "tag": "orchestration",
-    "posted_to_group": false,
+    "posted_to_group": true,
     "anchors": [
       "ai_office_shared/shared/taskboard.py:add_evidence",
       "ai_office_shared/shared/taskboard.py:acceptance_verdict",
       "ai_office_shared/shared/taskboard.py:should_escalate"
-    ]
+    ],
+    "posted_at": "2026-08-23T14:30:39.145201+00:00"
   },
   {
     "id": 94,
@@ -1564,7 +1567,8 @@
     "prevention": "Breaking changes in shared dependencies must be coordinated with all consuming services. Add a deprecation window and version constraints. Test dependency updates against all dependent bots before deploying to shared packages. Add startup validation for required imports.",
     "cause": "Uncoordinated deployment of ai_office_shared without version synchronization with nelli-bot",
     "tag": "dependency",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T14:30:39.145201+00:00"
   },
   {
     "id": 95,
@@ -1580,11 +1584,12 @@
     "prevention": "Treat every Telegram API call as potentially transient. Implement mandatory retry logic for all external API calls. Add circuit breaker patterns for cascading failure protection. Log and retry on NetworkError; never let a single Bad Gateway crash the service.",
     "cause": "Missing retry mechanism and exponential backoff for transient Telegram API faults",
     "tag": "resilience",
-    "posted_to_group": false,
+    "posted_to_group": true,
     "related": [
       43,
       64
-    ]
+    ],
+    "posted_at": "2026-08-23T14:30:39.145201+00:00"
   },
   {
     "id": 96,
@@ -1600,7 +1605,8 @@
     "prevention": "Adding an import from a pinned package must verify in the same commit that the pin contains the symbol — local linting proves nothing, because the build environment is newer than production. An audit finding needs an owner: if a class of failure is deliberately excluded from auto-fix, it must be escalated instead, never merely printed. A summary line that can contradict its own detail lines is worse than no summary. And when an agent claims it lacks credentials, check the claim against what it did five minutes ago before believing it — missing capability and missing access produce identical-sounding excuses, and only one of them is real.",
     "cause": "process",
     "tag": "dependencies",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T14:30:39.145201+00:00"
   },
   {
     "id": 97,
@@ -1616,7 +1622,8 @@
     "prevention": "Never hand a raw chat message to a generative model — strip the conversational wrapper and translate first. Never let Telegram fetch a third-party URL on our behalf: download the bytes so failures are ours to report. A provider chain must name which provider failed and why, otherwise 'both providers unavailable' hides a missing API token for months.",
     "cause": "copy-pasted helper + untested provider chain",
     "tag": "imagegen",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T14:30:39.145201+00:00"
   },
   {
     "id": 98,
@@ -1632,7 +1639,8 @@
     "prevention": "Treat `await client.post(...)` as incomplete until the status is read. A call that cannot fail visibly will eventually fail invisibly. Never record success before confirming it: appending to a 'delivered' list on the strength of no exception is a lie the logs will repeat back to you during the next incident. And when rolling out authentication across a mesh, audit unchecked callers BEFORE enabling enforcement — the enforcement date is the date they all break at once.",
     "cause": "design",
     "tag": "integration",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T14:30:39.145201+00:00"
   },
   {
     "id": 99,
@@ -1648,8 +1656,9 @@
     "prevention": "When a component's job is to fix others, write down who fixes it, and make every heal path check whether its target is itself. Give every automated alert an upper bound, not just a threshold: the question is not 'is it bad enough to report' but 'have I already reported it'. Prefer SET NX over read-then-write for that bound — two concurrent failures pass a plain check simultaneously. And when a list exists to restrict dangerous automation, do not let a lookup for an unrelated capability consult that list as if it were a registry: the exclusion means 'do not do this automatically', not 'this does not exist'. И проверяй, что идентификатор, взятый из чужого окружения, ещё жив: значение переменной — это чьё-то утверждение о мире, а не сам мир. Один запрос service(id:) с полем deletedAt отделяет рабочий id от мёртвого; без него правдоподобный UUID молча превращает починку в её имитацию.",
     "cause": "design",
     "tag": "self-healing",
-    "posted_to_group": false,
-    "open": "Настоящий service_id Силли неизвестен коду. Требуется Влад: Railway UI → сервис ai-office-shared → id → SELF_SERVICE_ID (Силли) и SILLI_SERVICE_ID (watchdog-bot). До этого автоподъём лидера не работает — как не работал с 30.05."
+    "posted_to_group": true,
+    "open": "Настоящий service_id Силли неизвестен коду. Требуется Влад: Railway UI → сервис ai-office-shared → id → SELF_SERVICE_ID (Силли) и SILLI_SERVICE_ID (watchdog-bot). До этого автоподъём лидера не работает — как не работал с 30.05.",
+    "posted_at": "2026-08-23T14:30:39.145201+00:00"
   },
   {
     "id": 100,
@@ -1665,11 +1674,12 @@
     "prevention": "When you harden a parser, grep for the pattern you just replaced across every caller before closing the task — the duplicate you leave behind is the one that will fail, and it will fail looking like a model problem, not a parsing problem. And never let an automated retry invent the reason for a failure: if the far side reported why it failed, quote it; if it said nothing, say that. A retry loop fed a wrong diagnosis does not converge, it just spends three times as much confirming it.",
     "cause": "design",
     "tag": "parsing",
-    "posted_to_group": false,
+    "posted_to_group": true,
     "anchors": [
       "agents/coder.py:extract_ricky_code",
       "agents/coder.py:ricky_failure_reason"
-    ]
+    ],
+    "posted_at": "2026-08-23T14:30:39.145201+00:00"
   },
   {
     "id": 101,
@@ -1685,7 +1695,8 @@
     "prevention": "Give every store of operational data a query path that returns aggregates, not just a dump — and build it before the incident, because during one you will reach for whatever exists. When a channel truncates, aggregate on the far side of the truncation. And when enumerating 'everything of a kind', derive the list from the data (which keys exist) rather than from a registry (which names we remembered to add): the entries missing from the registry are disproportionately the ones nobody is watching.",
     "cause": "gap",
     "tag": "observability",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T14:30:39.145201+00:00"
   },
   {
     "id": 102,
@@ -1701,7 +1712,8 @@
     "prevention": "When a feature's output is text a model writes, review the exact string that goes into the prompt — print one and read it — before concluding from green telemetry that the feature works. «Pinged, 200 OK» and «said something worth reading» are separate claims needing separate evidence. Two specifics that generalise: an instruction the model cannot possibly satisfy («don't repeat what was said» when it was not shown what was said) is worse than no instruction, because it looks like the requirement is covered; and any threshold that decides whether to act («шуметь ли») needs a companion ceiling that remembers whether it just acted («не шумели ли только что») — the same SET NX + TTL that fixes duplicate alerts.",
     "cause": "design",
     "tag": "prompting",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T14:30:39.145201+00:00"
   },
   {
     "id": 103,
@@ -1717,7 +1729,8 @@
     "prevention": "Before calling a routing complaint a router bug, check whether the bot could have answered without the router at all — compare the router's decision log against the bot's own MSG_IN, and look at who the sender field names: the direct Telegram path carries the raw Telegram display name, the routed path carries the normalized one, so «От: YodkaWayne» and «От: Влад» on the same text is the duplicate, visible at a glance. More generally: when two components both decide the same thing, the cheap fix is to make one of them the only one; when that is not possible, the surviving duplicate needs a ceiling (SET NX + TTL) so that a disagreement costs one wrong answer rather than two competing ones. And when a platform renames a field, grep for the OLD name across every consumer — the code that never mentioned either name is the code that silently lost the feature.",
     "cause": "design",
     "tag": "routing",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T14:30:39.145201+00:00"
   },
   {
     "id": 104,
