@@ -1963,6 +1963,7 @@
     "anchors": [
       "ai_office_shared/shared/dev_pipeline.py:describe_exc"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T16:07:40.507410+00:00"
   }
 ]
