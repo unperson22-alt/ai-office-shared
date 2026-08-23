@@ -27,6 +27,7 @@ from ai_office_shared.shared import taskboard as tb
 from ai_office_shared.shared.json_extract import first_json_object
 from ai_office_shared.shared.verify import extract_code
 from ai_office_shared.shared.target_repo import repo_looks_valid, target_repo
+from ai_office_shared.shared import dev_queue
 from ai_office_shared.shared.file_window import (
     find_regions, summary as file_summary,
 )
@@ -35,7 +36,7 @@ from ai_office_shared.shared.auth import office_auth_middleware, office_headers
 from shared.github_tools import (
     push_file, read_file, list_files, create_repo,
     create_branch, push_file_to_branch, create_pull_request, merge_pull_request, get_pr_by_url,
-    commit_exists,
+    commit_exists, get_checks_status, get_default_branch,
 )
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -488,20 +489,28 @@ async def validate_requirements_pins(content: str) -> str:
     return ""
 
 
-# ── Inline-кнопки апрува (✅/⏭) ──────────────────────────────────────────────
+# ── Inline-кнопки апрува (✅/🕓/⏭) ────────────────────────────────────────────
 # callback_data: "{domain}:{verb}:{ident}". domain: pg (office:pending) | pr (PR-мерж) |
-# wk (weekly). verb: appr | decl. ident помещается в 64 байта (action_id/pr_id короткие).
+# wk (weekly). verb: appr | defer | decl. ident помещается в 64 байта (action_id/pr_id короткие).
 
-def _approval_kb(domain: str, ident: str = "") -> InlineKeyboardMarkup:
-    """Клавиатура ✅ Применить / ⏭ Отклонить для предложения."""
+def _approval_kb(domain: str, ident: str = "", *, defer: bool = False) -> InlineKeyboardMarkup:
+    """Клавиатура ✅ Применить / (🕓 Отложить) / ⏭ Отклонить для предложения.
+
+    Третья кнопка появляется ТОЛЬКО там, где «потом» — осмысленный ответ, то
+    есть у заявок из входящей очереди отдела. «Отклонить» там означало бы «эта
+    доработка не нужна вообще», и подсовывать его вместо «не сейчас» — значит
+    терять заявки, которые владелец просто отложил.
+    """
     suffix = f":{ident}" if ident else ""
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Применить", callback_data=f"{domain}:appr{suffix}"),
-        InlineKeyboardButton(text="⏭ Отклонить", callback_data=f"{domain}:decl{suffix}"),
-    ]])
+    row = [InlineKeyboardButton(text="✅ Применить", callback_data=f"{domain}:appr{suffix}")]
+    if defer:
+        row.append(InlineKeyboardButton(text="🕓 Отложить", callback_data=f"{domain}:defer{suffix}"))
+    row.append(InlineKeyboardButton(text="⏭ Отклонить", callback_data=f"{domain}:decl{suffix}"))
+    return InlineKeyboardMarkup(inline_keyboard=[row])
 
 
-async def send_proposal(text: str, domain: str, ident: str = "", *, chat_id: int = 0) -> bool:
+async def send_proposal(text: str, domain: str, ident: str = "", *, chat_id: int = 0,
+                        defer: bool = False) -> bool:
     """
     Шлёт предложение с inline-кнопками НАПРЯМУЮ (минуя буфер reply_func).
     chat_id=0 → в офис-группу (автономные предложения). Возвращает True при успехе.
@@ -514,7 +523,7 @@ async def send_proposal(text: str, domain: str, ident: str = "", *, chat_id: int
         return False
     try:
         sent = await bot.send_message(chat_id=target, text=text,
-                                      reply_markup=_approval_kb(domain, ident))
+                                      reply_markup=_approval_kb(domain, ident, defer=defer))
         await remember_my_message(sent)
         return True
     except Exception as e:
@@ -1690,11 +1699,10 @@ async def outbound_paused() -> bool:
 # голое «awaiting_approval», а потом «done» — слово, за которым нечего
 # перепроверить. Теперь то же самое пишется критериями ДО работы и уликами
 # после, поэтому tb.update_status(..., "done") может отказать, если улик нет.
-DEV_ACCEPTANCE = [
-    "финальный код компилируется",
-    "ревью Рикки без вердикта NEEDS_FIX",
-    "файл не схлопнулся (гейт размера)",
-]
+# Один источник правды с dev_queue.GATE_ACCEPTANCE: две копии этих строк
+# разъехались бы молча — улика ищется по тексту критерия, и задача просто
+# перестала бы закрываться, не сказав почему.
+DEV_ACCEPTANCE = list(dev_queue.GATE_ACCEPTANCE)
 
 
 def extract_ricky_code(ricky_result: str) -> str:
@@ -1792,6 +1800,129 @@ async def close_task_reported(redis_client, task_id: str, result: str = "") -> b
     return ok
 
 
+MAX_DEV_ATTEMPTS = 3
+
+
+async def run_dev_chain(
+    task_text: str, *, repo: str, file_path: str, context: str,
+    board_id: str, task_id: str, redis_client,
+    max_attempts: int = MAX_DEV_ATTEMPTS, stage_label: str = "попытка",
+    seed_feedback: str = "", on_attempt_fail=None,
+) -> dict:
+    """
+    Один прогон отдела до прохождения гейта: Девви → [Рикки‖Тести‖Секки] → Скрибби,
+    с ретраями и конкретным фидбеком, и с уликами на доске в конце.
+
+    Зачем функция: этот цикл был скопирован ДВАЖДЫ — в автофиксе краша и в
+    intent'е dev_task, — а очередь заявок стала бы третьей копией. Ровно на этом
+    16.08.2026 сгорел день: hardened-парсер жил в shared, а наивный срез остался
+    у двух вызывающих, и «Рикки не вернул код» повторялось часами, пока Рикки
+    возвращал код (урок #100). Дублирующаяся копия — это та, которую забудут
+    починить.
+
+    Args:
+        seed_feedback: причина, с которой заходим на ПЕРВУЮ попытку (например
+            имена упавших джоб CI прошлого раунда). Пусто — обычный первый заход.
+        on_attempt_fail: async (attempt, max_attempts, feedback) -> None —
+            вызывается после каждой отклонённой попытки. Провал колбэка не
+            останавливает работу.
+
+    Returns:
+        dict: ok, final_code, commit_msg, pipe, attempts, reason,
+              compile_ok, review_ok, shrink_info, ricky_result, se_info
+    """
+    from ai_office_shared.shared.dev_pipeline import run_dev_pipeline
+    from ai_office_shared.shared.dev_activity import publish_activity
+
+    uid = int(os.getenv("YOUR_TELEGRAM_ID", "391077101"))
+
+    final_code = ""
+    review_ok = compile_ok = False
+    shrink_info = ""
+    commit_msg = ""
+    retry_feedback = seed_feedback or ""
+    ricky_result = ""
+    se_info = ""
+    pipe: dict = {}
+    attempt = 0
+
+    while attempt < max_attempts:
+        attempt += 1
+        cur_task = task_text if not retry_feedback else (
+            f"{task_text}\n\n[ПОВТОР #{attempt}] Предыдущая попытка отклонена:\n{retry_feedback}"
+        )
+        await publish_activity(redis_client, task_id, "силли", "plan",
+                               f"{stage_label} {attempt}/{max_attempts}: {repo or '—'}/{file_path}")
+
+        pipe = await run_dev_pipeline(
+            cur_task, repo=repo, file_path=file_path,
+            context=context, user_id=uid,
+            redis_client=redis_client, task_id=task_id,
+        )
+        ricky_result = pipe.get("final_code_artifact", "") or pipe.get("ricky", "")
+        commit_msg = pipe.get("commit_msg", "")
+        final_code = extract_ricky_code(ricky_result)
+
+        # Гейт качества: вердикт Рикки + компиляция + размер файла
+        review_ok = "NEEDS_FIX" not in (ricky_result or "").upper()
+        compile_ok = True
+        se_info = ""
+        if final_code and file_path.endswith(".py"):
+            try:
+                compile(final_code, file_path, "exec")
+            except SyntaxError as _se:
+                compile_ok = False
+                se_info = f"{_se.msg}, строка {_se.lineno}"
+        # Валидный, но схлопнувшийся файл (инцидент 5766 → 8 строк) не проходит
+        shrink_info = file_shrink_guard(context, final_code) if final_code else ""
+
+        if final_code and review_ok and compile_ok and not shrink_info:
+            retry_feedback = ""
+            break
+
+        # Провал гейта: считаем попытку, формируем фидбек на следующий заход
+        await tb.incr_attempts(redis_client, board_id)
+        if not final_code:
+            retry_feedback = ricky_failure_reason(ricky_result)
+        elif not review_ok:
+            retry_feedback = "Рикки вернул NEEDS_FIX — код требует доработки. " + ricky_result[:600]
+        elif not compile_ok:
+            retry_feedback = f"Финальный код не компилируется: {se_info}. Похоже воркер обрезал код."
+        else:
+            retry_feedback = (f"Гейт размера: {shrink_info}. "
+                              f"Верни ПОЛНЫЙ файл целиком, ничего не выбрасывая.")
+        if on_attempt_fail is not None:
+            try:
+                await on_attempt_fail(attempt, max_attempts, retry_feedback)
+            except Exception as e:
+                logger.warning(f"[dev_chain] колбэк провала упал: {e}")
+
+    ok = bool(final_code and review_ok and compile_ok and not shrink_info)
+
+    # Результаты гейта → улики на доске. Пишем ВСЕГДА, а не только на успехе:
+    # проваленная проверка — тоже факт, и без неё на доске не видно, почему
+    # задача не закрывается.
+    await record_dev_gate_evidence(
+        redis_client, board_id, final_code=final_code, compile_ok=compile_ok,
+        se_info=se_info, review_ok=review_ok, ricky_result=ricky_result,
+        shrink_info=shrink_info,
+    )
+
+    return {
+        "ok": ok,
+        "final_code": final_code,
+        "commit_msg": commit_msg,
+        "pipe": pipe,
+        "attempts": attempt,
+        "reason": retry_feedback,
+        "compile_ok": compile_ok,
+        "review_ok": review_ok,
+        "shrink_info": shrink_info,
+        "ricky_result": ricky_result,
+        "se_info": se_info,
+    }
+
+
 async def notify_office(text: str):
     if not OFFICE_CHAT_ID:
         return
@@ -1848,11 +1979,8 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
     # Девви → [Рикки ‖ Тести ‖ Секки] → Скрибби. Предложение в офис уходит
     # ТОЛЬКО после прохождения гейта (вердикт Рикки ≠ NEEDS_FIX + compile()).
     # Так аудит становится командным, а в чат не попадает неотревьюенный код.
-    from ai_office_shared.shared.dev_pipeline import run_dev_pipeline
-    from ai_office_shared.shared.dev_activity import publish_activity
     import uuid as _uuid
 
-    uid      = int(os.getenv("YOUR_TELEGRAM_ID", "391077101"))
     r_tb     = await get_redis()
     _task_id = _uuid.uuid4().hex[:12]
     board_id = await tb.create_task(
@@ -1866,65 +1994,16 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
     # что изменить→ожидаемый результат→критерий приёмки. Fail-silent → базовая формулировка.
     devvy_task = await build_precise_dev_task(analysis, source_code, repo, affected)
 
-    MAX_DEV_ATTEMPTS = 3
-    final_code = ""
-    review_ok = compile_ok = False
-    shrink_info = ""
-    commit_msg = ""
-    retry_feedback = ""
-    attempt = 0
-    ricky_result = ""
-
-    while attempt < MAX_DEV_ATTEMPTS:
-        attempt += 1
-        cur_task = devvy_task if not retry_feedback else (
-            f"{devvy_task}\n\n[ПОВТОР #{attempt}] Предыдущая попытка отклонена:\n{retry_feedback}"
-        )
-        await publish_activity(r_tb, _task_id, "силли", "plan",
-                               f"аудит-фикс попытка {attempt}/{MAX_DEV_ATTEMPTS}: {repo}/{affected}")
-        pipe = await run_dev_pipeline(
-            cur_task, repo=repo, file_path=affected,
-            context=source_code, user_id=uid,
-            redis_client=r_tb, task_id=_task_id,
-        )
-        ricky_result = pipe.get("final_code_artifact", "") or pipe.get("ricky", "")
-        commit_msg = pipe.get("commit_msg", "")
-        final_code = extract_ricky_code(ricky_result)
-
-        review_ok = "NEEDS_FIX" not in (ricky_result or "").upper()
-        compile_ok = True
-        _se_info = ""
-        if final_code and affected.endswith(".py"):
-            try:
-                compile(final_code, affected, "exec")
-            except SyntaxError as _se:
-                compile_ok = False
-                _se_info = f"{_se.msg}, строка {_se.lineno}"
-        shrink_info = file_shrink_guard(source_code, final_code) if final_code else ""
-
-        if final_code and review_ok and compile_ok and not shrink_info:
-            break
-        await tb.incr_attempts(r_tb, board_id)
-        if not final_code:
-            retry_feedback = ricky_failure_reason(ricky_result)
-        elif not review_ok:
-            retry_feedback = "Рикки вернул NEEDS_FIX — код требует доработки. " + ricky_result[:600]
-        elif not compile_ok:
-            retry_feedback = f"Финальный код не компилируется: {_se_info}. Похоже воркер обрезал код."
-        else:
-            retry_feedback = (f"Гейт размера: {shrink_info}. "
-                              f"Верни ПОЛНЫЙ файл целиком, ничего не выбрасывая.")
-
-    # Результаты гейта → улики на доске. Пишем ВСЕГДА, а не только на успехе:
-    # проваленная проверка — тоже факт, и без неё на доске не видно, почему
-    # задача не закрывается.
-    await record_dev_gate_evidence(
-        r_tb, board_id, final_code=final_code, compile_ok=compile_ok,
-        se_info=_se_info, review_ok=review_ok, ricky_result=ricky_result,
-        shrink_info=shrink_info,
+    chain = await run_dev_chain(
+        devvy_task, repo=repo, file_path=affected, context=source_code,
+        board_id=board_id, task_id=_task_id, redis_client=r_tb,
+        stage_label="аудит-фикс попытка",
     )
+    final_code     = chain["final_code"]
+    retry_feedback = chain["reason"]
+    pipe           = chain["pipe"]
 
-    if final_code and review_ok and compile_ok and not shrink_info:
+    if chain["ok"]:
         # Гейт пройден — стейджим деплой на /approve (контракт deploy_fix без изменений).
         fix_id = await stage_pending("deploy_fix", {
             "service_id": service_id,
@@ -5632,11 +5711,9 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
         # Девви → [Рикки ‖ Тести ‖ Секки] → Скрибби. При провале гейта
         # (NEEDS_FIX / не компилируется / нет кода) — авто-повтор с фидбеком,
         # до MAX_DEV_ATTEMPTS. Исчерпали — blocked + эскалация (как fix_count>=3).
-        from ai_office_shared.shared.dev_pipeline import run_dev_pipeline
         from ai_office_shared.shared.dev_activity import publish_activity
         import uuid as _uuid
 
-        uid      = int(os.getenv("YOUR_TELEGRAM_ID", "391077101"))
         _r_act   = await get_redis()
         _task_id = _uuid.uuid4().hex[:12]
 
@@ -5648,75 +5725,27 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
             acceptance=DEV_ACCEPTANCE,   # заморожены ДО работы
         ) or _task_id
 
-        MAX_DEV_ATTEMPTS = 3
-        final_code = ""
-        review_ok = compile_ok = False
-        shrink_info = ""
-        commit_msg = ""
-        results: dict = {}
-        retry_feedback = ""
-        attempt = 0
-        # Инициализируем то, что ниже читают улики: обе переменные присваиваются
-        # внутри цикла, и если он оборвётся до присваивания — здесь будет
-        # NameError на пути отчёта, а не на пути работы.
-        ricky_result = ""
-        _se_info = ""
+        async def _attempt_failed(attempt_no: int, total: int, feedback: str):
+            await tb.update_status(_r_act, board_id, "needs_fix", result=feedback)
+            await reply_func(f"🛠 Попытка {attempt_no}/{total} отклонена: {feedback[:160]}")
 
-        while attempt < MAX_DEV_ATTEMPTS:
-            attempt += 1
-            cur_task = devvy_task if not retry_feedback else (
-                f"{devvy_task}\n\n[ПОВТОР #{attempt}] Предыдущая попытка отклонена:\n{retry_feedback}"
-            )
-            await publish_activity(_r_act, _task_id, "силли", "plan",
-                                   f"попытка {attempt}/{MAX_DEV_ATTEMPTS}: {dev_repo or '—'}/{dev_file_path}")
-
-            pipe = await run_dev_pipeline(
-                cur_task, repo=dev_repo, file_path=dev_file_path,
-                context=file_context, user_id=uid,
-                redis_client=_r_act, task_id=_task_id,
-            )
-            results = {
-                "Девви":   pipe.get("devvy", "")   or "⚠️ нет ответа",
-                "Рикки":   pipe.get("ricky", "")   or "⚠️ нет ответа",
-                "Тести":   pipe.get("testi", "")   or "⚠️ нет ответа",
-                "Секки":   pipe.get("sekky", "")   or "⚠️ нет ответа",
-                "Скрибби": pipe.get("scribbi", "") or "⚠️ нет ответа",
-            }
-            commit_msg = pipe.get("commit_msg", "")
-
-            # Финальный код — из ревью Рикки (FINAL_CODE блок), иначе из кода Девви
-            ricky_result = pipe.get("final_code_artifact", "") or pipe.get("ricky", "")
-            final_code = extract_ricky_code(ricky_result)
-
-            # Гейт качества: вердикт Рикки + компиляция + размер файла
-            review_ok = "NEEDS_FIX" not in (ricky_result or "").upper()
-            compile_ok = True
-            _se_info = ""
-            if final_code and dev_file_path.endswith(".py"):
-                try:
-                    compile(final_code, dev_file_path, "exec")
-                except SyntaxError as _se:
-                    compile_ok = False
-                    _se_info = f"{_se.msg}, строка {_se.lineno}"
-            # Валидный, но схлопнувшийся файл (инцидент 5766 → 8 строк) не проходит
-            shrink_info = file_shrink_guard(file_context, final_code) if final_code else ""
-
-            if final_code and review_ok and compile_ok and not shrink_info:
-                break  # успех — выходим из цикла ретраев
-
-            # Провал гейта: считаем попытку, формируем фидбек на следующий заход
-            await tb.incr_attempts(_r_act, board_id)
-            if not final_code:
-                retry_feedback = ricky_failure_reason(ricky_result)
-            elif not review_ok:
-                retry_feedback = "Рикки вернул NEEDS_FIX — код требует доработки. " + ricky_result[:600]
-            elif not compile_ok:
-                retry_feedback = f"Финальный код не компилируется: {_se_info}. Похоже воркер обрезал код."
-            else:
-                retry_feedback = (f"Гейт размера: {shrink_info}. "
-                                  f"Верни ПОЛНЫЙ файл целиком, ничего не выбрасывая.")
-            await tb.update_status(_r_act, board_id, "needs_fix", result=retry_feedback)
-            await reply_func(f"🛠 Попытка {attempt}/{MAX_DEV_ATTEMPTS} отклонена: {retry_feedback[:160]}")
+        chain = await run_dev_chain(
+            devvy_task, repo=dev_repo, file_path=dev_file_path, context=file_context,
+            board_id=board_id, task_id=_task_id, redis_client=_r_act,
+            on_attempt_fail=_attempt_failed,
+        )
+        final_code     = chain["final_code"]
+        commit_msg     = chain["commit_msg"]
+        retry_feedback = chain["reason"]
+        attempt        = chain["attempts"]
+        pipe           = chain["pipe"]
+        results = {
+            "Девви":   pipe.get("devvy", "")   or "⚠️ нет ответа",
+            "Рикки":   pipe.get("ricky", "")   or "⚠️ нет ответа",
+            "Тести":   pipe.get("testi", "")   or "⚠️ нет ответа",
+            "Секки":   pipe.get("sekky", "")   or "⚠️ нет ответа",
+            "Скрибби": pipe.get("scribbi", "") or "⚠️ нет ответа",
+        }
 
         # Подзадачи-срез по воркерам — прозрачность доски
         for _name, _res in results.items():
@@ -5725,15 +5754,9 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                                  f"{_name}: {_res[:60].replace(chr(10), ' ')}",
                                  assignee=_name.lower(), status=_st)
 
-        # Результаты гейта → улики на доске (см. record_dev_gate_evidence).
-        await record_dev_gate_evidence(
-            _r_act, board_id, final_code=final_code, compile_ok=compile_ok,
-            se_info=_se_info, review_ok=review_ok, ricky_result=ricky_result,
-            shrink_info=shrink_info,
-        )
-
         # ── 3. Гейт: успех → стейджим деплой на /approve; провал → эскалация ─
-        if final_code and review_ok and compile_ok and not shrink_info and dev_repo and dev_file_path:
+        # (улики по гейту записал run_dev_chain — см. record_dev_gate_evidence)
+        if chain["ok"] and dev_repo and dev_file_path:
             action_id = await stage_pending("deploy_devtask", {
                 "repo": dev_repo, "path": dev_file_path, "code": final_code,
                 "commit_msg": commit_msg or f"feat: {devvy_task[:60]}",
@@ -6217,6 +6240,22 @@ async def _apply_pending_action(entry: dict) -> str:
             return f"✅ Фикс применён ({payload['service_name']}), {status}"
 
         if atype == "deploy_devtask":
+            # Правило #70 стояло только в safe_autonomous_push, то есть закрывало
+            # push_code/fix_bot/agentic_task. Сюда его не принесли, и dev_task на
+            # ai-office-shared/agents/coder.py доходил бы до пуша в main — ровно
+            # тот путь, которым 01.07.2026 лёг весь офис. Запрет должен стоять у
+            # КАЖДОГО пишущего пути, а не у того, где о нём вспомнили.
+            _self_edit = dev_queue.self_edit_refusal(payload.get("repo", ""),
+                                                     payload.get("path", ""))
+            if _self_edit:
+                if task_id:
+                    await tb.update_status(r, task_id, "blocked",
+                                           result=_self_edit, escalated=True)
+                asyncio.create_task(append_ops_log(
+                    "dev_task push BLOCKED (self-edit)", payload.get("repo", ""),
+                    payload.get("path", ""),
+                ))
+                return _self_edit
             # Последний рубеж: даже заапрувленный код не пушим, если он
             # схлопывает существующий файл (см. инцидент coder.py 5766 → 8 строк).
             try:
@@ -6247,6 +6286,14 @@ async def _apply_pending_action(entry: dict) -> str:
                 await close_task_reported(r, task_id, f"{action}: {url}")
             return (f"✅ Код запушен в {payload['repo']}/{payload['path']} ({action}) — "
                     f"Railway задеплоит автоматически.\n{url}")
+
+        if atype == "dev_queue_run":
+            # Цепочка отдела идёт минутами — в callback'е её держать нельзя.
+            # Фон докладывает о каждом исходе сам (см. _run_queued_dev_task).
+            asyncio.create_task(_run_queued_dev_task(payload, task_id))
+            return (f"🚀 Отдел взял заявку в работу: "
+                    f"{payload.get('repo','?')}/{payload.get('file_path','?')}.\n"
+                    f"Напишут код, откроют PR, дождутся CI — доложу по готовности.")
 
         if atype == "update_instruction":
             ok = await set_bot_instruction(
@@ -6515,11 +6562,24 @@ async def cb_approval(cb: CallbackQuery):
             except Exception:
                 pass
             return
+        task_id = entry.get("task_id", "") if isinstance(entry, dict) else ""
+        if verb == "defer":
+            # «Не сейчас», а не «не надо»: задача остаётся open и вернётся в
+            # очередь сама. Спрашивать заново раньше, чем через сутки, значит
+            # превращать вопрос в спам, а спам — в кнопку, которую жмут не глядя.
+            r_defer = await get_redis()
+            await dev_queue.snooze(r_defer, task_id)
+            await dev_queue.clear_asked(r_defer, task_id)
+            await dev_queue.release_claim(r_defer, task_id)
+            await mark_finding(ident, "skipped")
+            await cb.answer("Отложено на сутки")
+            await _finish_cb(cb, "🕓 Отложено на сутки — вернусь с этим вопросом позже")
+            return
         if verb == "decl":
-            task_id = entry.get("task_id", "") if isinstance(entry, dict) else ""
             if task_id:
                 await tb.update_status(await get_redis(), task_id, "rejected",
                                        result="отклонено кнопкой")
+                await dev_queue.clear_asked(await get_redis(), task_id)
             await mark_finding(ident, "skipped")
             await cb.answer("Отклонено")
             await _finish_cb(cb, "⏭ Отклонено Владом")
@@ -7352,6 +7412,308 @@ async def _review_quality_and_routing(r):
                 await notify_office(f"🧭 {title}. Завёл задачу на доске.")
 
 
+# ── Входящая дверь отдела разработки ─────────────────────────────────────────
+# Заявка от бота ([DEV_FEATURE:…] → request_dev_feature) ложилась на доску со
+# status="open" и лежала: run_dev_pipeline звали только автофикс краша и интент
+# dev_task по явной просьбе человека, а management_tick смотрел на уже взятое в
+# работу. Отдел был, входящей двери не было — и «🛠 Запрос на доработку» в чате
+# оставался уведомлением, а не задачей.
+#
+# Дверь устроена так: очередь спрашивает владельца ОДИН раз кнопками, и работу
+# запускает его ответ. Решение остаётся за ним, исполнение уходит из его рук.
+
+CI_POLL_SEC     = int(os.getenv("CILLY_CI_POLL_SEC", "20"))    # период опроса check-runs
+CI_WAIT_SEC     = int(os.getenv("CILLY_CI_WAIT_SEC", "600"))   # потолок ожидания CI
+MAX_CI_ROUNDS   = int(os.getenv("CILLY_CI_ROUNDS", "2"))       # заходов «красный CI → переделать»
+
+
+def _main_file_for_repo(repo: str) -> str:
+    """Главный файл репозитория по SERVICES. Неизвестный репо → bot.py."""
+    for _repo, _main in SERVICES.values():
+        if _repo == repo:
+            return _main
+    return "bot.py"
+
+
+async def _wait_for_ci(repo: str, ref: str) -> tuple:
+    """
+    Дождаться вердикта CI по ветке. Возвращает (состояние, упавшие_джобы, ссылка).
+
+    Состояние "empty" (ни одного прогона за всё время ожидания) НЕ превращается
+    в "success". Проверка, которая не смогла выполниться, — провал, а не
+    пропуск: иначе репозиторий без workflow автоматически выдавал бы зелёный
+    свет любому коду, и приёмка снова стала бы словом без содержания.
+    """
+    deadline = time.time() + CI_WAIT_SEC
+    state, failed, url = "empty", [], ""
+    while time.time() < deadline:
+        state, failed, url = await get_checks_status(repo, ref)
+        if state in ("success", "failure"):
+            return state, failed, url
+        await asyncio.sleep(CI_POLL_SEC)
+    return state, failed, url
+
+
+async def _run_queued_dev_task(payload: dict, board_id: str) -> None:
+    """
+    Заявка из очереди — от подтверждения владельца до зелёного CI.
+
+    Живёт в фоне: цепочка отдела идёт минутами, а держать в ней Telegram-callback
+    нельзя. Обо всех исходах докладывает сама — молчаливый фон неотличим от
+    зависшего.
+    """
+    repo      = payload.get("repo", "")
+    file_path = payload.get("file_path") or "bot.py"
+    task_text = payload.get("task_text", "")
+    r = await get_redis()
+
+    refusal = dev_queue.self_edit_refusal(repo, file_path)
+    if refusal:
+        await tb.update_status(r, board_id, "blocked", result=refusal, escalated=True)
+        await _escalate_vlad(refusal)
+        return
+
+    branch  = f"cilly/dev-{board_id}"
+    pr_url  = ""
+    pr_num  = 0
+    ci_feedback = ""
+
+    try:
+        await tb.update_status(r, board_id, "in_progress")
+
+        for ci_round in range(1, MAX_CI_ROUNDS + 1):
+            # Файл читаем ЗАНОВО на каждом заходе и ИЗ РАБОЧЕЙ ВЕТКИ, как только
+            # она появилась: после первого пуша правка живёт там, и переделка
+            # должна идти от неё. Читая main, второй заход правил бы текст,
+            # который уже никто не правит, а гейт размера сравнивал бы с ним.
+            try:
+                context = await read_file(repo, file_path,
+                                          ref=branch if pr_num else "")
+            except Exception as e:
+                await tb.update_status(r, board_id, "blocked",
+                                       result=f"не смог прочитать {repo}/{file_path}: {e}",
+                                       escalated=True)
+                await _escalate_vlad(f"⛔ Заявка [{board_id}]: не читается {repo}/{file_path} — {e}")
+                return
+
+            chain = await run_dev_chain(
+                task_text, repo=repo, file_path=file_path, context=context,
+                board_id=board_id, task_id=board_id, redis_client=r,
+                stage_label="заявка попытка", seed_feedback=ci_feedback,
+            )
+            if not chain["ok"]:
+                _fresh = await tb.get_task(r, board_id)
+                await tb.update_status(r, board_id, "blocked",
+                                       result=chain["reason"] or "рабочий код не получен",
+                                       escalated=True)
+                await _escalate_vlad(
+                    f"⛔ Заявка [{board_id}] ({repo}/{file_path}): команда не дала код, "
+                    f"прошедший гейт.\nПричина: {chain['reason'][:200]}\n"
+                    + (tb.format_evidence_report(_fresh) if _fresh else "")
+                )
+                return
+
+            # ── Ветка + PR, а не пуш в main ────────────────────────────────
+            base = await get_default_branch(repo)
+            await create_branch(repo, branch, base)
+            await push_file_to_branch(
+                repo, file_path, chain["final_code"],
+                chain["commit_msg"] or f"feat: {task_text[:60]}", branch,
+            )
+            if not pr_num:
+                pr = await create_pull_request(
+                    repo,
+                    title=(chain["commit_msg"] or f"feat: {task_text[:60]}")[:80],
+                    body=(f"Заявка с доски офиса: `{board_id}`\n\n{task_text}\n\n"
+                          f"Собрано отделом разработки (Девви → Рикки‖Тести‖Секки → Скрибби). "
+                          f"Гейт: compile + ревью без NEEDS_FIX + размер файла. "
+                          f"Мёрдж — только по зелёному CI."),
+                    head_branch=branch, base_branch=base,
+                )
+                pr_num, pr_url = pr["number"], pr["html_url"]
+                await _escalate_vlad(
+                    f"🔧 Заявка [{board_id}]: код готов, PR открыт — {pr_url}\nЖду CI."
+                )
+
+            # ── Единственная проверка, которая исполняет код ────────────────
+            state, failed, checks_url = await _wait_for_ci(repo, branch)
+            if state == "success":
+                await tb.add_evidence(
+                    r, board_id, dev_queue.CI_ACCEPTANCE, passed=True,
+                    proof=f"CI зелёный: {checks_url or pr_url}",
+                    checked_by=tb.VERIFIER_GATE,
+                )
+                break
+
+            proof = ({
+                "failure": f"упали джобы: {', '.join(failed)[:200]}",
+                "empty":   "в репозитории не нашлось ни одного прогона CI",
+            }.get(state) or f"CI не дал вердикта за {CI_WAIT_SEC} с (состояние {state})")
+            await tb.add_evidence(r, board_id, dev_queue.CI_ACCEPTANCE,
+                                  passed=False, proof=f"{proof} — {checks_url or pr_url}",
+                                  checked_by=tb.VERIFIER_GATE)
+            await tb.incr_attempts(r, board_id)
+
+            _fresh = await tb.get_task(r, board_id)
+            if ci_round >= MAX_CI_ROUNDS or (_fresh and tb.should_escalate(_fresh)):
+                await tb.update_status(r, board_id, "blocked",
+                                       result=f"CI не зелёный: {proof}", escalated=True)
+                await _escalate_vlad(
+                    f"⛔ Заявка [{board_id}]: CI не зелёный после {ci_round} захода(ов).\n"
+                    f"{proof}\nPR оставила открытым: {pr_url}\nНужен твой разбор."
+                )
+                return
+            # Красный CI — это NEEDS_FIX, а не «готово». Отдаём команде ИМЕНА
+            # упавших джоб: ретрай, которому не сказали, что именно сломалось,
+            # не сходится, а просто тратит три попытки на подтверждение этого.
+            ci_feedback = (f"CI целевого репозитория не прошёл: {proof}. "
+                           f"Почини именно это и верни ПОЛНЫЙ файл целиком.")
+            await tb.update_status(r, board_id, "needs_fix", result=ci_feedback)
+
+        # ── Зелёный ────────────────────────────────────────────────────────
+        if dev_queue.automerge_enabled():
+            merged = await merge_pull_request(repo, pr_num,
+                                              f"feat: заявка {board_id}")
+            if merged:
+                await close_task_reported(r, board_id, f"смержено в {repo}: {pr_url}")
+                await _escalate_vlad(
+                    f"✅ Заявка [{board_id}] закрыта: CI зелёный, PR смержен — {pr_url}"
+                )
+            else:
+                await tb.update_status(r, board_id, "blocked",
+                                       result=f"PR зелёный, но не мержится: {pr_url}",
+                                       escalated=True)
+                await _escalate_vlad(f"⚠️ Заявка [{board_id}]: PR зелёный, но GitHub "
+                                     f"отказал в мёрдже — {pr_url}")
+        else:
+            # Раскатка: сначала отдел доводит до зелёного PR и останавливается.
+            # Автомёрдж включается флагом после трёх подряд зелёных прогонов.
+            await tb.update_status(r, board_id, "awaiting_approval",
+                                   result=f"зелёный PR готов: {pr_url}")
+            await _escalate_vlad(
+                f"✅ Заявка [{board_id}]: CI зелёный, PR готов к мёрджу — {pr_url}\n"
+                f"(автомёрдж выключен: CILLY_DEV_QUEUE_AUTOMERGE=0)"
+            )
+    except Exception as e:
+        logger.error(f"[dev_queue] заявка {board_id} упала: {e}")
+        await tb.update_status(r, board_id, "blocked",
+                               result=f"ошибка исполнения: {e}", escalated=True)
+        await _escalate_vlad(f"⛔ Заявка [{board_id}] оборвалась ошибкой: {e}")
+    finally:
+        await dev_queue.release_claim(r, board_id)
+        await dev_queue.clear_asked(r, board_id)
+
+
+async def _dev_queue_tick(r) -> None:
+    """
+    Один заход по входящим заявкам dev-dept: взять ОДНУ и спросить владельца.
+
+    Одну за тик намеренно: параллельные цепочки пишут те же файлы, а замка на
+    доске нет вовсе (list_tasks + update_status — классический двойной захват).
+    Тик только СПРАШИВАЕТ; работу запускает ответ владельца, поэтому сам тик
+    остаётся быстрым и не задерживает остальную петлю управления.
+    """
+    if not dev_queue.queue_enabled():
+        return
+    try:
+        tasks = await tb.list_tasks(r, status="open",
+                                    assignee=dev_queue.DEV_DEPT_ASSIGNEE,
+                                    parent_id="", limit=100)
+    except Exception as e:
+        logger.warning(f"[dev_queue] доска не читается: {e}")
+        return
+    if not tasks:
+        return
+
+    # Потолок раундов раньше замка: задача, исчерпавшая попытки, должна уйти к
+    # человеку, а не крутиться в очереди ещё сутки.
+    for t in tasks:
+        if tb.should_escalate(t):
+            await tb.escalate(r, t.get("id"))
+            await notify_office(
+                f"🚨 Заявка [{t.get('id')}] упёрлась в потолок попыток "
+                f"({t.get('attempts')}/{tb.MAX_ROUNDS}): {t.get('title','')[:80]}"
+            )
+
+    blocked = await dev_queue.blocked_ids(r, tasks)
+    task = dev_queue.pick_next(tasks, blocked=blocked)
+    if not task:
+        return
+    tid   = task.get("id", "")
+    title = task.get("title", "")
+
+    if not await dev_queue.claim_task(r, tid):
+        return
+
+    repo, why = dev_queue.resolve_target(task)
+    if not repo:
+        await tb.update_status(r, tid, "blocked",
+                               result=f"не определился репозиторий ({why})", escalated=True)
+        await dev_queue.release_claim(r, tid)
+        await _escalate_vlad(
+            f"❓ Заявка [{tid}]: не понял, в каком репозитории чинить ({why}).\n"
+            f"«{title[:200]}»\nНазови репозиторий — и я передам отделу."
+        )
+        return
+
+    file_path = _main_file_for_repo(repo)
+    refusal = dev_queue.self_edit_refusal(repo, file_path)
+    if refusal:
+        await tb.update_status(r, tid, "rejected", result=refusal)
+        await dev_queue.release_claim(r, tid)
+        await _escalate_vlad(f"🚫 Заявка [{tid}] ведёт в мой собственный код.\n"
+                             f"«{title[:200]}»\n{refusal}")
+        return
+
+    # Критерии замораживаются ДО работы — set_acceptance откажет, как только
+    # статус уедет с open или появятся попытки. Успех, определённый после
+    # результата, подгоняется под результат.
+    #
+    # Отказ проглатывать нельзя: задача БЕЗ критериев закрывается по
+    # update_status("done") без единой улики — ровно та дыра, ради которой
+    # приёмка и писалась. Пускаем в работу только если критерии есть: свои,
+    # только что записанные, или замороженные раньше.
+    ok_acc, why_acc = await tb.set_acceptance(r, tid, dev_queue.acceptance_for())
+    if not ok_acc:
+        _cur = await tb.get_task(r, tid)
+        if not (_cur or {}).get("acceptance"):
+            await tb.update_status(r, tid, "blocked",
+                                   result=f"критерии приёмки не заморожены: {why_acc}",
+                                   escalated=True)
+            await dev_queue.release_claim(r, tid)
+            await _escalate_vlad(
+                f"⛔ Заявка [{tid}] не пошла в работу: не удалось заморозить критерии "
+                f"приёмки ({why_acc}). Без них «готово» — это ничьё слово, "
+                f"и задача закрылась бы без улик."
+            )
+            return
+        logger.info(f"[dev_queue] критерии уже были заморожены для {tid}: {why_acc}")
+
+    # Команде уходит САМО описание, без служебной приписки «[бот] доработка по
+    # запросу X:» — она про маршрут заявки, а не про то, что надо написать.
+    spec = dev_queue.request_text(title)
+    action_id = await stage_pending("dev_queue_run", {
+        "repo": repo, "file_path": file_path, "task_text": spec,
+    }, task_id=tid, title=f"заявка {repo}/{file_path}")
+    await dev_queue.mark_asked(r, tid)
+    asked = await send_proposal(
+        f"🛠 Заявка от отдела: {title[:300]}\n\n"
+        f"📦 Цель: {repo}/{file_path} ({why})\n"
+        f"Команда напишет код, откроет PR и дождётся CI. Делать?\n"
+        f"(или текстом: /approve {action_id})",
+        "pg", action_id,
+        chat_id=int(os.getenv("YOUR_TELEGRAM_ID", "391077101")),
+        defer=True,
+    )
+    if not asked:
+        # Вопрос не ушёл (пауза исходящих, сбой Telegram) — снимаем отметки,
+        # иначе заявка молча простоит сутки как «уже спрошенная», хотя её никто
+        # не видел. Незаданный вопрос не должен выглядеть как заданный.
+        await dev_queue.clear_asked(r, tid)
+        await dev_queue.release_claim(r, tid)
+        logger.warning(f"[dev_queue] вопрос по заявке {tid} не отправился — верну в очередь")
+
+
 async def _management_tick():
     """Один проход проактивного управления: доска + метрики."""
     r = await get_redis()
@@ -7395,6 +7757,15 @@ async def _management_tick():
                 f"⏳ Задача [{tid}] висит ~{int(age // 3600)}ч в статусе {status}: "
                 f"{t.get('title','')[:80]}"
             )
+    # Входящая дверь отдела: одна open-заявка dev-dept за тик уходит владельцу
+    # вопросом с кнопками. СТРОГО до _review_quality_and_routing — та сама
+    # создаёт open-задачи, и очередь после неё хватала бы созданное в этом же
+    # тике, не дав никому на них даже взглянуть.
+    try:
+        await _dev_queue_tick(r)
+    except Exception as e:
+        logger.error(f"[dev_queue] тик очереди упал: {e}")
+
     # B3: метрики качества и роутинга → проактивные задачи
     await _review_quality_and_routing(r)
 
