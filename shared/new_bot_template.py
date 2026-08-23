@@ -34,6 +34,9 @@ from ai_office_shared.shared.redis_helpers import (
     redis_get_history, redis_save_history,
     redis_get_notes
 )
+from ai_office_shared.shared.log_redaction import (
+    install_secret_redaction, quiet_http_client_logs,
+)
 from ai_office_shared.shared.tasks import (
     auto_extract_interests, weekly_review_loop,
     schedule_loop, parse_schedule_tag,
@@ -42,6 +45,10 @@ from ai_office_shared.shared.tasks import (
 )
 
 logging.basicConfig(level=logging.INFO)
+# Обязательно сразу после basicConfig: httpx печатает URL запроса на INFO, а в
+# URL Telegram лежит токен бота (урок #118).
+quiet_http_client_logs()
+install_secret_redaction()
 logger = logging.getLogger(__name__)
 
 # ── Конфиг (обязательно задать в Railway Variables) ──────────────────────────

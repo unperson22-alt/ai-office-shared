@@ -29,6 +29,9 @@ from ai_office_shared.shared.verify import extract_code
 from ai_office_shared.shared.target_repo import repo_looks_valid, target_repo
 from ai_office_shared.shared.telegram_text import split_for_telegram
 from ai_office_shared.shared.fault_evidence import dispatch_refusal, failure_evidence
+from ai_office_shared.shared.log_redaction import (
+    install_secret_redaction, quiet_http_client_logs, redact,
+)
 from ai_office_shared.shared import dev_queue
 from ai_office_shared.shared.file_window import (
     find_regions, summary as file_summary,
@@ -49,6 +52,12 @@ from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.types import DialogFilter, InputPeerUser, InputPeerChannel, ChatAdminRights
 
 logging.basicConfig(level=logging.INFO)
+# Порядок обязателен: basicConfig создаёт обработчики, а эти два вызова снимают
+# с логов секреты. httpx печатает URL запроса на INFO — то есть токен бота в
+# каждой строке про getUpdates (урок #118). Регистрация значений идёт по именам
+# из SECRET_ENV_NAMES, поэтому вызов стоит ДО чтения конфига ниже.
+quiet_http_client_logs()
+install_secret_redaction()
 logger = logging.getLogger(__name__)
 
 # ── Config ───────────────────────────────────────────────────────────────────
@@ -1190,7 +1199,9 @@ async def get_service_logs(service_id: str, window_s: float | None = None) -> li
         except Exception:
             ts = 0
         if ts > cutoff:
-            new_logs.append(l.get("message", ""))
+            # Чужие логи чистим на входе: боты печатают токен в строках httpx, а
+            # отсюда строка уезжает в промпт анализатора, в отчёт и в чат (#118).
+            new_logs.append(redact(l.get("message", "")))
             if ts > latest_ts:
                 latest_ts = ts
     if window_s is not None:
@@ -1358,7 +1369,7 @@ async def wait_for_deploy(service_id: str, *, timeout: float = 180.0,
                 }
             """, {"id": dep_id})
             logs = (log_data.get("data") or {}).get("deploymentLogs", []) or []
-            log_tail = [l.get("message", "") for l in logs][-20:]
+            log_tail = [redact(l.get("message", "")) for l in logs][-20:]
         except Exception as e:
             logger.warning(f"wait_for_deploy logs error ({service_id}): {e}")
     return last_status, log_tail
@@ -3668,6 +3679,10 @@ from telegram.ext import Application, MessageHandler, filters, ContextTypes
 import anthropic
 
 logging.basicConfig(level=logging.INFO)
+# httpx печатает URL запроса на INFO, а в URL Telegram лежит токен бота: без
+# этой строки токен уходит в логи Railway на каждый getUpdates. Здесь голый
+# logging, а не хелпер офиса: у бота по шаблону нет пина ai_office_shared.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
@@ -5685,7 +5700,8 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                         }
                     """, {"id": dep_node["id"]})
                     logs = (log_data.get("data") or {}).get("deploymentLogs", []) or []
-                    tail = [f"{l.get('timestamp', '')} {l.get('message', '')}" for l in logs[-a_lines:]]
+                    tail = [redact(f"{l.get('timestamp', '')} {l.get('message', '')}")
+                            for l in logs[-a_lines:]]
                     res = (f"деплой {dep_node['id'][:8]} ({dep_node.get('status', '?')}): "
                            + (f"{len(tail)} строк логов" if tail else "логи пусты"))
                     steps_log.append({"action": f"railway_logs({a_service})", "result": res})

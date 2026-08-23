@@ -41,6 +41,7 @@ from aiohttp import web
 
 from .auth import office_auth_middleware
 from .dev_activity import format_activity_for_prompt, publish_activity, read_activity
+from .log_redaction import install_secret_redaction, quiet_http_client_logs
 from .logging import log_event
 from .verify import extract_code, retry_prompt, verify_code
 
@@ -280,6 +281,10 @@ async def run_worker(bot_name: str, system_prompt: str) -> None:
     from telegram.ext import ApplicationBuilder
 
     logging.basicConfig(level=logging.INFO)
+    # python-telegram-bot ходит через httpx, а тот печатает URL запроса на INFO —
+    # то есть токен бота в каждой строке про getUpdates. Урок #118.
+    quiet_http_client_logs()
+    install_secret_redaction()
     state: dict = {"redis": None, "bot": None}
 
     app_tg = ApplicationBuilder().token(os.getenv("TELEGRAM_TOKEN", "")).build()
