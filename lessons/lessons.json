@@ -1785,5 +1785,21 @@
     "cause": "design",
     "tag": "verification",
     "posted_to_group": false
+  },
+  {
+    "id": 109,
+    "date": "2026-08-23",
+    "bot": "ai-office-shared (shared/dev_pipeline.py, agents/coder.py)",
+    "layer": "retry policy / failure attribution",
+    "title": "An empty account is not a coding failure — and no number of retries will put money back on it",
+    "symptom": "Two consecutive tickets through the new inbound queue (62ffa25b5e30 and aa573bddb6d7) failed with the same worker answer: «ERROR: девви не смог обработать задачу: Error code: 400 — invalid_request_error: Your credit balance is too low to access the Anthropic API». Between them they spent roughly 70 minutes and about 19 calls to Devvy re-confirming that one answer, held the single run slot the whole time, and reported to the owner as «команда не дала код, прошедший гейт» — the phrasing of a team that tried and failed.",
+    "root_cause": "run_dev_chain treats every failure to produce code as a quality failure and spends the full budget on it: three attempts, each calling the pipeline, plus the worker's own internal verify retries. That policy is right for a model that wrote bad code and wrong for a provider that refused the request — a 400 invalid_request_error, a 401 or a 403 mean the next identical call gets the identical answer by construction. The office had no notion of a non-retryable error at all, so the only distinction available was 'code came back' versus 'code did not', and an outage fell on the wrong side of it. The report inherited the same flaw: the message names the team because the code path is the team's failure path, even when the department never reached the model.",
+    "why_architecture": "The retry loop was written against the failure it was born from — 2026-08-01, when Devvy kept returning code that would not compile — and a retry ceiling was the correct answer there. Nothing in it asks whether the failure is the kind that repetition can fix. That question has to be asked explicitly, because from inside the loop an outage and a bad generation look identical: both are 'no usable code this round'. Meanwhile the cost of guessing wrong is asymmetric — retrying a transient 429 costs seconds and saves a ticket, while retrying a dead account costs the whole budget and saves nothing.",
+    "fix": "shared/dev_pipeline.unrecoverable_provider_error(*texts) returns a human-readable reason when any worker answer carries a credit, authentication, permission or 400/401/403 failure, and deliberately does NOT match 429 or 5xx, which do clear on retry. run_dev_chain checks it after every attempt: on a match it breaks immediately, does not call incr_attempts (an attempt that never happened is not an attempt, and a ticket must not burn its round ceiling on somebody's billing), publishes the reason to the activity feed and prefixes the reason with «⚙️ Это не код, а доступ к LLM». Both reporting paths — the queue and the crash autofix — now say the department never reached the model instead of blaming it. Evidence is still written on the board, so the failed run shows three unchecked criteria rather than silence. 12 new tests, including the verbatim error text from the live incident and explicit assertions that 429, 5xx and genuine code-quality refusals keep their retries.",
+    "status": "fixed",
+    "prevention": "Before writing a retry, classify what it is retrying: transient faults deserve the budget, refusals of the request itself deserve none, and a loop that cannot tell them apart will spend everything on the case where spending is useless. Say the classification in words in the report — «this is billing, not code» is a different instruction to the reader than «the team could not deliver», and the reader acts on the words, not on the stack trace. And when a subsystem fails, check whether the failure path can even express 'this was not my fault': a component that has only a failure branch for itself will accept blame for its dependencies.",
+    "cause": "design",
+    "tag": "orchestration",
+    "posted_to_group": false
   }
 ]

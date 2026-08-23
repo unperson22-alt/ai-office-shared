@@ -1865,10 +1865,15 @@ async def run_dev_chain(
             останавливает работу.
 
     Returns:
-        dict: ok, final_code, commit_msg, pipe, attempts, reason,
+        dict: ok, infra_error, final_code, commit_msg, pipe, attempts, reason,
               compile_ok, review_ok, shrink_info, ricky_result, se_info
+
+        infra_error непустой — работа не начиналась: сломан доступ к LLM, а не
+        код. Это не провал отдела, и раунд на него не тратится.
     """
-    from ai_office_shared.shared.dev_pipeline import run_dev_pipeline
+    from ai_office_shared.shared.dev_pipeline import (
+        run_dev_pipeline, unrecoverable_provider_error,
+    )
     from ai_office_shared.shared.dev_activity import publish_activity
 
     uid = int(os.getenv("YOUR_TELEGRAM_ID", "391077101"))
@@ -1880,6 +1885,7 @@ async def run_dev_chain(
     retry_feedback = seed_feedback or ""
     ricky_result = ""
     se_info = ""
+    infra_error = ""
     pipe: dict = {}
     attempt = 0
 
@@ -1917,6 +1923,25 @@ async def run_dev_chain(
             retry_feedback = ""
             break
 
+        # Сбой доступа к LLM повтором не лечится: у аккаунта не появятся деньги
+        # оттого, что мы спросим ещё раз. 23.08 две заявки потратили на это ~70
+        # минут и ~19 вызовов Девви, а владелец прочитал «команда не дала код» —
+        # то есть обвинение отдела вместо счёта за электричество. Обрываем сразу
+        # и НЕ тратим раунд: попытка, которой не дали случиться, не попытка.
+        infra_error = unrecoverable_provider_error(
+            pipe.get("devvy"), pipe.get("ricky"), pipe.get("testi"),
+            pipe.get("sekky"), pipe.get("scribbi"),
+        )
+        if infra_error:
+            retry_feedback = (
+                f"⚙️ Это не код, а доступ к LLM: {infra_error}. "
+                f"Повторы бессмысленны, пока доступ не восстановлен. "
+                f"Ответ воркера: {(pipe.get('devvy') or '')[:200]}"
+            )
+            await publish_activity(redis_client, task_id, "силли", "error",
+                                   f"сбой провайдера: {infra_error}", level="error")
+            break
+
         # Провал гейта: считаем попытку, формируем фидбек на следующий заход
         await tb.incr_attempts(redis_client, board_id)
         if not final_code:
@@ -1947,6 +1972,7 @@ async def run_dev_chain(
 
     return {
         "ok": ok,
+        "infra_error": infra_error,
         "final_code": final_code,
         "commit_msg": commit_msg,
         "pipe": pipe,
@@ -2069,11 +2095,18 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
         # Гейт НЕ пройден — НЕ предлагаем неотревьюенный код, эскалируем владельцу.
         await tb.update_status(r_tb, board_id, "blocked",
                                result=retry_feedback or "рабочий код не получен", escalated=True)
-        await notify_office(
-            f"⛔ Cilly: баг в *{service_name}* — команда за {MAX_DEV_ATTEMPTS} попыток "
-            f"не дала код, прошедший ревью. Нужен твой разбор.\n"
-            f"Симптом: {description[:160]}\nПричина провала: {retry_feedback[:200]}"
-        )
+        if chain.get("infra_error"):
+            await notify_office(
+                f"⚙️ Cilly: фикс для *{service_name}* не начинался — "
+                f"{chain['infra_error']}. Это не код и не команда: отдел не смог "
+                f"обратиться к модели.\nСимптом: {description[:160]}"
+            )
+        else:
+            await notify_office(
+                f"⛔ Cilly: баг в *{service_name}* — команда за {MAX_DEV_ATTEMPTS} попыток "
+                f"не дала код, прошедший ревью. Нужен твой разбор.\n"
+                f"Симптом: {description[:160]}\nПричина провала: {retry_feedback[:200]}"
+            )
         return {"bot": service_name, "status": "blocked",
                 "symptom": description, "fix_desc": fix_desc}
 
@@ -7559,11 +7592,22 @@ async def _run_queued_dev_task(payload: dict, board_id: str) -> None:
                 await tb.update_status(r, board_id, "blocked",
                                        result=chain["reason"] or "рабочий код не получен",
                                        escalated=True)
-                await _escalate_vlad(
-                    f"⛔ Заявка [{board_id}] ({repo}/{file_path}): команда не дала код, "
-                    f"прошедший гейт.\nПричина: {chain['reason'][:200]}\n"
-                    + (tb.format_evidence_report(_fresh) if _fresh else "")
-                )
+                if chain.get("infra_error"):
+                    # Отдел даже не начал: винить его — значит послать владельца
+                    # искать баг там, где его нет.
+                    await _escalate_vlad(
+                        f"⚙️ Заявка [{board_id}] ({repo}/{file_path}) остановлена: "
+                        f"{chain['infra_error']}.\n"
+                        f"Это не код и не команда — отдел не смог обратиться к модели. "
+                        f"Восстанови доступ и верни задачу в работу.\n"
+                        f"{chain['reason'][:300]}"
+                    )
+                else:
+                    await _escalate_vlad(
+                        f"⛔ Заявка [{board_id}] ({repo}/{file_path}): команда не дала код, "
+                        f"прошедший гейт.\nПричина: {chain['reason'][:200]}\n"
+                        + (tb.format_evidence_report(_fresh) if _fresh else "")
+                    )
                 return
 
             # ── Ветка + PR, а не пуш в main ────────────────────────────────
