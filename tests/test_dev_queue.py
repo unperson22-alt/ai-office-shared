@@ -208,6 +208,44 @@ class TestTaskWithoutCriteriaIsNotSilentlyClosable(unittest.TestCase):
         self.assertFalse(run(tb.get_task(self.r, tid))["acceptance"])
 
 
+class TestOneRunAtATime(unittest.TestCase):
+    """«Одна за тик» ограничивает вопросы, а не запуски.
+
+    Одобрив две заявки подряд, владелец запустил бы две цепочки одновременно:
+    на одном файле это два PR с разошедшимися базами. Слот один на весь офис.
+    """
+
+    def setUp(self):
+        self.r = QueueRedis()
+
+    def test_second_run_cannot_start(self):
+        self.assertTrue(run(dq.acquire_run_slot(self.r, "t1")))
+        self.assertFalse(run(dq.acquire_run_slot(self.r, "t2")))
+
+    def test_slot_names_the_task_that_holds_it(self):
+        run(dq.acquire_run_slot(self.r, "t1"))
+        self.assertEqual(run(dq.current_run(self.r)), "t1")
+
+    def test_free_slot_reads_as_empty(self):
+        self.assertEqual(run(dq.current_run(self.r)), "")
+
+    def test_slot_is_released_and_reusable(self):
+        run(dq.acquire_run_slot(self.r, "t1"))
+        run(dq.release_run_slot(self.r, "t1"))
+        self.assertEqual(run(dq.current_run(self.r)), "")
+        self.assertTrue(run(dq.acquire_run_slot(self.r, "t2")))
+
+    def test_a_stale_task_cannot_release_someone_elses_slot(self):
+        # Задача, доработавшая после истечения своего TTL, не должна снести
+        # слот у той, что идёт сейчас.
+        run(dq.acquire_run_slot(self.r, "running"))
+        run(dq.release_run_slot(self.r, "stale"))
+        self.assertEqual(run(dq.current_run(self.r)), "running")
+
+    def test_without_redis_nothing_runs(self):
+        self.assertFalse(run(dq.acquire_run_slot(None, "t1")))
+
+
 class TestSelfEditGuard(unittest.TestCase):
     def test_own_repo_is_refused(self):
         for repo in dq.SELF_EDIT_REPOS:

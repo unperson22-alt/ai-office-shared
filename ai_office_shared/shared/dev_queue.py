@@ -221,6 +221,60 @@ async def blocked_ids(redis_client, tasks: list) -> set:
     return out
 
 
+# ── Один прогон разом ─────────────────────────────────────────────────────────
+# «Одна задача за тик» ограничивает ВОПРОСЫ, а не запуски: одобрив две заявки
+# подряд, владелец запустил бы две цепочки одновременно. На разных репозиториях
+# это безвредно, на одном файле — два PR с разошедшимися базами и конфликт
+# мёрджа. Слот один на весь офис, и его TTL заметно больше самого долгого
+# прогона: если процесс умрёт, слот освободится сам, а не заклинит очередь.
+
+RUN_SLOT_KEY = "office:devqueue:running"
+RUN_SLOT_TTL_SEC = 2 * 3600
+
+
+async def acquire_run_slot(redis_client, task_id: str,
+                           ttl: int = RUN_SLOT_TTL_SEC) -> bool:
+    """Занять единственный слот исполнения. False — уже занят или нет Redis."""
+    if redis_client is None or not task_id:
+        return False
+    try:
+        got = await redis_client.set(RUN_SLOT_KEY, task_id, nx=True, ex=ttl)
+        return bool(got)
+    except Exception as e:
+        logger.warning("[dev_queue] слот прогона недоступен, не запускаю: %s", e)
+        return False
+
+
+async def current_run(redis_client) -> str:
+    """id задачи, занявшей слот. '' — слот свободен или Redis недоступен."""
+    if redis_client is None:
+        return ""
+    try:
+        val = await redis_client.get(RUN_SLOT_KEY)
+    except Exception as e:
+        logger.warning("[dev_queue] слот прогона не читается: %s", e)
+        return ""
+    if val is None:
+        return ""
+    return val.decode() if isinstance(val, (bytes, bytearray)) else str(val)
+
+
+async def release_run_slot(redis_client, task_id: str) -> None:
+    """
+    Освободить слот — только если он наш.
+
+    Проверка владельца не формальность: без неё задача, доработавшая уже после
+    истечения своего TTL, снесла бы слот у той, что идёт сейчас.
+    """
+    if redis_client is None or not task_id:
+        return
+    try:
+        if await current_run(redis_client) == task_id:
+            await redis_client.delete(RUN_SLOT_KEY)
+    except Exception as e:
+        logger.warning("[dev_queue] слот прогона не освободился (%s): %s", task_id, e)
+
+
 # ── Отбор кандидата ───────────────────────────────────────────────────────────
 
 def pick_next(tasks: list, *, blocked: Optional[set] = None) -> Optional[dict]:
