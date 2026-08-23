@@ -85,11 +85,18 @@ async def push_file(repo: str, path: str, content: str, commit_msg: str) -> dict
         }
 
 
-async def read_file(repo: str, path: str) -> str:
-    """Прочитать содержимое файла из репо."""
+async def read_file(repo: str, path: str, ref: str = "") -> str:
+    """Прочитать содержимое файла из репо.
+
+    ref — ветка/коммит. Пусто = дефолтная ветка (прежнее поведение). Нужен
+    там, где правка уже лежит в рабочей ветке: без ref гейт размера и следующая
+    попытка сравнивались бы с версией из main, то есть с текстом, который никто
+    уже не правит.
+    """
     url = f"{BASE_URL}/repos/{GITHUB_USER}/{repo}/contents/{path}"
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        r = await client.get(url, headers=HEADERS)
+        r = await client.get(url, headers=HEADERS,
+                             params={"ref": ref} if ref else None)
         r.raise_for_status()
         data = r.json()
         return base64.b64decode(data["content"]).decode()
@@ -290,3 +297,92 @@ async def get_pr_by_url(html_url: str) -> dict:
         r = await c.get(url, headers=HEADERS)
         r.raise_for_status()
     return {"repo": repo, "number": number, **r.json()}
+
+
+# ── Состояние CI по коммиту ───────────────────────────────────────────────────
+# Зачем: до этого ни один шаг пайплайна не ЗАПУСКАЛ код. compile() разбирает
+# исходник, pyflakes ходит по AST, гейт размера считает строки — все три меряют
+# текст. Ровно поэтому 01.07.2026 гейт пропустил валидную 8-строчную заглушку
+# вместо файла на 5766 строк. Единственная проверка, которая исполняет код, уже
+# есть в каждом репо офиса — его собственный CI (pyflakes + compileall + тесты).
+# Спрашиваем его, а не выдумываем песочницу внутри процесса Силли.
+
+# Заключения, которые считаем провалом. "skipped"/"neutral" — не провал: джоба
+# сознательно не применима к этому изменению.
+_CHECK_BAD = {"failure", "timed_out", "action_required", "cancelled", "stale"}
+
+
+def parse_check_runs(payload: dict) -> tuple:
+    """
+    (состояние, имена_упавших, ссылка) из ответа GET .../check-runs.
+
+    Состояние:
+      "empty"   — ни одного прогона (в репо нет CI, ЛИБО он ещё не зарегистрирован);
+      "pending" — есть незавершённые;
+      "failure" — хоть один завершился провалом;
+      "success" — все завершились и ни один не провалился.
+
+    ⚠️ "empty" НЕ синоним "success". Проверка, которая не смогла выполниться, —
+    провал, а не пропуск (урок #93): иначе репозиторий без CI автоматически
+    выдавал бы зелёный свет любому коду. Решение, сколько ждать регистрации
+    прогонов, принимает вызывающий — здесь только разбор.
+
+    Чистая функция: разбирается на фикстуре, без сети.
+    """
+    runs = (payload or {}).get("check_runs") or []
+    if not runs:
+        return "empty", [], ""
+    url = ""
+    failed = []
+    pending = False
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        url = url or run.get("html_url") or ""
+        if run.get("status") != "completed":
+            pending = True
+            continue
+        if (run.get("conclusion") or "") in _CHECK_BAD:
+            name = run.get("name") or "?"
+            failed.append(name)
+            url = run.get("html_url") or url
+    if failed:
+        return "failure", failed, url
+    if pending:
+        return "pending", [], url
+    return "success", [], url
+
+
+async def get_checks_status(repo: str, ref: str) -> tuple:
+    """
+    Состояние CI для коммита/ветки ref. См. parse_check_runs.
+
+    Сетевая ошибка → ("pending", [], "") — не «зелено» и не «упало»: мы просто
+    не знаем. Вызывающий упрётся в свой таймаут и запишет это как непройденную
+    проверку, а не как успех.
+    """
+    if not GITHUB_TOKEN:
+        raise EnvironmentError("GITHUB_TOKEN не задан")
+    url = f"{BASE_URL}/repos/{GITHUB_USER}/{repo}/commits/{ref}/check-runs"
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+            r = await c.get(url, headers=HEADERS,
+                            params={"per_page": 100},
+                            follow_redirects=True)
+            r.raise_for_status()
+            return parse_check_runs(r.json())
+    except Exception as e:
+        logger.warning(f"get_checks_status({repo}@{ref}) ошибка: {e}")
+        return "pending", [], ""
+
+
+async def get_default_branch(repo: str) -> str:
+    """Дефолтная ветка репо. При любой ошибке — 'main' (так во всех репо офиса)."""
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+            r = await c.get(f"{BASE_URL}/repos/{GITHUB_USER}/{repo}", headers=HEADERS)
+            r.raise_for_status()
+            return r.json().get("default_branch") or "main"
+    except Exception as e:
+        logger.warning(f"get_default_branch({repo}) ошибка: {e}")
+        return "main"

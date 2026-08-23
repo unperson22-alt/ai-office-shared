@@ -159,14 +159,35 @@ class TestFailureReason(unittest.TestCase):
 
 
 class TestNoNaiveSliceLeft(unittest.TestCase):
-    def test_both_pipelines_use_the_shared_extractor(self):
-        # Гейт против отката и против третьей копии наивного среза.
+    """Гейт против отката к наивному срезу и против новых его копий.
+
+    Раньше здесь стояло «ровно два вызова» — по одному на каждый из двух
+    пайплайнов, потому что цикл гейта был скопирован дважды. Копии съедены
+    общим run_dev_chain, и вызов остался ОДИН на все точки входа (автофикс,
+    dev_task, очередь заявок). Это усиление того же правила, а не его ослабление:
+    один разбор невозможно починить в одном месте и забыть в другом — ровно то,
+    что 16.08.2026 стоило дня (урок #100).
+    """
+
+    def test_the_single_shared_extractor_is_the_only_parser(self):
         with open(CODER, encoding="utf-8") as f:
             src = f.read()
-        self.assertEqual(src.count("extract_ricky_code(ricky_result)"), 2,
-                         "оба пайплайна должны звать общий разбор")
+        self.assertEqual(src.count("extract_ricky_code(ricky_result)"), 1,
+                         "разбор финального кода должен быть в одном месте")
+        self.assertEqual(src.count("async def run_dev_chain("), 1,
+                         "цикл гейта должен остаться единственным")
         self.assertNotIn('ricky_result.find("```python")', src,
                          "наивный срез вернулся в coder.py")
+
+    def test_every_entry_point_goes_through_run_dev_chain(self):
+        # Автофикс краша, интент dev_task и очередь заявок — три входа,
+        # один цикл. Четвёртая копия не должна появиться незаметно.
+        with open(CODER, encoding="utf-8") as f:
+            src = f.read()
+        self.assertEqual(src.count("await run_dev_chain("), 3,
+                         "все точки входа обязаны звать общий цикл")
+        self.assertEqual(src.count("await run_dev_pipeline("), 1,
+                         "пайплайн дёргается только из run_dev_chain")
 
 
 if __name__ == "__main__":
