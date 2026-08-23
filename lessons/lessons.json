@@ -1746,7 +1746,8 @@
     "prevention": "When adding an operation that users ask for in words, add every language the office actually writes in the same commit — grep the alias tables for a Ukrainian form before shipping, and treat «bot says it cannot do X» as a routing bug until proven otherwise, because the LLM's beliefs about its own tools are not evidence. When a bot serves more than one person, the system prompt must state who is speaking at every turn; a roster answers «who is who», not «who is this». And when a request maps to an existing filter, check that the filter actually does what the word means — «ретушь» pointing at a softening preset passed tests for weeks because nothing asserted that a spot disappears.",
     "cause": "design",
     "tag": "photo",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T14:32:03.936646+00:00"
   },
   {
     "id": 105,
@@ -1762,7 +1763,8 @@
     "prevention": "Для кода, который оценивают глазами, зелёные тесты на синтетике — не приёмка. Прежде чем мёржить обработку изображений, прогони её на настоящих фотографиях и посмотри результат сам, в кропе, на деталях, которые легче всего испортить (у лица это брови, ресницы, губы, борода). Фикстура при этом обязана содержать те структуры, ради защиты которых написан код: если в ней нет волосков, тест на волоски не существует, чем бы он ни назывался. И проверяй границы применимости честно: там, где метод не работает (у нас — очень тёмный кадр), правильное поведение — ничего не менять и сказать об этом, а не сделать хоть что-нибудь.",
     "cause": "process",
     "tag": "photo",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T14:32:03.936646+00:00"
   },
   {
     "id": 106,
@@ -1778,7 +1780,8 @@
     "prevention": "Второй провал подряд в одной фиче — сигнал, что неверна модель задачи, а не значения порогов; прежде чем крутить константы дальше, сформулируй, как эту задачу решают люди, и проверь, совпадает ли с этим твой алгоритм. Материал для проверки обязан содержать сам дефект: три портрета с чистой кожей не отличают «работает аккуратно» от «не работает вовсе» — бери лица с настоящей проблемой. И держи в голове, что зеркальный провал (ничего не сделано) читается пользователем так же плохо, как исходный (сделано разрушительно), а рапорт «✅ убрала дефекты» поверх неизменённого файла хуже их обоих.",
     "cause": "design",
     "tag": "photo",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T14:32:03.936646+00:00"
   },
   {
     "id": 107,
@@ -1794,11 +1797,12 @@
     "prevention": "When you build a queue, name the thing that dequeues it and point at the line of code. A producer, a store and a worker are not a pipeline until something schedules the handoff, and the missing scheduler is invisible precisely because nothing fails. Ask of any status in a state machine: which loop reads it? A status no loop reads is a parking lot. And when a mechanism already exists but is reachable from only a couple of special-case callers, treat that as a missing entry point rather than a working feature — the callers will keep passing review while the capability stays unreachable in practice.",
     "cause": "design",
     "tag": "orchestration",
-    "posted_to_group": false,
+    "posted_to_group": true,
     "anchors": [
       "ai_office_shared/shared/dev_queue.py:pick_next",
       "ai_office_shared/shared/dev_queue.py:claim_task"
-    ]
+    ],
+    "posted_at": "2026-08-23T14:32:03.936646+00:00"
   },
   {
     "id": 108,
@@ -1814,12 +1818,13 @@
     "prevention": "Never let a verdict default to a pass: initialise gate flags to failure and require positive evidence to flip them, so the absence of input reads as «not checked», never as «checked and fine». When a check has nothing to operate on, say that in the proof — an empty artifact deserves a louder verdict than a wrong one, not a quieter one. And when a chain of workers can fail at any stage, derive the diagnosis from the stage that actually failed: a helper named after one participant will keep blaming that participant for everyone else's failures, and the report will send people to read the logs of a service that was never called.",
     "cause": "design",
     "tag": "verification",
-    "posted_to_group": false,
+    "posted_to_group": true,
     "anchors": [
       "agents/coder.py:record_dev_gate_evidence",
       "agents/coder.py:dev_failure_reason",
       "shared/github_tools.py:parse_check_runs"
-    ]
+    ],
+    "posted_at": "2026-08-23T14:32:03.936646+00:00"
   },
   {
     "id": 109,
@@ -1835,10 +1840,11 @@
     "prevention": "Before writing a retry, classify what it is retrying: transient faults deserve the budget, refusals of the request itself deserve none, and a loop that cannot tell them apart will spend everything on the case where spending is useless. Say the classification in words in the report — «this is billing, not code» is a different instruction to the reader than «the team could not deliver», and the reader acts on the words, not on the stack trace. And when a subsystem fails, check whether the failure path can even express 'this was not my fault': a component that has only a failure branch for itself will accept blame for its dependencies.",
     "cause": "design",
     "tag": "orchestration",
-    "posted_to_group": false,
+    "posted_to_group": true,
     "anchors": [
       "ai_office_shared/shared/dev_pipeline.py:unrecoverable_provider_error"
-    ]
+    ],
+    "posted_at": "2026-08-23T14:32:03.936646+00:00"
   },
   {
     "id": 110,
@@ -1854,11 +1860,12 @@
     "prevention": "When a subsystem can put an object into a terminal state, check that something can also take it out, and that the exit has a name a caller can say. Prefer one named operation over a general-purpose escape hatch: an intent that can write anywhere is both more dangerous and harder to route correctly than an intent that does one thing. And when you fix a matching bug with word boundaries in one module, grep for the same substring idiom everywhere else the same day — the copy you leave behind is the one that will misroute, silently and without an error.",
     "cause": "design",
     "tag": "orchestration",
-    "posted_to_group": false,
+    "posted_to_group": true,
     "anchors": [
       "ai_office_shared/shared/taskboard.py:reopen_task",
       "agents/coder.py:_mentions"
-    ]
+    ],
+    "posted_at": "2026-08-23T14:32:03.936646+00:00"
   },
   {
     "id": 111,
@@ -1876,7 +1883,8 @@
       "ai_office_shared/shared/dev_queue.py:automerge_enabled"
     ],
     "tag": "orchestration",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T14:32:03.936646+00:00"
   },
   {
     "id": 112,
@@ -1894,7 +1902,8 @@
       "agents/coder.py:_approval_kb"
     ],
     "tag": "orchestration",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T14:32:03.936646+00:00"
   },
   {
     "id": 113,
@@ -1913,7 +1922,8 @@
       "tests/test_lesson_anchors.py:defined_symbols"
     ],
     "tag": "process",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T14:32:03.936646+00:00"
   },
   {
     "id": 114,
@@ -1933,6 +1943,7 @@
       "ai_office_shared/shared/telegram_text.py:split_for_telegram",
       "agents/coder.py:publish_pending_lessons"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T14:32:03.936646+00:00"
   }
 ]
