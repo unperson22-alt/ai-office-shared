@@ -1986,5 +1986,25 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-08-23T17:38:32.275991+00:00"
+  },
+  {
+    "id": 117,
+    "date": "2026-08-23",
+    "bot": "ai-office-shared (agents/coder.py, shared/fault_evidence.py)",
+    "layer": "monitoring / dispatch",
+    "title": "The audit invented a bug from reading source code on a healthy bot and spent the whole dev chain on it",
+    "symptom": "The office group received «⛔ Cilly: баг в villy-bot — команда за 3 попыток не дала код, прошедший ревью». The symptom the audit wrote for itself: «Missing traceback content in logs, but code analysis reveals critical issue: `await log(event: str, msg: str)` function called with only 2 args». Checked against the source: log is declared with two parameters, all four call sites pass exactly two, the file compiles and pyflakes is clean. The service log held twelve consecutive «getUpdates 200 OK» lines and no failure signature at all. villy-bot was healthy and idle.",
+    "root_cause": "analyze_logs is handed the log lines AND the complete source of the file — and since 15.08 the Redis structural events are appended to that source too. The only gate on dispatching the department was the `is_bug` field, which is the same model's judgement about its own finding. Given thin logs and a whole source file, a model does what any reviewer does: it finds something to say about the code. It then wrote its own lack of evidence into the description — «Missing traceback content in logs, BUT code analysis reveals…» — and the pipeline dispatched anyway. The likely trigger for the specific claim is line 429, `await log(\"MSG_IN\", message, )`: a trailing comma that reads visually like a truncated call.",
+    "why_architecture": "Every other gate in the office was tightened to be deterministic — compile, size, evidence, round ceiling — but the decision to spend the department stayed a model verdict, and the model's inputs invite code review rather than incident analysis. Nothing compared the claim against what the logs actually showed, so a finding with zero evidence was indistinguishable from one with a stack trace. The cost is not cosmetic: a dispatch is three attempts of a five-worker chain, tens of minutes and real money, spent here on a function that was correct.",
+    "fix": "shared/fault_evidence.py decides, deterministically, whether a finding may occupy the department. failure_evidence() returns the first log line that genuinely signals a failure — the line itself, not a boolean, so the report can show what was taken as proof. admits_no_evidence() takes the analyzer at its word when it writes «missing traceback» or «нет трейсбека»: a model reporting its own lack of grounds is cheaper to believe than to argue with. dispatch_refusal() combines them and only ever acts when the model wants to act. Both dispatch sites — the monitor loop and the /office sweep — now pass through it, and a test asserts there are exactly two call sites so a third path cannot appear ungated. ANALYZER_PROMPT states the rule outright: a bug is what the logs showed; the source explains an observed failure and never substitutes for one. On a genuine dispatch the evidence line is logged next to the decision, so «why did Cilly go there» has an answer that is not «the model decided».",
+    "status": "fixed",
+    "prevention": "Never let the same model both find a problem and authorise spending on it: separate the finding from the decision, and make the decision check the finding's grounds in code. When a component is given more context than its question needs — a whole source file to explain a log line — expect it to answer a different, larger question, and gate on the one you asked. And when a claim is checkable in milliseconds, like an arity error, check it before spending minutes on it.",
+    "cause": "design",
+    "tag": "monitoring",
+    "anchors": [
+      "ai_office_shared/shared/fault_evidence.py:dispatch_refusal",
+      "ai_office_shared/shared/fault_evidence.py:failure_evidence"
+    ],
+    "posted_to_group": false
   }
 ]
