@@ -1151,7 +1151,11 @@
     "cause": "Quality gate checked validity (compile + review verdict) but never completeness (new file vs old file size), and self-modification of coder.py was allowed into the auto-deploy path.",
     "tag": "pipeline",
     "posted_to_group": true,
-    "posted_at": "2026-07-02T01:43:23.248384+00:00"
+    "posted_at": "2026-07-02T01:43:23.248384+00:00",
+    "anchors": [
+      "agents/coder.py:file_shrink_guard",
+      "ai_office_shared/shared/dev_queue.py:self_edit_refusal"
+    ]
   },
   {
     "id": 71,
@@ -1539,7 +1543,12 @@
     "prevention": "Whoever did the work does not certify it. If a criterion can be measured by code, it must be a gate rather than a sentence, or the check will be written as prose and pass by default. A verification step that cannot run is a failure, not a skip. Every retry loop needs a counter and a ceiling that ends in a human, decided before the loop is written. And reach for a bigger model only after checking that the failure is actually about reasoning — missing tools, missing fields and missing logs look like stupidity and are not.",
     "cause": "design",
     "tag": "orchestration",
-    "posted_to_group": false
+    "posted_to_group": false,
+    "anchors": [
+      "ai_office_shared/shared/taskboard.py:add_evidence",
+      "ai_office_shared/shared/taskboard.py:acceptance_verdict",
+      "ai_office_shared/shared/taskboard.py:should_escalate"
+    ]
   },
   {
     "id": 94,
@@ -1656,7 +1665,11 @@
     "prevention": "When you harden a parser, grep for the pattern you just replaced across every caller before closing the task — the duplicate you leave behind is the one that will fail, and it will fail looking like a model problem, not a parsing problem. And never let an automated retry invent the reason for a failure: if the far side reported why it failed, quote it; if it said nothing, say that. A retry loop fed a wrong diagnosis does not converge, it just spends three times as much confirming it.",
     "cause": "design",
     "tag": "parsing",
-    "posted_to_group": false
+    "posted_to_group": false,
+    "anchors": [
+      "agents/coder.py:extract_ricky_code",
+      "agents/coder.py:ricky_failure_reason"
+    ]
   },
   {
     "id": 101,
@@ -1768,7 +1781,11 @@
     "prevention": "When you build a queue, name the thing that dequeues it and point at the line of code. A producer, a store and a worker are not a pipeline until something schedules the handoff, and the missing scheduler is invisible precisely because nothing fails. Ask of any status in a state machine: which loop reads it? A status no loop reads is a parking lot. And when a mechanism already exists but is reachable from only a couple of special-case callers, treat that as a missing entry point rather than a working feature — the callers will keep passing review while the capability stays unreachable in practice.",
     "cause": "design",
     "tag": "orchestration",
-    "posted_to_group": false
+    "posted_to_group": false,
+    "anchors": [
+      "ai_office_shared/shared/dev_queue.py:pick_next",
+      "ai_office_shared/shared/dev_queue.py:claim_task"
+    ]
   },
   {
     "id": 108,
@@ -1784,7 +1801,12 @@
     "prevention": "Never let a verdict default to a pass: initialise gate flags to failure and require positive evidence to flip them, so the absence of input reads as «not checked», never as «checked and fine». When a check has nothing to operate on, say that in the proof — an empty artifact deserves a louder verdict than a wrong one, not a quieter one. And when a chain of workers can fail at any stage, derive the diagnosis from the stage that actually failed: a helper named after one participant will keep blaming that participant for everyone else's failures, and the report will send people to read the logs of a service that was never called.",
     "cause": "design",
     "tag": "verification",
-    "posted_to_group": false
+    "posted_to_group": false,
+    "anchors": [
+      "agents/coder.py:record_dev_gate_evidence",
+      "agents/coder.py:dev_failure_reason",
+      "shared/github_tools.py:parse_check_runs"
+    ]
   },
   {
     "id": 109,
@@ -1800,7 +1822,10 @@
     "prevention": "Before writing a retry, classify what it is retrying: transient faults deserve the budget, refusals of the request itself deserve none, and a loop that cannot tell them apart will spend everything on the case where spending is useless. Say the classification in words in the report — «this is billing, not code» is a different instruction to the reader than «the team could not deliver», and the reader acts on the words, not on the stack trace. And when a subsystem fails, check whether the failure path can even express 'this was not my fault': a component that has only a failure branch for itself will accept blame for its dependencies.",
     "cause": "design",
     "tag": "orchestration",
-    "posted_to_group": false
+    "posted_to_group": false,
+    "anchors": [
+      "ai_office_shared/shared/dev_pipeline.py:unrecoverable_provider_error"
+    ]
   },
   {
     "id": 110,
@@ -1816,6 +1841,65 @@
     "prevention": "When a subsystem can put an object into a terminal state, check that something can also take it out, and that the exit has a name a caller can say. Prefer one named operation over a general-purpose escape hatch: an intent that can write anywhere is both more dangerous and harder to route correctly than an intent that does one thing. And when you fix a matching bug with word boundaries in one module, grep for the same substring idiom everywhere else the same day — the copy you leave behind is the one that will misroute, silently and without an error.",
     "cause": "design",
     "tag": "orchestration",
+    "posted_to_group": false,
+    "anchors": [
+      "ai_office_shared/shared/taskboard.py:reopen_task",
+      "agents/coder.py:_mentions"
+    ]
+  },
+  {
+    "id": 111,
+    "date": "2026-08-23",
+    "kind": "decision",
+    "bot": "ai-office-shared (dev-dept queue)",
+    "layer": "orchestration",
+    "title": "Queue results land through a branch and a PR gated on the target repo's own CI, not a push to the default branch",
+    "decision": "A ticket picked up by the inbound queue is written to a branch `cilly/dev-<task_id>`, opened as a pull request, and merged only after the target repository's own CI is green. Auto-merge sits behind `CILLY_DEV_QUEUE_AUTOMERGE`, off by default until three consecutive tickets reach green CI unaided.",
+    "why": "The three gate checks that existed — compile, no NEEDS_FIX, size guard — all measure text. Nothing in the office executed the generated code, which is exactly how an 8-line stub replaced a 5766-line file on 01.07.2026. Every office repository already runs pyflakes + compileall + tests in GitHub Actions, so the cheapest way to execute the code is to ask that CI rather than build a sandbox. A branch also makes a bad result inert: a red PR costs a review, whereas the previous behaviour pushed straight to the default branch and Railway deployed it before anyone saw the failure.",
+    "rejected": "Cloning the target repo into Cilly's container and running pytest there — the shape the handoff originally asked for. Rejected because it executes freshly generated code inside the process holding the office's tokens, costs minutes and hundreds of MB per ticket, and turns a missing dependency into a false red. Also rejected: keeping the direct push and reading CI afterwards, which detects breakage only after Railway has deployed it.",
+    "revisit_if": "A target repository turns out to have no CI workflow at all, or CI latency makes the queue unusably slow.",
+    "anchors": [
+      "shared/github_tools.py:get_checks_status",
+      "ai_office_shared/shared/dev_queue.py:automerge_enabled"
+    ],
+    "tag": "orchestration",
+    "posted_to_group": false
+  },
+  {
+    "id": 112,
+    "date": "2026-08-23",
+    "kind": "decision",
+    "bot": "ai-office-shared (dev-dept queue)",
+    "layer": "orchestration / control",
+    "title": "The queue asks the owner once, before any work, and his answer starts the run",
+    "decision": "`_dev_queue_tick` takes one open dev-dept ticket per tick, freezes its acceptance criteria while the ticket is still `open`, and sends the owner a three-button question (apply / defer 24h / reject). Nothing runs until he answers; the tick itself never starts work.",
+    "why": "The owner's words were «why do the bots send the report themselves instead of going through Cilly with a do-it-or-not question — that is exactly what I created the department for». The decision must stay with him and the execution must leave his hands; a queue that starts work on its own inverts that. Asking before the pipeline runs also costs nothing when the answer is no, whereas asking after would mean burning a full chain to produce something he did not want. Criteria are frozen before the question because `set_acceptance` refuses once work starts, and success defined after seeing the result is fitted to the result.",
+    "rejected": "Starting automatically and reporting afterwards — maximum autonomy, but it is precisely the behaviour the owner objected to, and it spends the department's budget on unwanted work. Also rejected: a two-button gate reusing the existing keyboard, because on a queue proposal «later» is a real answer and forcing it into «reject» loses tickets that were merely postponed.",
+    "revisit_if": "Three consecutive tickets are approved without hesitation and the question starts reading as friction rather than control.",
+    "anchors": [
+      "agents/coder.py:_dev_queue_tick",
+      "agents/coder.py:_approval_kb"
+    ],
+    "tag": "orchestration",
+    "posted_to_group": false
+  },
+  {
+    "id": 113,
+    "date": "2026-08-23",
+    "kind": "decision",
+    "bot": "ai-office-shared (lessons)",
+    "layer": "knowledge / process",
+    "title": "Decision history lives in lessons.json under a kind field, anchored to code, and is required only in two cases",
+    "decision": "`lessons.json` holds both kinds of record, separated by `kind` (`lesson` | `decision`; absent means lesson). A decision carries `decision` / `why` / `rejected` and deliberately has no `symptom` / `root_cause` / `fix`. Records point at code through `anchors` (`file.py:symbol`), and `tests/test_lesson_anchors.py` asserts those anchors still resolve. A record is required only when a change alters an invariant listed in `CLAUDE.md`, or contradicts an existing decision.",
+    "why": "Cilly already reads `lessons.json` first, so a second store would be a second thing that silently drifts from reality; separating by field costs nothing and keeps one source. Anchors are enforced instead of authorship because the failure that actually bit us is rot, not absence: the office-token rule on CLAUDE — СТАРТ described a mechanism never enabled in prod, and sessions hunted for it for months. The requirement is narrow because a rule demanding a record per change pays its cost per author and its benefit to a later reader, so it decays — and worse, fills the store with «renamed for clarity» entries until nobody reads it first, destroying the very property it was meant to buy. The trigger set is small enough to hold in one's head, and a rule you can hold in your head is followed without enforcement.",
+    "rejected": "A separate `decisions.json` — cleaner schema, but a second store to keep current and invisible to Cilly without extra wiring. ADR files under `docs/decisions/` — the conventional answer, but nothing reads that directory first. A hard rule requiring a record for every change, mechanically enforced — it becomes a toll booth and yields compliance artifacts rather than knowledge.",
+    "revisit_if": "Decisions come to outnumber lessons and the mixed file becomes hard to scan, or Cilly needs decisions injected into dev specs and the flat file proves too coarse to query.",
+    "anchors": [
+      "lessons/SCHEMA.md:kind",
+      "CLAUDE.md:Инварианты",
+      "tests/test_lesson_anchors.py:defined_symbols"
+    ],
+    "tag": "process",
     "posted_to_group": false
   }
 ]
