@@ -7028,12 +7028,15 @@ async def handle_cilly_task(request):
     except Exception as parse_err:
         return web.json_response({"status": "error", "detail": f"json parse: {parse_err}"}, status=400)
     try:
-        return await _handle_cilly_task_inner(data)
+        # Привилегия определяется ЗАГОЛОВКОМ запроса, а не полем в теле:
+        # тело шлёт вызывающий, и user_id в нём подделывается тривиально.
+        privileged = request.headers.get("X-Auth-Token", "") == RAILWAY_SECRET and bool(RAILWAY_SECRET)
+        return await _handle_cilly_task_inner(data, privileged=privileged)
     except Exception as e:
         import traceback
         return web.json_response({"status": "error", "detail": str(e), "trace": traceback.format_exc()[-1000:]}, status=200)
 
-async def _handle_cilly_task_inner(data):
+async def _handle_cilly_task_inner(data, *, privileged: bool = False):
     text    = data.get("message", "")
     agent   = data.get("agent", "Unknown")
     source  = data.get("source", "")
@@ -7051,6 +7054,28 @@ async def _handle_cilly_task_inner(data):
 
     # /railway <gql> — ПЕРВЫЙ перехват, до LLM, не требует ANTHROPIC_API_KEY
     if text.strip().startswith("/railway"):
+        # 🔴 Сырой проброс в Railway GraphQL от имени рабочего токена офиса:
+        # чтение переменных ВСЕХ сервисов (то есть всех секретов) и мутации —
+        # правка переменных, редеплой, удаление сервисов.
+        #
+        # До 23.08.2026 он был доступен без единого секрета. office_auth_middleware
+        # спроектирован как поэтапная раскатка: check_office_token возвращает True,
+        # пока OFFICE_RPC_TOKEN не выставлен, — а он не выставлен ни на одном
+        # сервисе. То есть middleware был no-op, POST /task открыт всему интернету,
+        # и через него любой, кто знает адрес, читал секреты воркспейса. Проверено
+        # в этот день: сессия Клода без единого токена вытащила все 44 переменные
+        # сервиса, включая TELETHON_SESSION и ключи ботов.
+        #
+        # Поэтапность годится для обычных эндпоинтов, но не для канала в облачный
+        # API: привилегия не имеет права наследовать позу «пока пускаем всех».
+        # Гейтим тем секретом, который УЖЕ существует и уже защищает /redis и
+        # /secrets, — не дожидаясь раскатки OFFICE_RPC_TOKEN.
+        if not privileged:
+            logger.warning("[railway] отказ: запрос без X-Auth-Token")
+            return web.json_response({"status": "error", "responses": [
+                "🚫 /railway требует X-Auth-Token. Сырой доступ к Railway GraphQL "
+                "не отдаётся по открытому запросу."
+            ]}, status=401)
         gql_q = text.strip()[8:].strip()
         if not gql_q:
             return web.json_response({"status": "ok", "responses": ["Использование: /railway <graphql query>"]})
