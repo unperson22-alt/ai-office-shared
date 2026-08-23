@@ -1801,5 +1801,21 @@
     "cause": "design",
     "tag": "orchestration",
     "posted_to_group": false
+  },
+  {
+    "id": 110,
+    "date": "2026-08-23",
+    "bot": "ai-office-shared (agents/coder.py, shared/taskboard.py)",
+    "layer": "capabilities / intent routing",
+    "title": "Asked to write to Redis, Cilly answered with bot quality metrics — the branch was chosen by a substring, and the write did not exist to begin with",
+    "symptom": "Asked through POST /task (source=CLAUDE) to run two explicit HSET commands returning board tasks 62ffa25b5e30 and aa573bddb6d7 from blocked to open, Cilly replied {\"quality:рэй\": {\"up\":0,\"down\":1}, \"quality:билли\": {\"up\":9,\"down\":1}, …}. Nothing was written and no error was raised: from the outside the request simply produced an unrelated audit.",
+    "root_cause": "Two independent defects. (a) The capability did not exist: the redis_query intent is not a command proxy but a fixed menu of four canned audits — DEL, quality, health, logs — with no HSET path anywhere, and no other intent covers a board write, so no phrasing could have succeeded. (b) The branch was selected by substring: `any(w in task_lower for w in [..., \"up\", \"down\", ...])`, and the request contained `updated_at`, whose middle is `up`. The same trap fires on group, support, model and дубль. The office already had the correct idiom for this — target_repo.bots_named_in matches on a word boundary precisely because «били» inside «побили» once resolved to Billy — and it was not carried here.",
+    "why_architecture": "The board is the office's source of truth for work, and until now it could only be written by code paths that happened to touch it in passing: the queue, the pipeline gate, the approval handler. There was no way to say «put this ticket back in the queue» to anyone — not to Cilly through an intent, not to Claude through an endpoint, because /redis needs a token a remote Claude session does not hold. So a ticket parked in blocked by an infrastructure outage could only be revived by the owner opening a terminal. A board that any component can move into a dead end, and no component can move out of one, will accumulate dead ends.",
+    "fix": "taskboard.reopen_task(redis, task_id, reason) — a named, narrow operation: status back to open, attempts and escalated reset, acceptance and evidence left untouched. Attempts are reset deliberately: they were spent by an access failure, not by work, and leaving them means the queue sees an exhausted ceiling on the very next tick and blocks the ticket again. A task in in_progress is refused, because resetting the counter under a running chain is a race rather than a repair. A new board_task intent exposes exactly that one operation to Cilly — reopen and nothing else — instead of granting arbitrary Redis writes through an LLM intent. Separately, _mentions() replaces the substring tests in every redis_query branch with word-boundary matching, keeping plain containment for emoji and up/down, which have no word boundary. 13 new tests, including the verbatim request that misrouted.",
+    "status": "fixed",
+    "prevention": "When a subsystem can put an object into a terminal state, check that something can also take it out, and that the exit has a name a caller can say. Prefer one named operation over a general-purpose escape hatch: an intent that can write anywhere is both more dangerous and harder to route correctly than an intent that does one thing. And when you fix a matching bug with word boundaries in one module, grep for the same substring idiom everywhere else the same day — the copy you leave behind is the one that will misroute, silently and without an error.",
+    "cause": "design",
+    "tag": "orchestration",
+    "posted_to_group": false
   }
 ]

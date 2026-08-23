@@ -404,6 +404,48 @@ async def update_status(
     return await _touch(redis_client, task_id, fields)
 
 
+async def reopen_task(redis_client, task_id: str, reason: str = "") -> tuple[bool, str]:
+    """
+    Вернуть задачу в очередь: status=open, счётчик попыток и флаг эскалации сброшены.
+
+    Зачем отдельная функция, а не «просто HSET»: 23.08.2026 две заявки dev-dept
+    легли в blocked из-за пустого счёта Anthropic — сбой инфраструктуры, а не
+    работа команды. Вернуть их в строй было нечем: Силли умеет читать Redis
+    четырьмя готовыми аудитами и не умеет писать вовсе, а `/redis` требует токен,
+    которого у сессии Клода нет. Возможность, которую нельзя назвать, не
+    существует (урок #80) — поэтому здесь именованная и узкая операция вместо
+    права писать в Redis что угодно через LLM-интент.
+
+    Счётчик обнуляем намеренно: попытки съел сбой доступа, а не работа. Оставь их
+    — и очередь на первом же тике увидит исчерпанный потолок и заблокирует задачу
+    снова, то есть заявка умрёт из-за чужого счёта, ни разу не дойдя до отдела.
+
+    Критерии приёмки и улики НЕ трогаем: они заморожены до работы и переживают
+    возврат, а новый прогон перезапишет улики по тем же критериям.
+
+    Returns:
+        (получилось, причина_отказа)
+    """
+    if redis_client is None or not task_id:
+        return False, "нет redis или task_id"
+    task = await get_task(redis_client, task_id)
+    if not task:
+        return False, f"задача {task_id} не найдена"
+    if task.get("status") == "in_progress":
+        # По ней прямо сейчас идёт цепочка и занят слот исполнения. Сброс
+        # счётчика под работающим прогоном — гонка, а не починка.
+        return False, "задача уже в работе — возвращать нечего"
+    ok = await _touch(redis_client, task_id, {
+        "status": "open",
+        "attempts": "0",
+        "escalated": "0",
+        "result": (reason or "возвращена в очередь")[:_TEXT_FIELDS["result"]],
+    })
+    if ok:
+        _logger.info("reopen_task %s: %s", task_id, (reason or "")[:80])
+    return (True, "") if ok else (False, "ошибка записи")
+
+
 async def set_result(redis_client, task_id: str, result: str) -> bool:
     """Записывает результат задачи без смены статуса. Fail-silent."""
     return await _touch(redis_client, task_id, {"result": (result or "")[:_TEXT_FIELDS["result"]]})

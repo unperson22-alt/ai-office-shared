@@ -421,6 +421,36 @@ async def pop_pending(action_id: str) -> dict | None:
     return pending_fixes.pop(action_id, None)
 
 
+# ── Совпадение по СЛОВУ, а не по подстроке ──────────────────────────────────
+# 23.08.2026 просьба «выполни HSET … updated_at …» ушла в аудит качества ботов
+# и вернула {"quality:билли": {"up": 9, "down": 1}}. Ветку выбрало условие
+# `"up" in task_lower` — а "up" сидит внутри "updated_at". Тот же капкан ловит
+# "group", "support", "дубль". Ровно от этого в target_repo.bots_named_in стоит
+# граница слова, после того как «били» внутри «побили» дало Билли.
+import re as _re_words
+
+
+def _mentions(text: str, words) -> bool:
+    """True, если в тексте есть хоть одно слово из списка — по границе слова.
+
+    Не-буквенные метки (эмодзи, "up/down") границ слова не имеют, поэтому для
+    них остаётся обычное вхождение: `\b` рядом с 👍 не работает вовсе.
+    """
+    low = (text or "").lower()
+    if not low:
+        return False
+    for w in words:
+        w = (w or "").strip().lower()
+        if not w:
+            continue
+        if w[0].isalnum() and w[-1].isalnum():
+            if _re_words.search(rf"(?<!\w){_re_words.escape(w)}(?!\w)", low):
+                return True
+        elif w in low:
+            return True
+    return False
+
+
 # ── Гейт против схлопывания файла (инцидент coder.py: 5766 → 8 строк) ───────
 # compile() + отсутствие NEEDS_FIX пропускают валидный, но катастрофически
 # неполный файл. Перед стейджем и перед пушем сравниваем размер нового кода
@@ -880,7 +910,7 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
 
 
 INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
-{"intent":"push_code|fix_bot|create_bot|create_repo|create_cron|add_external_bot|get_bot_token|deploy|read_file|list_files|redis_query|trader_winrate|dev_task|delegate|update_bot_instruction|office_scan|answer","repo":"repo_name_or_null","path":"file_path_or_null","task":"task_description","bot":"имя_бота_или_null","instruction":"текст_инструкции_или_null","mode":"append|set|clear","confidence":0.0-1.0}
+{"intent":"push_code|fix_bot|create_bot|create_repo|create_cron|add_external_bot|get_bot_token|deploy|read_file|list_files|redis_query|board_task|trader_winrate|dev_task|delegate|update_bot_instruction|office_scan|answer","repo":"repo_name_or_null","path":"file_path_or_null","task":"task_description","bot":"имя_бота_или_null","instruction":"текст_инструкции_или_null","mode":"append|set|clear","confidence":0.0-1.0}
 
 ГЛАВНОЕ ПРАВИЛО — различай вопрос и команду:
 - ВОПРОС о процессе ("как создать бота?", "что нужно для деплоя?", "какой стек?", "как задеплоить?", "с чего начать?") → intent=answer
@@ -889,7 +919,8 @@ INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
 Сигналы команды: создай, сделай, залей, задеплой, исправь, добавь, зарегистрируй
 
 push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не расписание!), create_repo=создать ПУСТОЙ GitHub-репозиторий и больше ничего. Сигналы: "создай репозиторий X", "заведи репо X", "нужен новый репозиторий X", "создай приватный репозиторий X". Имя репо клади в "repo". Это ОДИН вызов готового create_repo — НЕ создавай бота, НЕ ходи в BotFather, НЕ пушь шаблонный код и НЕ зови команду разработки. Если для репо нужен ещё и код, он придёт ОТДЕЛЬНОЙ задачей или его зальют снаружи. Отличие от create_bot: create_bot просят словом «бот» и он тянет за собой токен и Railway-сервис; здесь просят словом «репозиторий» и нужен только он, create_cron=создать расписание/напоминание/cron для пользователя ("напоминай каждый день", "отправляй каждое утро", "напоминалка в X время") — создаёт Railway cron-сервис, add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon, cleanup_dm=удалить сообщения с ключами/секретами в личке (gsk_, GROQ, токен) через Telethon — ищет в диалоге с user_id=int(BOT_TOKEN.split(':')[0]) (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), edit_file=точечная замена строки в файле без чтения всего файла (сигналы: замени в файле, вставь после строки, patch, добавь в начало функции — когда указан repo+path+old+new), agentic_task=многошаговая задача из 2+ шагов: читай+делай, исправь+задеплой, залей+проверь, прочитай+перепиши. Сигналы: исправь и задеплой, залей код и задеплой, прочитай X и отправь, прочитай X и перепиши, пройдись по всем, для каждого, рефакторинг, аудит. ВАЖНО: если задача содержит И (исправить код И задеплоить) — это agentic_task. При чтении большого файла (bot.py 800+ строк) — не читать целиком в цикле, читать один раз и искать нужную функцию по имени, dev_task=делегировать задачу КОМАНДЕ разработки (Девви→Рикки→Тести→Секки→Скрибби). ТОЛЬКО когда речь о новой фиче/модуле/компоненте для продукта — НЕ о правке одного файла. Требует ВЫСОКОЙ уверенности (confidence>=0.85). Чёткие сигналы: "реализуй фичу", "разработай модуль", "напиши новый компонент", "сделай PR для", "задача для команды", "отдай команде", "dev-dept", "через цепочку". НЕЯСНЫЙ запрос ("сделай что-нибудь", "напиши функцию" без контекста) → confidence<0.85 → Силли переспрашивает. Если задача про правку существующего файла/бота — это push_code или agentic_task, НЕ dev_task. Просьба СОЗДАТЬ РЕПОЗИТОРИЙ — это create_repo, а НЕ dev_task: писать код для этого не надо, у меня есть готовый вызов (31.07.2026 «создай репозиторий molly-trader» ушло в dev_task с confidence 0.92, команда три попытки писала скрипт с выдуманной организацией, репозиторий так и не появился). delegate=поручить задачу ГЛАВЕ ОТДЕЛА и проверить результат (НЕ написание кода). Сигналы: "спроси у Тилли", "пусть Милли посчитает", "делегируй Доктору", "поручи отделу", "узнай у <бот>". Заполни "bot" именем отдела. confidence>=0.85, иначе Силли переспросит. update_bot_instruction=изменить поведение бота на лету через инструкцию в системном промпте (БЕЗ редеплоя). Сигналы: "научи <бота>", "пусть <бот> всегда/больше не", "добавь <боту> правило", "обнови инструкцию <бота>", "запомни для <бота>". Заполни "bot" (кого учим), "instruction" (что добавить), "mode" (append по умолчанию; set=заменить; clear=сбросить). office_scan=самопроверка офиса по команде владельца: просканировать боты на ошибки и предложить фиксы (каждый уходит на /approve). Сигналы: "проверь офис", "просканируй ботов", "что сломалось", "самопроверка", "проверь всех ботов", "почини <бот>" (тогда заполни "bot"). Свип НЕ применяет фиксы сам — только предлагает. answer=ответить словами.
-ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis" → redis_query.
+ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis" → redis_query. redis_query ТОЛЬКО ЧИТАЕТ. Любая просьба ИЗМЕНИТЬ задачу на доске — это board_task, а не redis_query.
+board_task=операция над задачей доски по её id. Сигналы: "верни задачу X в работу", "переоткрой задачу X", "задача X снова в очередь", "reopen X". Id — 12 hex-символов, клади его в "task". Заполни "mode": reopen (вернуть в очередь, сбросив счётчик попыток) — единственный поддерживаемый режим. Это НЕ произвольная запись в Redis: доступна ровно одна названная операция.
 ВАЖНО trader_winrate: "винрейт трейдера", "посчитай winrate", "проверь винрейт сигналов", "какой winrate у трейдера", "винрейт по сигналам", "статистика трейдера WR" → trader_winrate (читает signals:list/signal:* трейдера, считает WR по свечам, отдаёт за 7 дней и за всё время).
 ВАЖНО: "подключить бота", "добавить чужого бота" → add_external_bot, НЕ create_bot.
 Репо: billy-bot,tilly-bot,filly-bot,dilly-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard,mama-bot,gosling-bot,villy-bot,prophet-bot,kriss-bot,pilly-bot,doctor-bot,marketing-dept.
@@ -4245,8 +4276,54 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         result = await _run_office_scan(target=target, proposal_chat_id=pcid)
         await reply_func(_format_scan_report(result, target=target))
 
+    elif intent == "board_task":
+        """Операция над задачей доски по id. Названная и узкая — намеренно.
+
+        23.08 понадобилось вернуть в очередь две заявки dev-dept, легшие в
+        blocked из-за пустого счёта Anthropic. Сделать это было нечем: redis_query
+        только читает, `/redis` требует токен, которого у сессии Клода нет, и
+        просьба «выполни HSET …» ушла в аудит качества. Даём ровно одну операцию,
+        а не право писать в Redis что угодно через LLM-интент.
+        """
+        import re as _re_board
+
+        raw_id = (intent_data.get("task") or "").strip()
+        m_id = _re_board.search(r"\b([0-9a-f]{12})\b", raw_id or task)
+        board_task_id = m_id.group(1) if m_id else ""
+        if not board_task_id:
+            await reply_func(
+                "⚠️ Не вижу id задачи. Он выглядит как 12 hex-символов, например "
+                "`62ffa25b5e30` — покажи его в сообщении."
+            )
+            return
+
+        mode = (intent_data.get("mode") or "reopen").strip().lower()
+        if mode != "reopen":
+            await reply_func(f"⚠️ Для доски поддерживается только reopen, не {mode!r}.")
+            return
+
+        r_board = await get_redis()
+        ok_reopen, why_reopen = await tb.reopen_task(
+            r_board, board_task_id, reason=f"возвращена в очередь: {task[:150]}"
+        )
+        if not ok_reopen:
+            await reply_func(f"⚠️ Не вернул задачу [{board_task_id}]: {why_reopen}")
+            return
+        fresh = await tb.get_task(r_board, board_task_id)
+        await reply_func(
+            f"✅ Задача [{board_task_id}] снова в очереди.\n"
+            f"«{(fresh or {}).get('title', '')[:120]}»\n"
+            f"status={(fresh or {}).get('status')} attempts={(fresh or {}).get('attempts')} "
+            f"escalated={(fresh or {}).get('escalated')}\n"
+            f"Отдел подхватит её на ближайшем тике, если слот свободен."
+        )
+
     elif intent == "redis_query":
-        """Выполняет реальные Redis операции — scan, get, hgetall, custom audit."""
+        """Выполняет реальные Redis операции — scan, get, hgetall, custom audit.
+
+        ЧИТАЕТ, но не пишет: это фиксированное меню аудитов, а не проксирование
+        команд. Просьбы изменить задачу доски обслуживает интент board_task.
+        """
         r = await get_redis()
         if not r:
             await reply_func("❌ Redis недоступен")
@@ -4258,7 +4335,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         # ── 0. DEL — обрабатывается первым и возвращает сразу ────────────
         # Ключ ищем в оригинальном task (регистр важен) и без хардкода 'office:' —
         # любой namespace вида prefix:..., кроме URL-схем (https://...)
-        if any(w in task_lower for w in ["del ", "delete ", "удали ключ"]):
+        if _mentions(task_lower, ["del", "delete", "удали ключ"]):
             import re as _re_del
             del_match = _re_del.search(
                 r'\b(?!https?:)([A-Za-z][A-Za-z0-9_.\-]*:(?!//)[A-Za-zа-яА-ЯёЁ0-9:_.\-]+)', task)
@@ -4270,7 +4347,7 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                 return
 
         # ── 1. quality audit ──────────────────────────────────────────────
-        if any(w in task_lower for w in ["quality", "реакци", "голос", "👍", "👎", "up", "down", "аудит"]):
+        if _mentions(task_lower, ["quality", "реакци", "голос", "👍", "👎", "up", "down", "аудит"]):
             async for key in r.scan_iter("office:quality:*"):
                 data = await r.hgetall(key)
                 bot_name = key.split(":")[-1]
@@ -4280,13 +4357,13 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                 }
 
         # ── 2. health audit ───────────────────────────────────────────────
-        if any(w in task_lower for w in ["health", "здоровь", "status", "up/down", "живой", "живые"]):
+        if _mentions(task_lower, ["health", "здоровь", "status", "up/down", "живой", "живые"]):
             async for key in r.scan_iter("office:health:*"):
                 agent = key.split(":")[-1]
                 result[f"health:{agent}"] = await r.get(key)
 
         # ── 3. logs ───────────────────────────────────────────────────────
-        if any(w in task_lower for w in ["log", "лог", "событи", "ошибк"]):
+        if _mentions(task_lower, ["log", "лог", "событи", "ошибк"]):
             bot_hint = None
             for bot_key in ["билли","тилли","милли","доктор","крисс","эллис","вилли","гослинг","силли","фили"]:
                 if bot_key in task_lower:
