@@ -1965,5 +1965,25 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-08-23T16:07:40.507410+00:00"
+  },
+  {
+    "id": 116,
+    "date": "2026-08-23",
+    "bot": "ai-office-shared (agents/coder.py, shared/auth.py)",
+    "layer": "security / access control",
+    "title": "A phased-rollout auth middleware that defaults to open left a raw Railway GraphQL passthrough reachable by anyone who knew the URL",
+    "symptom": "While diagnosing an unrelated report, a Claude session holding no office credential of any kind read all 44 environment variables of the ai-office-shared service — including TELETHON_SESSION, bot tokens and API keys — by sending a plain POST to the public URL. No header, no token, no error. The same channel accepts arbitrary GraphQL, so it also permits mutations: changing service variables, redeploying, deleting services.",
+    "root_cause": "office_auth_middleware was written as a two-phase rollout: phase A logs a warning and calls the handler anyway, phase B (OFFICE_RPC_STRICT=1) enforces. Its helper check_office_token returns True whenever OFFICE_RPC_TOKEN is unset, so that unconfigured services keep working during the migration. OFFICE_RPC_TOKEN is set on no service — verified through Railway GraphQL on 21.08 and again on 23.08 — which makes the middleware a no-op and POST /task open to the internet. Inside /task lives a `/railway` prefix that forwards its argument verbatim to Railway's GraphQL API using the office's workspace token. A privileged raw cloud-API channel therefore inherited the permissive posture designed for ordinary endpoints during a migration.",
+    "why_architecture": "The phased design is correct for its purpose: flipping enforcement before every caller carries the token breaks the office at once, and the rollout document says so. The error is that the phase applies uniformly. An endpoint that answers questions can safely be open for a week; a channel that reads every secret in the cloud account cannot be open for a minute. Nothing in the code distinguished the two, and the risk was invisible because the middleware's warning path looks like it is doing something — it logs, it names the caller, and then it allows.",
+    "fix": "The /railway branch now requires X-Auth-Token matching RAILWAY_SECRET and refuses with 401 otherwise, independent of OFFICE_RPC_STRICT. It uses the secret that already exists and already guards /redis and /secrets, so it closes the hole today rather than waiting for the OFFICE_RPC_TOKEN rollout. Privilege is derived from the request header, never from a field in the body: the body is written by the caller and user_id is trivially forged. An empty secret does not grant privilege — that is the exact trap that made the middleware a no-op. Tests assert the flag exists, that it comes from the header, that an empty secret grants nothing, and that the refusal precedes the call to Railway.",
+    "status": "fixed",
+    "prevention": "A phased security rollout must exempt nothing and grandfather nothing that is genuinely privileged: classify each endpoint before choosing a phase, and put raw passthroughs to cloud or shell APIs in the enforce-now bucket regardless of migration state. Treat any helper that returns True when unconfigured as a default-open switch and audit every caller of it. And when auth is nominally present, verify it by making the call without credentials from outside the network — a middleware that logs a warning and proceeds reads, in every dashboard, exactly like one that blocks.",
+    "cause": "design",
+    "tag": "security",
+    "anchors": [
+      "ai_office_shared/shared/auth.py:check_office_token",
+      "agents/coder.py:handle_cilly_task"
+    ],
+    "posted_to_group": false
   }
 ]
