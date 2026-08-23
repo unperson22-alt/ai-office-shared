@@ -2005,6 +2005,7 @@
       "ai_office_shared/shared/fault_evidence.py:dispatch_refusal",
       "ai_office_shared/shared/fault_evidence.py:failure_evidence"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T18:18:51.927565+00:00"
   }
 ]
