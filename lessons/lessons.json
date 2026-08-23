@@ -1984,6 +1984,7 @@
       "ai_office_shared/shared/auth.py:check_office_token",
       "agents/coder.py:handle_cilly_task"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-23T17:38:32.275991+00:00"
   }
 ]
