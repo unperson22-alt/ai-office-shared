@@ -18,7 +18,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ai_office_shared.shared.bug_lessons import (                    # noqa: E402
-    edit_plan, known_messages, msgids_key, remember_messages, select_lesson_parts,
+    edit_plan, forget_messages, known_messages, msgids_key,
+    remember_messages, select_lesson_parts, stale_link,
 )
 from ai_office_shared.shared.telegram_text import (                   # noqa: E402
     is_continuation_part, split_for_telegram,
@@ -121,6 +122,11 @@ class FakeRedis:
             raise RuntimeError("redis down")
         return self.data.get(key)
 
+    async def delete(self, key):
+        if self.broken:
+            raise RuntimeError("redis down")
+        self.data.pop(key, None)
+
 
 def run(coro):
     return asyncio.run(coro)
@@ -161,6 +167,43 @@ class TestRememberMessages(unittest.TestCase):
         r = FakeRedis()
         r.data[msgids_key(118)] = "не json"
         self.assertEqual(run(known_messages(r, 118)), [])
+
+
+class TestStaleLink(unittest.TestCase):
+    """Записанный неверный id хуже незаписанного: уводит на обречённый путь.
+
+    24.08.2026 `/relink_lesson 118` отправили в ЛИЧКЕ, ответом на собственное
+    сообщение. id уехал в память, команда отчиталась «запомнено 1 сообщени(й)»,
+    и только правка показала правду: «message to edit not found».
+    """
+
+    def test_the_exact_telegram_answer_from_the_incident(self):
+        self.assertTrue(stale_link(
+            "Telegram server says - Bad Request: message to edit not found"))
+
+    def test_uneditable_message_counts_too(self):
+        self.assertTrue(stale_link("Bad Request: message can't be edited"))
+
+    def test_identical_text_is_not_a_stale_link(self):
+        """Иначе сброс привязки случался бы на пустой правке."""
+        self.assertFalse(stale_link("Bad Request: message is not modified"))
+
+    def test_unrelated_errors_do_not_reset_the_link(self):
+        for err in ("Too Many Requests: retry after 30", "Bad Request: text is too long", ""):
+            with self.subTest(err=err):
+                self.assertFalse(stale_link(err))
+
+    def test_forget_clears_only_that_lesson(self):
+        r = FakeRedis()
+        run(remember_messages(r, 118, [1]))
+        run(remember_messages(r, 119, [2]))
+        self.assertTrue(run(forget_messages(r, 118)))
+        self.assertEqual(run(known_messages(r, 118)), [])
+        self.assertEqual(run(known_messages(r, 119)), [2])
+
+    def test_forget_survives_broken_redis(self):
+        self.assertFalse(run(forget_messages(FakeRedis(broken=True), 118)))
+        self.assertFalse(run(forget_messages(None, 118)))
 
 
 class TestEditPlan(unittest.TestCase):

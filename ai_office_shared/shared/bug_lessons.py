@@ -136,3 +136,37 @@ def edit_plan(known: list, parts: list) -> tuple:
                        f"а новый текст — {len(parts)}: правка на месте не делит "
                        f"и не склеивает сообщения")
     return True, ""
+
+
+async def forget_messages(redis_client, lesson_id) -> bool:
+    """Забыть id сообщений урока. Нужно, когда они оказались неверными.
+
+    24.08.2026 в память уехал id из ЛИЧКИ вместо группы: id уникален внутри
+    своего чата, и в Bug Lessons его просто нет. Записанный неверный id хуже
+    незаписанного — он уводит перепост на путь правки, который обречён.
+    """
+    if redis_client is None:
+        return False
+    try:
+        await redis_client.delete(msgids_key(lesson_id))
+        return True
+    except Exception as e:
+        logger.warning("forget_messages(#%s) failed: %s", lesson_id, e)
+        return False
+
+
+# Ответы Telegram, означающие «этого сообщения тут нет / править его нельзя».
+# Сообщение сервера цитируем как есть (инвариант офиса: провал называет тот,
+# кто упал), но реагировать надо по существу — сбросить неверную привязку.
+_STALE_EDIT_TELLS = (
+    "message to edit not found",
+    "message can't be edited",
+    "message_id_invalid",
+    "chat not found",
+)
+
+
+def stale_link(error_text: str) -> bool:
+    """Правка провалилась потому, что привязка неверна, а не из-за текста."""
+    low = str(error_text or "").lower()
+    return any(t in low for t in _STALE_EDIT_TELLS)
