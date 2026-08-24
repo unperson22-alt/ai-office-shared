@@ -10,13 +10,16 @@
 уходит несколькими сообщениями, из которых заголовок несёт только первое.
 """
 import ast
+import asyncio
 import os
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ai_office_shared.shared.bug_lessons import select_lesson_parts   # noqa: E402
+from ai_office_shared.shared.bug_lessons import (                    # noqa: E402
+    edit_plan, known_messages, msgids_key, remember_messages, select_lesson_parts,
+)
 from ai_office_shared.shared.telegram_text import (                   # noqa: E402
     is_continuation_part, split_for_telegram,
 )
@@ -99,6 +102,90 @@ class TestContinuationMarkerMatchesItsWriter(unittest.TestCase):
         only = split_for_telegram("короткий урок")
         self.assertEqual(len(only), 1)
         self.assertFalse(is_continuation_part(only[0]))
+
+
+class FakeRedis:
+    """Достаточно для set/get одной строки."""
+
+    def __init__(self, broken=False):
+        self.data = {}
+        self.broken = broken
+
+    async def set(self, key, val):
+        if self.broken:
+            raise RuntimeError("redis down")
+        self.data[key] = val
+
+    async def get(self, key):
+        if self.broken:
+            raise RuntimeError("redis down")
+        return self.data.get(key)
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+class TestRememberMessages(unittest.TestCase):
+    """Bot API истории не читает: id, не записанный при отправке, потерян навсегда."""
+
+    def test_roundtrip_keeps_part_order(self):
+        r = FakeRedis()
+        self.assertTrue(run(remember_messages(r, 118, [41, 42, 43])))
+        self.assertEqual(run(known_messages(r, 118)), [41, 42, 43])
+
+    def test_key_is_namespaced_per_lesson(self):
+        r = FakeRedis()
+        run(remember_messages(r, 118, [41]))
+        run(remember_messages(r, 119, [42]))
+        self.assertEqual(run(known_messages(r, 118)), [41])
+        self.assertEqual(run(known_messages(r, 119)), [42])
+        self.assertIn("118", msgids_key(118))
+
+    def test_unknown_lesson_is_empty_not_an_error(self):
+        self.assertEqual(run(known_messages(FakeRedis(), 999)), [])
+
+    def test_empty_list_is_refused(self):
+        self.assertFalse(run(remember_messages(FakeRedis(), 118, [])))
+
+    def test_broken_redis_never_raises(self):
+        """Не запомнили — перепост уйдёт старым путём, но бот не упал."""
+        self.assertFalse(run(remember_messages(FakeRedis(broken=True), 118, [1])))
+        self.assertEqual(run(known_messages(FakeRedis(broken=True), 118)), [])
+
+    def test_no_redis_at_all_is_survivable(self):
+        self.assertFalse(run(remember_messages(None, 118, [1])))
+        self.assertEqual(run(known_messages(None, 118)), [])
+
+    def test_garbage_in_redis_does_not_crash(self):
+        r = FakeRedis()
+        r.data[msgids_key(118)] = "не json"
+        self.assertEqual(run(known_messages(r, 118)), [])
+
+
+class TestEditPlan(unittest.TestCase):
+    """Правка на месте — единственный путь, не двигающий урок в конец ленты."""
+
+    def test_matching_counts_allow_the_edit(self):
+        ok, why = edit_plan([41], ["один кусок"])
+        self.assertTrue(ok)
+        self.assertEqual(why, "")
+
+    def test_unknown_ids_refuse(self):
+        ok, why = edit_plan([], ["один кусок"])
+        self.assertFalse(ok)
+        self.assertIn("неизвестн", why)
+
+    def test_mismatch_refuses_and_names_both_numbers(self):
+        """#119 после правки стал двумя сообщениями, а в группе лежит одним."""
+        ok, why = edit_plan([41], ["часть 1", "часть 2"])
+        self.assertFalse(ok)
+        self.assertIn("1 сообщени", why)
+        self.assertIn("2", why)
+
+    def test_shrinking_also_refuses(self):
+        ok, _ = edit_plan([41, 42], ["теперь одна часть"])
+        self.assertFalse(ok)
 
 
 class TestCommandIsWiredAndGuarded(unittest.TestCase):

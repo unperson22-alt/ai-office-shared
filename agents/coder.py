@@ -28,7 +28,9 @@ from ai_office_shared.shared.json_extract import first_json_object
 from ai_office_shared.shared.verify import extract_code
 from ai_office_shared.shared.target_repo import repo_looks_valid, target_repo
 from ai_office_shared.shared.telegram_text import split_for_telegram
-from ai_office_shared.shared.bug_lessons import select_lesson_parts
+from ai_office_shared.shared.bug_lessons import (
+    edit_plan, known_messages, remember_messages, select_lesson_parts,
+)
 from ai_office_shared.shared.fault_evidence import dispatch_refusal, failure_evidence
 from ai_office_shared.shared.log_redaction import (
     install_secret_redaction, quiet_http_client_logs, redact,
@@ -1676,9 +1678,15 @@ async def publish_pending_lessons(reply_func=None, limit: int = 100) -> int:
             # 12.08 он встал первым в очереди и запер за собой всё остальное на
             # одиннадцать дней. Режем по абзацам, а не обрезаем: потерянный хвост
             # выглядел бы как целый урок.
+            sent_ids = []
             for part in split_for_telegram(_format_lesson(lesson)):
-                await _GLOBAL_BOT.send_message(chat_id=BUG_LESSONS_CHAT, text=part)
+                sent = await _GLOBAL_BOT.send_message(chat_id=BUG_LESSONS_CHAT, text=part)
+                sent_ids.append(getattr(sent, "message_id", None))
                 await asyncio.sleep(0.4)
+            # id нужны, чтобы потом поправить урок НА МЕСТЕ, не двигая его в конец
+            # ленты и не трогая telethon (урок #122). Запоминаем сразу: второго
+            # шанса узнать их у Bot API нет — истории он не читает.
+            await remember_messages(await get_redis(), lesson.get("id"), sent_ids)
             lesson["posted_to_group"] = True
             lesson["posted_at"] = now_iso
             posted += 1
@@ -7003,6 +7011,46 @@ async def repost_lesson(reply_func, lesson_id: int, confirm: bool) -> None:
 
     parts = split_for_telegram(_format_lesson(lesson))
 
+    # ── Быстрый путь: правка НА МЕСТЕ ─────────────────────────────────────────
+    # Он же единственный, который не ломает порядок. Удаление и повторная
+    # отправка двигают урок в конец ленты, даже когда всё срабатывает; а 24.08
+    # оно и не срабатывало — telethon вернул «The key is not registered in the
+    # system (caused by GetHistoryRequest)», то есть сессия мертва, и весь путь
+    # «найти по тексту → удалить» закрыт целиком.
+    r_ids = await get_redis()
+    known = await known_messages(r_ids, lesson_id)
+    can_edit, why_not = edit_plan(known, parts)
+    if can_edit:
+        if not confirm:
+            await reply_func(
+                f"🔎 Dry-run по уроку #{lesson_id}.\n"
+                f"Урок известен как {len(known)} сообщени(й) — будет переписан НА МЕСТЕ, "
+                f"порядок в группе не изменится.\n"
+                f"Выполнить: `/repost_lesson {lesson_id} confirm`"
+            )
+            return
+        edited = 0
+        for msg_id, part in zip(known, parts):
+            try:
+                await _GLOBAL_BOT.edit_message_text(
+                    chat_id=BUG_LESSONS_CHAT, message_id=msg_id, text=part)
+                edited += 1
+            except Exception as e:
+                # «message is not modified» — не провал: текст уже такой.
+                if "not modified" in str(e).lower():
+                    edited += 1
+                    continue
+                await reply_func(f"❌ Урок #{lesson_id}: правка сообщения {msg_id} не прошла: {e}")
+                return
+            await asyncio.sleep(0.3)
+        await reply_func(
+            f"✅ Урок #{lesson_id} переписан на месте: {edited} сообщени(й). "
+            f"Порядок в группе не тронут."
+        )
+        return
+
+    logger.info("[repost_lesson] #%s правка на месте недоступна: %s", lesson_id, why_not)
+
     tg_cl = None
     try:
         tg_cl = await get_telethon_client()
@@ -7026,7 +7074,13 @@ async def repost_lesson(reply_func, lesson_id: int, confirm: bool) -> None:
             await tg_cl.delete_messages(BUG_LESSONS_CHAT, old_ids[i:i + 100])
             await asyncio.sleep(0.3)
     except Exception as e:
-        await reply_func(f"❌ Перепост #{lesson_id} — не смог разобрать группу: {e}")
+        await reply_func(
+            f"❌ Перепост #{lesson_id} — не смог разобрать группу: {e}\n\n"
+            f"Это путь через telethon: найти сообщения по тексту и удалить. "
+            f"Правка на месте его не требует, но для неё нужно знать id сообщений "
+            f"({why_not}). Ответь на сообщение урока в Bug Lessons командой "
+            f"`/relink_lesson {lesson_id}` — и повтори."
+        )
         return
     finally:
         if tg_cl is not None:
@@ -7054,6 +7108,50 @@ async def repost_lesson(reply_func, lesson_id: int, confirm: bool) -> None:
 
     await reply_func(
         f"✅ Урок #{lesson_id} перезаписан: снято {len(old_ids)}, отправлено {len(parts)}."
+    )
+
+
+@dp.message(F.text.startswith("/relink_lesson"))
+async def cmd_relink_lesson(message: Message):
+    """Привязать сообщение в Bug Lessons к уроку — ОТВЕТОМ на это сообщение.
+
+    Нужна только для уроков, опубликованных до того, как публикатор начал
+    запоминать id сам. Ответ, а не ссылка: id приходит точным из
+    reply_to_message, копировать и вставлять нечего, ошибиться нечем.
+
+    Многочастный урок привязывается по частям, по одному ответу на часть, в
+    порядке частей — правка на месте сопоставляет их позиционно.
+    """
+    owner = int(os.getenv("YOUR_TELEGRAM_ID", "0") or "0")
+    if owner and message.from_user and message.from_user.id != owner:
+        return
+    args = [a for a in (message.text or "").split()[1:] if a.isdigit()]
+    if not args:
+        await message.answer("Формат: ответом на сообщение урока — /relink_lesson <номер>")
+        return
+    if not message.reply_to_message:
+        await message.answer(
+            "Команду надо отправить ОТВЕТОМ на сообщение урока в Bug Lessons — "
+            "иначе неоткуда взять id."
+        )
+        return
+    lesson_id = int(args[0])
+    r = await get_redis()
+    prev = await known_messages(r, lesson_id)
+    ids = prev + [message.reply_to_message.message_id]
+    # Повтор того же ответа не должен плодить дубли позиций.
+    seen, ordered = set(), []
+    for m in ids:
+        if m not in seen:
+            seen.add(m)
+            ordered.append(m)
+    ok = await remember_messages(r, lesson_id, ordered)
+    if not ok:
+        await message.answer(f"❌ Не смог запомнить id для #{lesson_id} (Redis недоступен?)")
+        return
+    await message.answer(
+        f"🔗 Урок #{lesson_id}: запомнено {len(ordered)} сообщени(й).\n"
+        f"Теперь `/repost_lesson {lesson_id} confirm` перепишет его на месте."
     )
 
 

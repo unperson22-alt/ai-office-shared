@@ -21,9 +21,13 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 
 from .telegram_text import is_continuation_part
+
+logger = logging.getLogger("ai_office_shared.bug_lessons")
 
 # Публикатор пишет «🐛 Lesson #<id> — <title>»; в группе лежат и старые русские
 # «Урок #<id>», отсюда оба слова. `\b` после номера и есть та самая граница.
@@ -61,3 +65,74 @@ def select_lesson_parts(texts, lesson_id) -> list:
             continue
         collecting = False
     return picked
+
+
+# ── Какими сообщениями урок лежит в группе ────────────────────────────────────
+# Зачем помнить: перепост через telethon (найти по тексту → удалить → отправить
+# заново) 24.08.2026 упёрся в мёртвую сессию — `The key is not registered in the
+# system (caused by GetHistoryRequest)`. И даже живой он двигает урок в конец
+# ленты, ломая порядок.
+#
+# Если id сообщений известны, ничего искать и удалять не нужно: Bot API правит
+# СВОЙ текст на месте. Порядок не меняется, telethon не участвует, старой копии
+# не остаётся. Поэтому публикатор запоминает id сразу при отправке.
+#
+# Данные — в Redis, а не в git: это состояние чата, а не код (инвариант офиса).
+
+MSGIDS_PREFIX = "office:lesson:msgids"
+
+
+def msgids_key(lesson_id) -> str:
+    return f"{MSGIDS_PREFIX}:{lesson_id}"
+
+
+async def remember_messages(redis_client, lesson_id, message_ids) -> bool:
+    """Запомнить, какими сообщениями урок лежит в группе. Порядок частей значим.
+
+    Fail-silent: не сумели запомнить — перепост просто уйдёт по старому пути.
+    """
+    ids = [int(m) for m in (message_ids or []) if str(m).lstrip("-").isdigit()]
+    if not ids or redis_client is None:
+        return False
+    try:
+        await redis_client.set(msgids_key(lesson_id), json.dumps(ids))
+        return True
+    except Exception as e:
+        logger.warning("remember_messages(#%s) failed: %s", lesson_id, e)
+        return False
+
+
+async def known_messages(redis_client, lesson_id) -> list:
+    """id сообщений урока, по порядку частей. Пустой список — не знаем."""
+    if redis_client is None:
+        return []
+    try:
+        raw = await redis_client.get(msgids_key(lesson_id))
+    except Exception as e:
+        logger.warning("known_messages(#%s) failed: %s", lesson_id, e)
+        return []
+    if not raw:
+        return []
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    try:
+        ids = json.loads(raw)
+    except Exception:
+        return []
+    return [int(m) for m in ids if str(m).lstrip("-").isdigit()]
+
+
+def edit_plan(known: list, parts: list) -> tuple:
+    """(можно_править, причина_отказа) для правки на месте.
+
+    Правка не умеет разбивать одно сообщение на два и не умеет удалять лишние:
+    число частей обязано совпасть. Отказ называет ОБА числа — «не совпало» без
+    цифр не говорит, что делать.
+    """
+    if not known:
+        return False, "id сообщений в группе неизвестны"
+    if len(known) != len(parts):
+        return False, (f"урок занимает {len(known)} сообщени(й) в группе, "
+                       f"а новый текст — {len(parts)}: правка на месте не делит "
+                       f"и не склеивает сообщения")
+    return True, ""
