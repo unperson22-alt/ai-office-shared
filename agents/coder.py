@@ -28,6 +28,7 @@ from ai_office_shared.shared.json_extract import first_json_object
 from ai_office_shared.shared.verify import extract_code
 from ai_office_shared.shared.target_repo import repo_looks_valid, target_repo
 from ai_office_shared.shared.telegram_text import split_for_telegram
+from ai_office_shared.shared.bug_lessons import select_lesson_parts
 from ai_office_shared.shared.fault_evidence import dispatch_refusal, failure_evidence
 from ai_office_shared.shared.log_redaction import (
     install_secret_redaction, quiet_http_client_logs, redact,
@@ -6968,6 +6969,108 @@ async def _lessons_en_migration_once():
         await migrate_lessons_to_english(_log, confirm=True)
     except Exception as e:
         logger.error(f"[lessons_en_migration] failed: {e}")
+
+
+async def repost_lesson(reply_func, lesson_id: int, confirm: bool) -> None:
+    """Перезаписать ОДИН урок в Bug Lessons: снести его сообщения и отправить заново.
+
+    Зачем отдельно от migrate_lessons_to_english: тот сносит ВЕСЬ архив и постит
+    его заново. Для одной исправленной записи это 118 удалений, столько же
+    отправок и перепост #105/#106, которые как были русскими, так и останутся.
+
+    В git НИЧЕГО не пишется, и это не экономия, а правило офиса: текст урока уже
+    лежит в lessons.json и правится через PR, а «когда перепостили» — данные,
+    им место в Redis. Заодно команда не стоит ~90 секунд простоя на редеплое.
+
+    posted_to_group НЕ сбрасывается намеренно: между сбросом и новой публикацией
+    есть окно, в которое рестарт поднял бы publish_pending_on_startup и запостил
+    урок вторым сообщением. Отправляем здесь и сами.
+
+    dry-run (confirm=False) ничего не трогает — только считает найденное.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    try:
+        raw = await read_file("ai-office-shared", LESSONS_FILE)
+        lessons = json.loads(raw)
+    except Exception as e:
+        await reply_func(f"❌ Не могу прочитать lessons.json: {e}")
+        return
+
+    lesson = next((l for l in lessons if str(l.get("id")) == str(lesson_id)), None)
+    if lesson is None:
+        await reply_func(f"❌ Урока #{lesson_id} нет в lessons.json (записей: {len(lessons)})")
+        return
+
+    parts = split_for_telegram(_format_lesson(lesson))
+
+    tg_cl = None
+    try:
+        tg_cl = await get_telethon_client()
+        # get_messages отдаёт новые первыми; селектор считает хвост принадлежащим
+        # той голове, за которой он идёт, — значит порядок обязан быть прямым.
+        messages = list(reversed(await tg_cl.get_messages(BUG_LESSONS_CHAT, limit=3000)))
+        texts = [(m.text if (m and m.text) else "") for m in messages]
+        idx = select_lesson_parts(texts, lesson_id)
+        old_ids = [messages[i].id for i in idx]
+
+        if not confirm:
+            await reply_func(
+                f"🔎 Dry-run по уроку #{lesson_id}.\n"
+                f"Найдено в Bug Lessons: {len(old_ids)} сообщени(й).\n"
+                f"Будет отправлено взамен: {len(parts)}.\n"
+                f"Выполнить: `/repost_lesson {lesson_id} confirm`"
+            )
+            return
+
+        for i in range(0, len(old_ids), 100):
+            await tg_cl.delete_messages(BUG_LESSONS_CHAT, old_ids[i:i + 100])
+            await asyncio.sleep(0.3)
+    except Exception as e:
+        await reply_func(f"❌ Перепост #{lesson_id} — не смог разобрать группу: {e}")
+        return
+    finally:
+        if tg_cl is not None:
+            try:
+                await tg_cl.disconnect()
+            except Exception:
+                pass
+
+    try:
+        for part in parts:
+            await _GLOBAL_BOT.send_message(chat_id=BUG_LESSONS_CHAT, text=part)
+            await asyncio.sleep(0.4)
+    except Exception as e:
+        # Старое уже удалено — молчать нельзя, иначе урок исчезнет из группы совсем.
+        await reply_func(f"❌ Урок #{lesson_id}: старое снято ({len(old_ids)}), новое НЕ ушло: {e}")
+        await _escalate_vlad(f"⚠️ Перепост урока #{lesson_id}: удалил старое, отправить новое не смог: {e}")
+        return
+
+    try:
+        r = await get_redis()
+        if r:
+            await r.set(f"office:lesson:reposted:{lesson_id}", _dt.now(_tz.utc).isoformat())
+    except Exception as e:
+        logger.warning(f"repost_lesson mark failed (#{lesson_id}): {e}")
+
+    await reply_func(
+        f"✅ Урок #{lesson_id} перезаписан: снято {len(old_ids)}, отправлено {len(parts)}."
+    )
+
+
+@dp.message(F.text.startswith("/repost_lesson"))
+async def cmd_repost_lesson(message: Message):
+    """Перезаписать один урок в Bug Lessons. По умолчанию dry-run; `confirm` — выполнить.
+    Только владелец (YOUR_TELEGRAM_ID)."""
+    owner = int(os.getenv("YOUR_TELEGRAM_ID", "0") or "0")
+    if owner and message.from_user and message.from_user.id != owner:
+        await message.answer("⛔ Только владелец может перезаписывать уроки.")
+        return
+    args = (message.text or "").split()[1:]
+    ids = [a for a in args if a.isdigit()]
+    if not ids:
+        await message.answer("Формат: /repost_lesson <номер> [confirm]")
+        return
+    await repost_lesson(message.answer, int(ids[0]), "confirm" in (message.text or "").lower())
 
 
 @dp.message(F.text.startswith("/migrate_lessons_en"))
