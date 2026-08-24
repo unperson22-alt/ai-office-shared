@@ -440,7 +440,13 @@ class TestGhReadFile(unittest.TestCase):
 class TestContextBudget(unittest.TestCase):
     """Потолки воркера — наши числа, а не модели, и они уже раз истекли молча."""
 
-    REAL_FILE = 64158          # kriss-bot/bot.py на 24.08.2026, 1459 строк
+    # Оба файла из заявок 24.08.2026. Обе упали одинаково — это форма
+    # невыполнимости, а не слабой модели.
+    REAL_FILES = {
+        "kriss-bot/bot.py": 64158,     # 1459 строк, pyflakes в проде чист
+        "billy-bot/bot.py": 70638,     # 1637 строк, pyflakes в проде чист
+    }
+    REAL_FILE = max(REAL_FILES.values())
 
     def test_fitting_context_gives_no_reason(self):
         self.assertEqual(worker.oversize_reason("x" * 100, 8000), "")
@@ -454,18 +460,30 @@ class TestContextBudget(unittest.TestCase):
         self.assertEqual(worker.oversize_reason(None, 8000), "")
 
     def test_reason_carries_both_numbers_and_the_share_seen(self):
-        reason = worker.oversize_reason("x" * self.REAL_FILE, 8000)
-        self.assertIn(str(self.REAL_FILE), reason)
-        self.assertIn("8000", reason)
-        self.assertIn("12%", reason)
+        for size, share in ((64158, "12%"), (70638, "11%")):
+            with self.subTest(size=size):
+                reason = worker.oversize_reason("x" * size, 8000)
+                self.assertIn(str(size), reason)
+                self.assertIn("8000", reason)
+                self.assertIn(share, reason)
 
-    def test_the_real_incident_file_fits_the_new_default(self):
-        self.assertEqual(worker.oversize_reason("x" * self.REAL_FILE), "")
+    def test_both_incident_files_fit_the_new_default(self):
+        for name, size in self.REAL_FILES.items():
+            with self.subTest(file=name):
+                self.assertEqual(worker.oversize_reason("x" * size), "")
+
+    def test_both_incident_files_were_refused_by_the_old_window(self):
+        """Гейт, не ловящий свой инцидент, — не гейт."""
+        for name, size in self.REAL_FILES.items():
+            with self.subTest(file=name):
+                self.assertIn("%", worker.oversize_reason("x" * size, 8000))
 
     def test_output_budget_leaves_room_for_the_whole_file(self):
         """Вернуть файл целиком нужно СИМВОЛАМИ, а печатать модель может токенами."""
         printable_chars = worker.WORKER_MAX_TOKENS * 35 // 10   # ~3.5 симв/токен для кода
-        self.assertGreater(printable_chars, self.REAL_FILE)
+        for name, size in self.REAL_FILES.items():
+            with self.subTest(file=name):
+                self.assertGreater(printable_chars, size)
 
     def test_both_budgets_stay_under_the_models_documented_ceilings(self):
         """claude-haiku-4-5: контекст 200k токенов, вывод 64k (docs, 24.08.2026)."""
