@@ -233,6 +233,54 @@ class TestWorkerTask(unittest.TestCase):
         finally:
             worker.gh_fetch_file = orig
 
+    def test_refuses_when_the_file_does_not_fit_the_window(self):
+        """Обрезанный файл читается как успешно прочитанный — и запрет выше
+        на него не срабатывал.
+
+        24.08.2026, заявка 62ffa25b5e30: kriss-bot/bot.py — 64 158 символов,
+        окно воркера — 8 000. Девви видел 12% файла и должен был вернуть его
+        целиком. Три попытки подряд давали «pyflakes (50): 1:1: 're' imported
+        but unused; …» — обрубок, а не правку. Править по куску — та же
+        слепота, только незаметная.
+        """
+        called = []
+
+        async def must_not_run(system_prompt, message, context=""):
+            called.append(1)
+            return "не должно случиться"
+
+        worker.ask_claude = must_not_run
+        orig_fetch, orig_limit = worker.gh_fetch_file, worker.MAX_CONTEXT_CHARS
+        worker.gh_fetch_file = lambda repo, path, **kw: ("x" * 64158, "")
+        worker.MAX_CONTEXT_CHARS = 8000
+        try:
+            resp = run(self.handler(FakeRequest(
+                {"message": "добавь ретушь", "repo": "kriss-bot",
+                 "file_path": "bot.py", "task_id": "t1"})))
+            body = json.loads(resp.text)["response"]
+            self.assertTrue(body.startswith("ERROR:"), body)
+            self.assertIn("kriss-bot/bot.py", body)
+            self.assertIn("64158", body)
+            self.assertIn("8000", body)
+            self.assertEqual(called, [], "модель вызвана на куске файла")
+        finally:
+            worker.gh_fetch_file = orig_fetch
+            worker.MAX_CONTEXT_CHARS = orig_limit
+
+    def test_a_file_that_fits_reaches_the_model_whole(self):
+        """Отказ не должен превратиться в отказ от работы вообще."""
+        orig = worker.gh_fetch_file
+        src = "y" * 64158
+        worker.gh_fetch_file = lambda repo, path, **kw: (src, "")
+        try:
+            resp = run(self.handler(FakeRequest(
+                {"message": "добавь ретушь", "repo": "kriss-bot",
+                 "file_path": "bot.py", "task_id": "t1"})))
+            self.assertNotIn("ERROR:", json.loads(resp.text)["response"])
+            self.assertEqual(self.seen["context"], src, "модель получила не весь файл")
+        finally:
+            worker.gh_fetch_file = orig
+
     def test_new_file_in_existing_repo_still_works(self):
         """404 не должен блокировать задачу «создай новый файл»."""
         orig = worker.gh_fetch_file
@@ -387,6 +435,43 @@ class TestGhReadFile(unittest.TestCase):
         finally:
             worker.urllib.request.urlopen = orig
             os.environ.pop("GH_PAT", None)
+
+
+class TestContextBudget(unittest.TestCase):
+    """Потолки воркера — наши числа, а не модели, и они уже раз истекли молча."""
+
+    REAL_FILE = 64158          # kriss-bot/bot.py на 24.08.2026, 1459 строк
+
+    def test_fitting_context_gives_no_reason(self):
+        self.assertEqual(worker.oversize_reason("x" * 100, 8000), "")
+
+    def test_exactly_at_the_limit_still_fits(self):
+        self.assertEqual(worker.oversize_reason("x" * 8000, 8000), "")
+
+    def test_empty_context_never_refuses(self):
+        """Пустой контекст — это «создай новый файл», а не отказ."""
+        self.assertEqual(worker.oversize_reason("", 8000), "")
+        self.assertEqual(worker.oversize_reason(None, 8000), "")
+
+    def test_reason_carries_both_numbers_and_the_share_seen(self):
+        reason = worker.oversize_reason("x" * self.REAL_FILE, 8000)
+        self.assertIn(str(self.REAL_FILE), reason)
+        self.assertIn("8000", reason)
+        self.assertIn("12%", reason)
+
+    def test_the_real_incident_file_fits_the_new_default(self):
+        self.assertEqual(worker.oversize_reason("x" * self.REAL_FILE), "")
+
+    def test_output_budget_leaves_room_for_the_whole_file(self):
+        """Вернуть файл целиком нужно СИМВОЛАМИ, а печатать модель может токенами."""
+        printable_chars = worker.WORKER_MAX_TOKENS * 35 // 10   # ~3.5 симв/токен для кода
+        self.assertGreater(printable_chars, self.REAL_FILE)
+
+    def test_both_budgets_stay_under_the_models_documented_ceilings(self):
+        """claude-haiku-4-5: контекст 200k токенов, вывод 64k (docs, 24.08.2026)."""
+        self.assertLessEqual(worker.WORKER_MAX_TOKENS, 64000)
+        self.assertLessEqual(worker.MAX_CONTEXT_CHARS * 10 // 35, 200000)
+
 
 
 if __name__ == "__main__":
