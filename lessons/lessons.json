@@ -2090,6 +2090,7 @@
       "agents/coder.py:handle_natural_language",
       "agents/coder.py:repost_lesson"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-24T16:53:11.656695+00:00"
   }
 ]
