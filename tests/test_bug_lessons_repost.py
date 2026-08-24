@@ -18,8 +18,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ai_office_shared.shared.bug_lessons import (                    # noqa: E402
-    edit_plan, forget_messages, known_messages, msgids_key,
-    remember_messages, select_lesson_parts, stale_link,
+    RESYNC_MAX_LESSONS, edit_plan, forget_messages, known_messages, msgids_key,
+    remember_messages, resync_plan, select_lesson_parts, stale_link,
 )
 from ai_office_shared.shared.telegram_text import (                   # noqa: E402
     is_continuation_part, split_for_telegram,
@@ -229,6 +229,56 @@ class TestEditPlan(unittest.TestCase):
     def test_shrinking_also_refuses(self):
         ok, _ = edit_plan([41, 42], ["теперь одна часть"])
         self.assertFalse(ok)
+
+
+class TestResyncPlan(unittest.TestCase):
+    """Дослать пропавший урок нельзя: Telegram не вставляет сообщение в середину
+    истории, и #118 лёг бы после #122. Порядок восстанавливается только
+    переизданием хвоста целиком."""
+
+    LESSONS = [{"id": i} for i in range(115, 123)]
+
+    def test_tail_is_published_in_id_order(self):
+        plan = resync_plan(self.LESSONS, 118, {})
+        self.assertEqual([s["id"] for s in plan["steps"]], [118, 119, 120, 121, 122])
+
+    def test_lessons_before_the_start_are_untouched(self):
+        plan = resync_plan(self.LESSONS, 118, {})
+        self.assertNotIn(117, [s["id"] for s in plan["steps"]])
+
+    def test_known_ids_become_deletions_in_one_flat_list(self):
+        plan = resync_plan(self.LESSONS, 118, {120: [10], 122: [12, 13]})
+        self.assertEqual(plan["deletable"], [10, 12, 13])
+
+    def test_lessons_without_ids_are_named_before_anything_is_deleted(self):
+        """Владелец должен узнать про будущий дубликат ДО запуска, а не после."""
+        plan = resync_plan(self.LESSONS, 118, {120: [10], 121: [11], 122: [12]})
+        self.assertEqual(plan["orphans"], [118, 119])
+
+    def test_everything_known_means_no_orphans(self):
+        known = {i: [i] for i in range(118, 123)}
+        self.assertEqual(resync_plan(self.LESSONS, 118, known)["orphans"], [])
+
+    def test_a_start_beyond_the_archive_is_refused(self):
+        plan = resync_plan(self.LESSONS, 999, {})
+        self.assertTrue(plan["refusal"])
+        self.assertEqual(plan["steps"], [])
+
+    def test_a_whole_archive_resync_is_refused_as_flood(self):
+        """Урок #54: анти-флуд. Это была бы миграция, а не починка порядка."""
+        big = [{"id": i} for i in range(1, 200)]
+        plan = resync_plan(big, 1, {})
+        self.assertIn(str(RESYNC_MAX_LESSONS), plan["refusal"])
+        self.assertEqual(plan["deletable"], [])
+
+    def test_the_cap_is_inclusive_at_the_boundary(self):
+        exact = [{"id": i} for i in range(1, 1 + RESYNC_MAX_LESSONS)]
+        self.assertEqual(resync_plan(exact, 1, {})["refusal"], "")
+
+    def test_unsorted_input_still_yields_ordered_steps(self):
+        shuffled = [{"id": i} for i in (122, 118, 120, 119, 121)]
+        plan = resync_plan(shuffled, 118, {})
+        self.assertEqual([s["id"] for s in plan["steps"]], [118, 119, 120, 121, 122])
 
 
 class TestCommandIsWiredAndGuarded(unittest.TestCase):
