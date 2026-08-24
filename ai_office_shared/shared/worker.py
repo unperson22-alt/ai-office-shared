@@ -49,10 +49,21 @@ logger = logging.getLogger("ai_office_shared.worker")
 
 GH_ORG = os.getenv("GH_ORG", "unperson22-alt")
 WORKER_MODEL = os.getenv("WORKER_MODEL", "claude-haiku-4-5-20251001")
-# FINAL_CODE — полный файл целиком, иначе ответ обрезается на середине.
-WORKER_MAX_TOKENS = int(os.getenv("WORKER_MAX_TOKENS", "8192"))
 
-MAX_CONTEXT_CHARS = 8000
+# 🔴 Оба потолка ниже — НАШИ, а не модели, и до 24.08.2026 оба стояли там, где
+# их поставили при файлах на пару сотен строк. У claude-haiku-4-5 по документации
+# контекст 200k токенов и вывод 64k. Прежние 8000 символов и 8192 токена — это
+# 1% и 13% доступного, и на них отдел не мог выполнить НИ ОДНУ задачу по файлу
+# крупнее пары сотен строк: kriss-bot/bot.py (64 158 символов) воркер видел на
+# 12%, а вернуть должен был целиком — вдвое больше, чем влезало в ответ.
+#
+# Числа держим с запасом к документированному пределу, а не впритык: в запрос,
+# кроме файла, едут системный промпт, задача, артефакт предыдущего этапа и эфир
+# команды. И запас не отменяет отказа ниже — порог, привязанный к сегодняшнему
+# размеру файлов, истекает молча, вместе с ростом файлов.
+WORKER_MAX_TOKENS = int(os.getenv("WORKER_MAX_TOKENS", "32000"))
+MAX_CONTEXT_CHARS = int(os.getenv("WORKER_MAX_CONTEXT_CHARS", "200000"))
+
 MAX_ARTIFACT_CHARS = 4000
 # Сколько раз воркер переписывает код по реальной ошибке проверки. 1 = проверять
 # и помечать, но не переделывать. Каждая попытка — ещё один вызов модели.
@@ -123,14 +134,42 @@ def gh_read_file(repo: str, path: str, *, bot_name: str = "worker") -> str:
     return gh_fetch_file(repo, path, bot_name=bot_name)[0]
 
 
+def oversize_reason(context: str, limit: int = 0) -> str:
+    """Причина отказа, если файл не помещается в окно. '' — помещается.
+
+    Возвращает ТЕКСТ с числами, а не флаг: «файл не влез» без размеров ничем не
+    помогает тому, кто будет это чинить, а числа сразу говорят, во сколько раз
+    промахнулись.
+    """
+    limit = limit or MAX_CONTEXT_CHARS
+    size = len(context or "")
+    if size <= limit:
+        return ""
+    return (f"файл {size} символов не помещается в окно воркера {limit} "
+            f"(видно было бы {size and limit * 100 // size}%)")
+
+
 async def ask_claude(system_prompt: str, message: str, context: str = "") -> str:
-    """Один вызов модели воркера. Контекст файла подмешивается блоком."""
+    """Один вызов модели воркера. Контекст файла подмешивается блоком.
+
+    Контекст здесь НЕ режется молча. Тихий срез до 24.08.2026 отдавал модели
+    первые 8000 символов файла и просил вернуть файл целиком: получался обрубок,
+    pyflakes показывал полсотни «imported but unused», и три попытки подряд
+    уходили в стену, которой не было видно ни в логе, ни в отчёте.
+    """
     import anthropic
 
     client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
     content = message
     if context:
-        content = (f"[КОНТЕКСТ КОДА]\n```python\n{context[:MAX_CONTEXT_CHARS]}\n```\n\n"
+        shown = context
+        reason = oversize_reason(context)
+        if reason:
+            # Сюда доходить не должно — выше стоит отказ. Но если дошло,
+            # модель обязана знать, что видит кусок, а не файл.
+            logger.error("контекст обрезан: %s", reason)
+            shown = context[:MAX_CONTEXT_CHARS] + "\n\n[⚠️ ФАЙЛ ОБРЕЗАН — ЭТО НЕ ВЕСЬ ФАЙЛ]"
+        content = (f"[КОНТЕКСТ КОДА]\n```python\n{shown}\n```\n\n"
                    f"[ЗАДАЧА]\n{message}")
     resp = await client.messages.create(
         model=WORKER_MODEL,
@@ -234,6 +273,20 @@ def build_app(bot_name: str, system_prompt: str, state: dict) -> web.Application
                 await log_event(r, bot_name, "response_sent", user_id=user_id)
                 await publish_activity(r, task_id, bot_name, "error", msg[:160])
                 return web.json_response({"response": msg})
+
+        # Файл, обрезанный до куска, читается как успешно прочитанный — и запрет
+        # выше («правка вслепую») на него не срабатывал. А править 12% файла и
+        # возвращать его целиком — та же слепота, только незаметная: 24.08 это
+        # стоило отделу трёх попыток пятерых воркеров на заявке 62ffa25b5e30.
+        # Отказ здесь дешевле на два порядка и называет числа.
+        oversize = oversize_reason(context)
+        if oversize:
+            msg = (f"ERROR: {bot_name} не может править {repo}/{file_path or 'bot.py'}: "
+                   f"{oversize}. Правка по куску файла запрещена — задача не выполнена.")
+            logger.error("[%s] %s", bot_name, msg)
+            await log_event(r, bot_name, "response_sent", user_id=user_id, reason="oversize")
+            await publish_activity(r, task_id, bot_name, "error", msg[:160])
+            return web.json_response({"response": msg})
 
         full_message = message
         if artifact:
