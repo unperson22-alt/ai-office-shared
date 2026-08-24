@@ -20,6 +20,32 @@ LESSONS = os.path.join(ROOT, "lessons", "lessons.json")
 CYRILLIC = re.compile(r"[А-Яа-яЁё]")
 
 
+class TestLessonStatus(unittest.TestCase):
+    """Урок без status уходит в группу строкой «❓ Status: ?».
+
+    24.08.2026 так уехал #119: поле просто не написали, заводя запись, а
+    schema-проверок на него не было. В группе это читается как сбой публикатора,
+    хотя публикатор честно отрисовал то, что лежало в файле.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        with open(LESSONS, encoding="utf-8") as f:
+            cls.lessons = [r for r in json.load(f)
+                           if r.get("kind", "lesson") == "lesson"]
+
+    def test_every_lesson_carries_a_status(self):
+        missing = [r.get("id") for r in self.lessons
+                   if not str(r.get("status", "")).strip()]
+        self.assertEqual(missing, [], f"уроки без status: {missing}")
+
+    def test_the_rendered_line_never_says_question_mark(self):
+        """Ровно то, что увидел бы читатель в Bug Lessons."""
+        for r in self.lessons:
+            with self.subTest(id=r.get("id")):
+                self.assertNotEqual(str(r.get("status", "?")).strip(), "?")
+
+
 class TestLessonTitleLanguage(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
