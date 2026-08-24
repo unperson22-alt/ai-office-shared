@@ -2112,6 +2112,7 @@
       "ai_office_shared/shared/bug_lessons.py:edit_plan",
       "ai_office_shared/shared/bug_lessons.py:remember_messages"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-24T17:08:49.760327+00:00"
   }
 ]
