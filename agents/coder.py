@@ -30,7 +30,7 @@ from ai_office_shared.shared.target_repo import repo_looks_valid, target_repo
 from ai_office_shared.shared.telegram_text import split_for_telegram
 from ai_office_shared.shared.bug_lessons import (
     edit_plan, forget_messages, known_messages, remember_messages,
-    select_lesson_parts, stale_link,
+    resync_plan, select_lesson_parts, stale_link,
 )
 from ai_office_shared.shared.fault_evidence import dispatch_refusal, failure_evidence
 from ai_office_shared.shared.log_redaction import (
@@ -7122,6 +7122,113 @@ async def repost_lesson(reply_func, lesson_id: int, confirm: bool) -> None:
     await reply_func(
         f"✅ Урок #{lesson_id} перезаписан: снято {len(old_ids)}, отправлено {len(parts)}."
     )
+
+
+async def resync_lessons(reply_func, from_id: int, confirm: bool) -> None:
+    """Переиздать хвост Bug Lessons начиная с урока from_id, в порядке номеров.
+
+    Зачем не «дослать пропавшие»: Telegram не вставляет сообщение в середину
+    истории. Урок, изданный сейчас, ляжет после всех — а порядок в архиве и есть
+    его смысл. Поэтому хвост снимается и издаётся заново целиком.
+
+    Удаление идёт через Bot API (Силли админ группы), а не через telethon: его
+    сессия мертва с 24.08, и на ней же держались все прежние пути починки.
+
+    В git не пишем: текст уроков уже там и правится через PR, а какими
+    сообщениями они лежат — состояние чата, ему место в Redis.
+    """
+    try:
+        lessons = json.loads(await read_file("ai-office-shared", LESSONS_FILE))
+    except Exception as e:
+        await reply_func(f"❌ Не могу прочитать lessons.json: {e}")
+        return
+
+    r = await get_redis()
+    tail_ids = [int(l["id"]) for l in lessons if int(l.get("id", 0)) >= int(from_id)]
+    known_map = {i: await known_messages(r, i) for i in tail_ids}
+    plan = resync_plan(lessons, from_id, known_map)
+    if plan["refusal"]:
+        await reply_func(f"❌ Переиздание с #{from_id}: {plan['refusal']}")
+        return
+
+    steps = plan["steps"]
+    parts_by_id = {int(l["id"]): split_for_telegram(_format_lesson(l)) for l in steps}
+    total_msgs = sum(len(v) for v in parts_by_id.values())
+
+    if not confirm:
+        lines = [f"🔎 Dry-run: переиздание хвоста с #{from_id}.", ""]
+        for l in steps:
+            lid = int(l["id"])
+            ids = known_map.get(lid) or []
+            mark = f"снимем {len(ids)} сообщ." if ids else "id не знаем"
+            lines.append(f"  #{lid} — {len(parts_by_id[lid])} сообщ., {mark}")
+        lines.append("")
+        lines.append(f"Итого: снять {len(plan['deletable'])}, отправить {total_msgs}.")
+        if plan["orphans"]:
+            lines.append(
+                "\n⚠️ У этих уроков id неизвестны: "
+                + ", ".join(f"#{i}" for i in plan["orphans"])
+                + ".\nЕсли они ЕСТЬ в группе — останутся дубликатами. Если их там нет "
+                  "(удалены руками) — всё в порядке.\nПривязать: ответом на сообщение "
+                  "урока В ГРУППЕ — `/relink_lesson <номер>`."
+            )
+        lines.append(f"\nВыполнить: `/resync_lessons {from_id} confirm`")
+        await reply_func("\n".join(lines))
+        return
+
+    # 1. Снимаем то, что можем. Провал удаления НЕ отменяет публикацию: пустая
+    #    лента хуже ленты с дубликатом, а порядок восстановится в любом случае.
+    deleted, failed_del = 0, []
+    for msg_id in plan["deletable"]:
+        try:
+            await _GLOBAL_BOT.delete_message(chat_id=BUG_LESSONS_CHAT, message_id=msg_id)
+            deleted += 1
+        except Exception as e:
+            failed_del.append(f"{msg_id}: {str(e)[:60]}")
+        await asyncio.sleep(0.25)
+
+    # 2. Издаём заново, строго по возрастанию номера.
+    published, failed_pub = 0, []
+    for l in steps:
+        lid = int(l["id"])
+        sent_ids = []
+        try:
+            for part in parts_by_id[lid]:
+                sent = await _GLOBAL_BOT.send_message(chat_id=BUG_LESSONS_CHAT, text=part)
+                sent_ids.append(getattr(sent, "message_id", None))
+                await asyncio.sleep(0.4)
+        except Exception as e:
+            failed_pub.append(f"#{lid}: {str(e)[:80]}")
+            await forget_messages(r, lid)
+            continue
+        await remember_messages(r, lid, sent_ids)
+        published += 1
+        await asyncio.sleep(0.5)
+
+    out = [f"✅ Хвост переиздан с #{from_id}: снято {deleted}, опубликовано {published} "
+           f"урок(ов) в порядке номеров."]
+    if failed_del:
+        out.append("⚠️ Не снялись: " + "; ".join(failed_del[:5]))
+    if failed_pub:
+        out.append("❌ Не ушли: " + "; ".join(failed_pub[:5]))
+    out.append("id новых сообщений записаны — дальше правка идёт на месте.")
+    await reply_func("\n".join(out))
+
+
+@dp.message(F.text.startswith("/resync_lessons"))
+async def cmd_resync_lessons(message: Message):
+    """Переиздать хвост Bug Lessons с указанного урока. Dry-run по умолчанию.
+    Только владелец (YOUR_TELEGRAM_ID)."""
+    owner = int(os.getenv("YOUR_TELEGRAM_ID", "0") or "0")
+    if owner and message.from_user and message.from_user.id != owner:
+        await message.answer("⛔ Только владелец может переиздавать уроки.")
+        return
+    args = [a for a in (message.text or "").split()[1:] if a.isdigit()]
+    if not args:
+        await message.answer("Формат: /resync_lessons <с какого номера> [confirm]")
+        return
+    await resync_lessons(message.answer, int(args[0]),
+                         "confirm" in (message.text or "").lower())
 
 
 @dp.message(F.text.startswith("/relink_lesson"))

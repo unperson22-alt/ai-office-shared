@@ -170,3 +170,47 @@ def stale_link(error_text: str) -> bool:
     """Правка провалилась потому, что привязка неверна, а не из-за текста."""
     low = str(error_text or "").lower()
     return any(t in low for t in _STALE_EDIT_TELLS)
+
+
+# ── Переиздание хвоста ленты ──────────────────────────────────────────────────
+# Зачем: 24.08.2026 из группы пропали #118 и #119 — их удалили руками, а Силли
+# отчиталась «опубликован в Bug Lessons», отправив текст в личку. Дослать их
+# нельзя: Telegram не вставляет сообщение в середину истории, и урок лёг бы
+# после #122. Единственный способ вернуть порядок — снять хвост и издать заново.
+#
+# Планирование отделено от отправки, потому что решать «что делать» надо ДО
+# первого удаления: половина снесённого хвоста хуже нетронутого.
+
+RESYNC_MAX_LESSONS = 20          # анти-флуд: больше — это уже миграция архива
+
+
+def resync_plan(lessons, from_id, known_map) -> dict:
+    """Что произойдёт при переиздании хвоста, начиная с урока from_id.
+
+    known_map: {id: [message_id, ...]} — что мы помним о группе.
+
+    Возвращает:
+      steps    — уроки к публикации, по возрастанию id;
+      deletable— id сообщений, которые можно снять;
+      orphans  — уроки, чьи сообщения снять нечем: они останутся в группе
+                 дубликатами, и владелец должен узнать об этом ДО запуска;
+      refusal  — непустая строка, если операцию делать нельзя.
+    """
+    tail = sorted((l for l in lessons if int(l.get("id", 0)) >= int(from_id)),
+                  key=lambda l: int(l["id"]))
+    if not tail:
+        return {"steps": [], "deletable": [], "orphans": [],
+                "refusal": f"уроков с номером ≥ {from_id} в файле нет"}
+    if len(tail) > RESYNC_MAX_LESSONS:
+        return {"steps": [], "deletable": [], "orphans": [],
+                "refusal": (f"хвост из {len(tail)} уроков — это миграция архива, "
+                            f"а не починка порядка (потолок {RESYNC_MAX_LESSONS})")}
+
+    deletable, orphans = [], []
+    for l in tail:
+        ids = list(known_map.get(int(l["id"])) or [])
+        if ids:
+            deletable.extend(ids)
+        else:
+            orphans.append(int(l["id"]))
+    return {"steps": tail, "deletable": deletable, "orphans": orphans, "refusal": ""}
