@@ -29,7 +29,8 @@ from ai_office_shared.shared.verify import extract_code
 from ai_office_shared.shared.target_repo import repo_looks_valid, target_repo
 from ai_office_shared.shared.telegram_text import split_for_telegram
 from ai_office_shared.shared.bug_lessons import (
-    edit_plan, known_messages, remember_messages, select_lesson_parts,
+    edit_plan, forget_messages, known_messages, remember_messages,
+    select_lesson_parts, stale_link,
 )
 from ai_office_shared.shared.fault_evidence import dispatch_refusal, failure_evidence
 from ai_office_shared.shared.log_redaction import (
@@ -7040,6 +7041,18 @@ async def repost_lesson(reply_func, lesson_id: int, confirm: bool) -> None:
                 if "not modified" in str(e).lower():
                     edited += 1
                     continue
+                if stale_link(e):
+                    # Привязка неверна — она хуже её отсутствия: уводит на путь,
+                    # который обречён. Сбрасываем, чтобы состояние было честным.
+                    await forget_messages(r_ids, lesson_id)
+                    await reply_func(
+                        f"❌ Урок #{lesson_id}: сообщения {msg_id} в Bug Lessons нет — {e}\n\n"
+                        f"Привязка была неверной и сброшена. Так бывает, когда "
+                        f"`/relink_lesson` отправили не в той группе или в ответ на "
+                        f"чужое сообщение. Ответь на сообщение урока В ГРУППЕ Bug "
+                        f"Lessons командой `/relink_lesson {lesson_id}` и повтори."
+                    )
+                    return
                 await reply_func(f"❌ Урок #{lesson_id}: правка сообщения {msg_id} не прошла: {e}")
                 return
             await asyncio.sleep(0.3)
@@ -7135,23 +7148,73 @@ async def cmd_relink_lesson(message: Message):
             "иначе неоткуда взять id."
         )
         return
+
+    # 🔴 Две проверки, которых 24.08 не было, — и обе сработали бы.
+    # Влад ответил на СВОЁ сообщение в личке; id уехал в память, команда
+    # отчиталась «запомнено», а правка потом упала «message to edit not found».
+    # id сообщения уникален внутри своего чата, и править бот может только свои
+    # сообщения. Отчёт об успехе без этих проверок — тот же дефект, что урок #121.
+    if message.chat.id != BUG_LESSONS_CHAT:
+        await message.answer(
+            "❌ Команду надо отправить В ГРУППЕ Bug Lessons, а не здесь.\n"
+            "id сообщения существует только внутри своего чата: запомненный "
+            "отсюда, в группе он не найдётся."
+        )
+        return
+    author = message.reply_to_message.from_user
+    me = await bot.me()
+    if not author or author.id != me.id:
+        whose = f"@{author.username}" if author and author.username else "не Силли"
+        await message.answer(
+            f"❌ Это сообщение отправил(а) {whose}. Править бот может только "
+            f"СВОИ сообщения — отвечать надо на то, что в группу написала Силли."
+        )
+        return
+
     lesson_id = int(args[0])
     r = await get_redis()
-    prev = await known_messages(r, lesson_id)
-    ids = prev + [message.reply_to_message.message_id]
-    # Повтор того же ответа не должен плодить дубли позиций.
-    seen, ordered = set(), []
-    for m in ids:
+    verb = (message.text or "").lower()
+    if "reset" in verb:
+        await forget_messages(r, lesson_id)
+        await message.answer(f"🧹 Привязка урока #{lesson_id} сброшена.")
+        return
+
+    # По умолчанию привязка ЗАМЕНЯЕТСЯ, а дописывает только явное `add`.
+    # Наоборот было хуже: неверный id (24.08 — из лички) молча копился, и
+    # правильный ответ дописывался к мусору, давая тупик по числу частей.
+    # Уроков в одно сообщение подавляющее большинство, так что замена — норма.
+    prev = [] if "add" not in verb else await known_messages(r, lesson_id)
+    ids, seen = [], set()
+    for m in prev + [message.reply_to_message.message_id]:
         if m not in seen:
             seen.add(m)
-            ordered.append(m)
-    ok = await remember_messages(r, lesson_id, ordered)
-    if not ok:
+            ids.append(m)
+    if not await remember_messages(r, lesson_id, ids):
         await message.answer(f"❌ Не смог запомнить id для #{lesson_id} (Redis недоступен?)")
         return
+
+    # Сколько частей урок занимает ПО ТЕКУЩЕМУ тексту — чтобы владелец сразу
+    # знал, надо ли привязывать следующую часть, а не узнавал это из отказа.
+    need = 0
+    try:
+        lessons = json.loads(await read_file("ai-office-shared", LESSONS_FILE))
+        one = next((x for x in lessons if str(x.get("id")) == str(lesson_id)), None)
+        if one:
+            need = len(split_for_telegram(_format_lesson(one)))
+    except Exception as e:
+        logger.warning("relink: не смог посчитать части #%s: %s", lesson_id, e)
+
+    if need and len(ids) < need:
+        tail = (f"Нужно {need} — ответь на следующую часть командой "
+                f"`/relink_lesson {lesson_id} add`.")
+    elif need and len(ids) > need:
+        tail = (f"А нужно {need}. Сбрось: `/relink_lesson {lesson_id} reset` "
+                f"(ответом на любое сообщение урока).")
+    else:
+        tail = f"Теперь `/repost_lesson {lesson_id} confirm` перепишет его на месте."
     await message.answer(
-        f"🔗 Урок #{lesson_id}: запомнено {len(ordered)} сообщени(й).\n"
-        f"Теперь `/repost_lesson {lesson_id} confirm` перепишет его на месте."
+        f"🔗 Урок #{lesson_id}: запомнено {len(ids)}"
+        + (f" из {need}" if need else "") + " сообщени(й).\n" + tail
     )
 
 
