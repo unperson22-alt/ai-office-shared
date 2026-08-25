@@ -2131,5 +2131,21 @@
     "tag": "observability",
     "posted_to_group": false,
     "context": "ai-office-shared"
+  },
+  {
+    "id": 124,
+    "date": "2025-01-10",
+    "bot": "molly-trader",
+    "layer": "telegram",
+    "title": "NetworkError with empty httpx.ConnectError message provides no debugging information",
+    "symptom": "telegram.error.NetworkError: httpx.ConnectError: — no host, port, or underlying error details in the exception message",
+    "root_cause": "httpx.ConnectError is raised without a message or with only whitespace; the connection attempt failed but the cause (DNS, refused, timeout) is not captured in the exception chain",
+    "why_architecture": "Telegram API calls are wrapped generically without explicit httpx exception handling. When httpx.ConnectError bubbles up as NetworkError, the original connection failure reason (DNS resolution, connection refused, timeout) is lost. Without logging the exception chain, debugging network issues becomes impossible — you only see an empty error message",
+    "fix": "Wrap telegram API calls with explicit httpx exception handling that logs the full exception chain and connection details before re-raising. Separately log exception.__cause__ and str(exception) to capture the real connection failure reason",
+    "status": "unfixed",
+    "prevention": "When catching generic exceptions from external libraries: always log exception.__cause__, exception.__traceback__, and the string representation separately. Do not assume NetworkError always includes useful details. Add integration tests that verify error messages contain actionable debugging information",
+    "cause": "httpx.ConnectError raised without a message or with only whitespace; no explicit logging of the exception chain before re-raising as NetworkError",
+    "tag": "integration",
+    "posted_to_group": false
   }
 ]
