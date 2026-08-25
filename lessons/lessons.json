@@ -2114,5 +2114,22 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-08-24T17:08:49.760327+00:00"
+  },
+  {
+    "id": 123,
+    "date": "2025-04-10",
+    "bot": "deep_diagnose",
+    "layer": "railway",
+    "title": "Truncated traceback in logs prevents root cause diagnosis",
+    "symptom": "deep_diagnose reports 'Traceback fully truncated' with no actionable error details, only hypothetical causes listed",
+    "root_cause": "Log output is cut off mid-traceback due to buffer limits in Railway logging or log aggregation, preventing visibility of the actual exception chain",
+    "why_architecture": "deep_diagnose relies entirely on log stream parsing. When Railway truncates logs at the buffer boundary, the actual error message and stack frames are lost. Without the real traceback, diagnosis falls back to guessing, making root cause analysis impossible",
+    "fix": "Increase Railway log buffer size, stream full traceback to stderr directly, or write to a persistent log file in the container before truncation occurs",
+    "status": "open",
+    "prevention": "Always write error logs to both stderr and a persistent file. Validate log output in tests by checking for complete tracebacks. Implement log rotation and ensure container logs are readable via docker logs or Railway console",
+    "cause": "Log buffer exhaustion in Railway logging pipeline, truncating multi-line tracebacks mid-frame",
+    "tag": "observability",
+    "posted_to_group": false,
+    "context": "ai-office-shared"
   }
 ]
