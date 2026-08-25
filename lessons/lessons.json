@@ -2129,8 +2129,9 @@
     "prevention": "Always write error logs to both stderr and a persistent file. Validate log output in tests by checking for complete tracebacks. Implement log rotation and ensure container logs are readable via docker logs or Railway console",
     "cause": "Log buffer exhaustion in Railway logging pipeline, truncating multi-line tracebacks mid-frame",
     "tag": "observability",
-    "posted_to_group": false,
-    "context": "ai-office-shared"
+    "posted_to_group": true,
+    "context": "ai-office-shared",
+    "posted_at": "2026-08-25T18:01:34.703999+00:00"
   },
   {
     "id": 124,
@@ -2146,6 +2147,7 @@
     "prevention": "When catching generic exceptions from external libraries: always log exception.__cause__, exception.__traceback__, and the string representation separately. Do not assume NetworkError always includes useful details. Add integration tests that verify error messages contain actionable debugging information",
     "cause": "httpx.ConnectError raised without a message or with only whitespace; no explicit logging of the exception chain before re-raising as NetworkError",
     "tag": "integration",
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-25T18:01:34.703999+00:00"
   }
 ]
