@@ -38,7 +38,10 @@ from ai_office_shared.shared.log_redaction import (
 )
 from ai_office_shared.shared import dev_queue
 from ai_office_shared.shared.file_window import (
-    find_regions, summary as file_summary,
+    around_lines, find_regions, summary as file_summary,
+)
+from ai_office_shared.shared.traceback_scan import (
+    error_lines, frames, signature as error_sig, signature_basis,
 )
 from ai_office_shared.shared.auth import office_auth_middleware, office_headers
 
@@ -2194,7 +2197,10 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
 
 
 # ── Monitor loop ───────────────────────────────────────────────────────────────
-ERROR_PATTERNS = ["Traceback", "Error:", "Exception:", "CRITICAL", "crashed", "exit code"]
+# Список живёт в пакете: здесь его нельзя покрыть тестом, а именно его ПРИМЕНЕНИЕ
+# (построчно вместо блочного) обезглавило трейсбеки и слило разные баги офиса в
+# одну сигнатуру 25.08.2026. Отбор строк отказа теперь делает error_lines().
+from ai_office_shared.shared.traceback_scan import ERROR_PATTERNS  # noqa: E402
 
 # Окна аудита. Аудит НЕ должен потреблять логи водяным знаком: он ходит дважды в
 # сутки, а монитор — раз в 5 минут, и монитор всегда успевал бы первым, оставляя
@@ -2855,8 +2861,8 @@ async def run_daily_audit() -> str:
         for service_id, repo in office_services:
             try:
                 logs = await get_service_logs(service_id, window_s=AUDIT_LESSON_WINDOW_S)
-                errs = [l for l in strip_ignored_tracebacks(logs)
-                        if any(p in l for p in ERROR_PATTERNS)]
+                errs = error_lines(strip_ignored_tracebacks(logs),
+                                   ignore=IGNORE_PATTERNS)
                 if errs:
                     all_errors[repo] = errs
             except Exception:
@@ -3052,26 +3058,25 @@ async def _run_office_scan(target: str = "", *, proposal_chat_id: int = 0) -> di
             if not logs:
                 result["healthy"].append(repo)
                 continue
-            error_lines = [ln for ln in logs
-                           if any(ep in ln for ep in ERROR_PATTERNS)
-                           and not any(ip in ln for ip in IGNORE_PATTERNS)]
-            if not error_lines:
+            error_log_lines = error_lines(strip_ignored_tracebacks(logs),
+                                          ignore=IGNORE_PATTERNS)
+            if not error_log_lines:
                 result["healthy"].append(repo)
                 continue
-            if classify_fault(error_lines) == "external":
+            if classify_fault(error_log_lines) == "external":
                 result["external"].append(repo)
                 continue
-            known = await search_lessons(error_lines)
+            known = await search_lessons(error_log_lines)
             if known.get("match") and str(known.get("confidence", "")).lower() == "high":
                 result["known"].append(f"{repo} (lesson #{known.get('lesson_id')})")
                 continue
             source_code = await read_file(repo, main_file)
-            analysis = await analyze_logs(repo, error_lines, source_code)
+            analysis = await analyze_logs(repo, error_log_lines, source_code)
             if not analysis.get("is_bug") or analysis.get("bug_type") == "external":
                 (result["external"] if analysis.get("bug_type") == "external"
                  else result["healthy"]).append(repo)
                 continue
-            _no_proof = dispatch_refusal(analysis, error_lines)
+            _no_proof = dispatch_refusal(analysis, error_log_lines)
             if _no_proof:
                 logger.info(f"[office-scan] {repo}: находку не отдаю отделу — {_no_proof}")
                 result["healthy"].append(repo)
@@ -3250,10 +3255,18 @@ async def _deep_diagnose_and_escalate(
     5. Только если Claude не смог — эскалирует Владу с диагнозом
     """
     logger.info(f"[deep_diagnose] starting for {repo} sig={error_signature[:8]}")
+    basis = signature_basis(error_logs)
 
     # ── 1. Проверяем сколько ботов имеют эту же сигнатуру ────────────────────
+    # ⚠️ Только по ПОЛНОЙ улике. Совпадение сигнатур у неполных стеков ничего не
+    # доказывает: 25.08.2026 её основой был голый «Traceback (most recent call
+    # last):» — строка, одинаковая у любого питон-процесса. Проверка «та же
+    # сигнатура в 3+ сервисах» приняла бы это за системный шум, СТЁРЛА счётчики
+    # и замолчала — то есть коллизия не путала бы статистику, а выключила бы
+    # монитор целиком. Улика, которая не различает сервисы, не имеет права
+    # решать за все сервисы сразу.
     affected_services = []
-    if redis_client:
+    if redis_client and basis.complete:
         async for key in redis_client.scan_iter(f"fix_count:*:{error_signature}"):
             svc = key.split(":")[1]
             count = int(await redis_client.get(key) or 0)
@@ -3315,16 +3328,49 @@ async def _deep_diagnose_and_escalate(
     except Exception:
         pass
 
+    # Исходник — ОКРЕСТНОСТИ строк из трейсбека, а не начало файла. Слепой срез
+    # `source_code[:3000]` 25.08.2026 обрезал оба файла посреди строки в паре
+    # десятков строк от начала, причина лежала дальше, и модель придумывала её
+    # по тому, что видела: «вероятно, там `return r`» (в файле — корректный
+    # `return r2.json().get("text", ...)` строкой ниже среза) и «незакрытый
+    # out.sort(...)» (в файле — закрытый, с reverse=True). Обе выдумки ушли
+    # человеку как диагноз; обе опроверг компилятор.
+    tb_lines = [n for _, n, _ in frames(error_logs)]
+    src_window = around_lines(source_code, tb_lines)
+    if src_window:
+        src_block = (f"Исходник — окрестности строк из трейсбека "
+                     f"({file_summary(source_code)}):\n{src_window}")
+    elif tb_lines:
+        src_block = (f"Исходник: строк {tb_lines} в файле нет "
+                     f"({file_summary(source_code)}) — лог и прочитанный файл "
+                     f"разошлись, место падения показать нечем.")
+    else:
+        # Кадров нет — показывать нечего прицельно; берём начало и конец, но
+        # ГОВОРИМ, что середина пропущена, а не выдаём обрезок за файл.
+        head, tail = source_code[:2000], source_code[-2000:]
+        src_block = (f"Исходник целиком не показан ({file_summary(source_code)}), "
+                     f"кадров стека нет.\nНачало:\n{head}\n"
+                     f"[…середина файла пропущена…]\nКонец:\n{tail}")
+
     full_context = (
         f"Ошибки из логов (последние {len(error_logs)}):\n"
-        + "\n".join(error_logs[:10])
-        + f"\n\nИсходник (первые 3000 символов):\n{source_code[:3000]}"
+        + "\n".join(error_logs[:30])
+        + ("\n\n⚠️ СТЕК НЕПОЛНЫЙ: в логе есть заголовок трейсбека, но нет ни "
+           "класса исключения, ни кадров File(...). Причину падения по такому "
+           "логу назвать НЕЛЬЗЯ." if not basis.complete else "")
+        + f"\n\n{src_block}"
         + redis_ctx
         + ops_ctx
     )
 
     # ── 3. Глубокий анализ Claude (Sonnet — дороже, но для реальной диагностики) ──
     DEEP_ANALYSIS_PROMPT = """Ты — senior инженер AI-офиса. Этот баг уже встречался 3+ раза и стандартный фикс не помог.
+
+БАГ — ЭТО ТО, ЧТО ПОКАЗАЛИ ЛОГИ. Если в контексте стоит «СТЕК НЕПОЛНЫЙ» — причину
+назвать нечем: верни can_self_fix=false, confidence="low", root_cause="стек неполный,
+причина неизвестна" и escalate_reason про то, какой улики не хватает. НЕ угадывай
+строку кода по исходнику: непроверяемая догадка выглядит как диагноз и стоит человеку
+проверки (25.08.2026 две такие догадки опроверг компилятор).
 
 Твоя задача — поставить ТОЧНЫЙ диагноз:
 1. Что конкретно ломается (строка кода, функция, контракт)
@@ -3363,7 +3409,10 @@ async def _deep_diagnose_and_escalate(
     logger.info(f"[deep_diagnose] diagnosis: can_fix={can_fix} confidence={confidence} cause={root_cause[:60]}")
 
     # ── 4. Пробуем починить сам ───────────────────────────────────────────────
-    if can_fix and confidence in ("high", "medium"):
+    # Неполный стек чинить нельзя ни с какой уверенностью: уверенность модели
+    # относится к её гипотезе, а не к улике, которой нет. 25.08.2026 обе такие
+    # гипотезы оказались ложными — правка по ним ушла бы в здоровый код.
+    if can_fix and confidence in ("high", "medium") and basis.complete:
         action = diagnosis.get("self_fix_action")
         details = diagnosis.get("self_fix_details", "")
 
@@ -3399,12 +3448,31 @@ async def _deep_diagnose_and_escalate(
     # ── 5. Не смогла — эскалируем с ДИАГНОЗОМ, не просто криком ─────────────
     escalate_reason = diagnosis.get("escalate_reason") or "не смогла подобрать фикс с высокой уверенностью"
 
+    if basis.complete:
+        body = (f"*Причина:* {root_cause}\n"
+                f"*Почему предыдущий фикс не помог:* "
+                f"{diagnosis.get('why_fix_failed', 'неизвестно')}\n"
+                f"*Что нужно сделать:* {real_fix}\n\n"
+                f"*Почему сама не исправила:* {escalate_reason}")
+    else:
+        # Гипотезы модели о конкретной строке кода сюда НЕ идут. При неполном
+        # стеке они неотличимы от выдумки, а выглядят как диагноз и стоят
+        # человеку проверки (инвариант офиса №8: провал называет того, кто упал;
+        # промолчала дальняя сторона — так и говорим).
+        quoted = "\n".join(error_logs[:15]) or "(строк нет)"
+        body = ("*Причину назвать нечем:* в логе есть заголовок трейсбека, но "
+                "нет ни класса исключения, ни кадров `File \"...\"`. Так "
+                "выглядит смерть процесса посреди печати стека (OOM/SIGKILL) "
+                "или логгер, глотающий хвост.\n\n"
+                "*Что в логе есть дословно:*\n"
+                f"```\n{quoted[:1200]}\n```\n"
+                "*Что нужно сделать:* достать полный стек — `docker logs` / "
+                "прямой stdout контейнера и `dmesg | grep -i kill` на предмет "
+                "OOM. Диагноз по этому логу не ставится.")
+
     await notify_office(
         f"⚠️ *{repo}* — повторяющийся баг, нужна помощь\n\n"
-        f"*Причина:* {root_cause}\n"
-        f"*Почему предыдущий фикс не помог:* {diagnosis.get('why_fix_failed', 'неизвестно')}\n"
-        f"*Что нужно сделать:* {real_fix}\n\n"
-        f"*Почему сама не исправила:* {escalate_reason}\n"
+        f"{body}\n"
         f"Сигнатура: `{error_signature[:16]}` | fix_count={fix_count}"
     )
     logger.warning(f"[deep_diagnose] escalated {repo}: {escalate_reason}")
@@ -3484,20 +3552,16 @@ async def monitor_loop():
                 if noisy != len(logs):
                     logger.info(f"[monitor] {repo}: отброшено {noisy - len(logs)} шумовых строк, осталось {len(logs)}")
 
-                # === Filter Layer 2: есть ли реальные ошибки помимо deployment-шума
-                error_logs = [l for l in logs if any(p in l for p in ERROR_PATTERNS)]
+                # === Filter Layer 2: есть ли реальные ошибки помимо deployment-шума.
+                # Отбор БЛОЧНЫЙ. Построчный (как было до 25.08.2026) оставлял от
+                # трейсбека один заголовок: кадры `File "…"` не содержат ни одного
+                # ERROR_PATTERN, а строка исключения проходила, только если класс
+                # оканчивался на Error/Exception перед двоеточием. Диагноз потом
+                # ставился по тому, что уцелело, — то есть ни по чему.
+                error_logs = error_lines(logs, ignore=IGNORE_PATTERNS)
                 if not error_logs:
+                    logger.info(f"[monitor] {repo}: строк отказа нет (или только игнорируемые)")
                     continue
-
-                # Доп. per-line ignore (на случай других известных шумовых паттернов)
-                filtered_errors = [
-                    l for l in error_logs
-                    if not any(p in l for p in IGNORE_PATTERNS)
-                ]
-                if not filtered_errors:
-                    logger.info(f"[monitor] {repo}: only ignorable errors after per-line filter, skipping")
-                    continue
-                error_logs = filtered_errors
 
                 # === Filter Layer 3: внешний/транзиентный сбой — НЕ наш баг → МОЛЧИМ.
                 # Telegram/Railway API, DNS, сеть (NetworkError/ConnectError/
@@ -3528,27 +3592,24 @@ async def monitor_loop():
                         )
                     continue
 
-                # Дедупликация: УСТОЙЧИВАЯ сигнатура (тип ошибки + файл + сообщение
-                # без чисел), чтобы один и тот же баг не пере-детектился из-за разных
-                # номеров строк/динамики и не обнулял fix_count по кругу.
-                import hashlib, re as _re
-                _err_text = "\n".join(error_logs)
-                _exc = _re.findall(r"\b([A-Za-z_]+(?:Error|Exception))\b", _err_text)
-                _files = _re.findall(r'File "[^"]*?([^"/\\]+\.py)"', _err_text)
-                _msg = ""
-                for _line in reversed(error_logs):
-                    if _exc and _exc[-1] in _line:
-                        _msg = _line
-                        break
-                _msg_norm = _re.sub(r"0x[0-9a-fA-F]+|\d+", "", _msg).strip()
-                _sig_basis = "|".join([
-                    _exc[-1] if _exc else "",
-                    _files[-1] if _files else "",
-                    _msg_norm,
-                ]).strip("|")
-                if not _sig_basis:  # фолбэк: нормализованный текст без чисел
-                    _sig_basis = _re.sub(r"0x[0-9a-fA-F]+|\d+", "", _err_text)[:500]
-                error_signature = hashlib.md5(_sig_basis.encode()).hexdigest()
+                # Дедупликация: УСТОЙЧИВАЯ сигнатура (тип исключения + файл +
+                # сообщение без чисел), чтобы один и тот же баг не пере-детектился
+                # из-за разных номеров строк и не обнулял fix_count по кругу.
+                # Считается в пакете — там её можно покрыть тестом, и там же
+                # записано, чем неполная улика отличается от полной.
+                _basis = signature_basis(error_logs)
+                error_signature = error_sig(error_logs, scope=service_id)
+                if not _basis.complete:
+                    # В логе есть заголовок трейсбека, но ни исключения, ни кадров:
+                    # процесс умер посреди печати стека (SIGKILL/OOM) либо логгер
+                    # проглотил хвост. Молчать об этом нельзя — по такой улике
+                    # диагноз не ставится, а сигнатура без scope была бы общей для
+                    # всего офиса (инцидент 25.08.2026, хеш 1b21026f…).
+                    logger.warning(
+                        f"[monitor] {repo}: стек неполный — ни класса исключения, "
+                        f"ни кадров File(...). Сигнатура привязана к сервису. "
+                        f"Улика: {failure_evidence(error_logs)[:160]!r}"
+                    )
                 now = time.time()
                 redis_key = f"seen_error:{service_id}:{error_signature}"
                 r = await get_redis()
