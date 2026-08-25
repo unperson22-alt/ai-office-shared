@@ -2131,7 +2131,7 @@
     "tag": "observability",
     "posted_to_group": true,
     "context": "ai-office-shared",
-    "posted_at": "2026-08-25T18:01:34.703999+00:00"
+    "posted_at": "2026-08-25T18:01:39.238420+00:00"
   },
   {
     "id": 124,
@@ -2148,6 +2148,6 @@
     "cause": "httpx.ConnectError raised without a message or with only whitespace; no explicit logging of the exception chain before re-raising as NetworkError",
     "tag": "integration",
     "posted_to_group": true,
-    "posted_at": "2026-08-25T18:01:34.703999+00:00"
+    "posted_at": "2026-08-25T18:01:39.238420+00:00"
   }
 ]
