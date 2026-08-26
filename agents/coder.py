@@ -43,6 +43,9 @@ from ai_office_shared.shared.file_window import (
 from ai_office_shared.shared.traceback_scan import (
     error_lines, frames, signature as error_sig, signature_basis,
 )
+from ai_office_shared.shared.lesson_record import (
+    claim_publish, normalize as normalize_lesson, release_publish,
+)
 from ai_office_shared.shared.auth import office_auth_middleware, office_headers
 
 from shared.github_tools import (
@@ -104,6 +107,11 @@ TEMPLATE_BOTS_FILE = "shared/template_bots.json"  # реестр ботов со
 # Проактивная петля управления (management_loop): ревью доски задач + метрик
 MANAGEMENT_INTERVAL = int(os.getenv("CILLY_MGMT_INTERVAL", "1800"))  # 30 мин
 MGMT_STUCK_AFTER_SEC = int(os.getenv("CILLY_MGMT_STUCK_SEC", str(2 * 3600)))  # 2ч
+
+# Свои же сервисы. Скан уроков их пропускает: 25.08.2026 аудит прочитал
+# собственную строку Силли об обрезанном трейсбеке и записал её как баг
+# Railway — выход стал входом, и петля замкнулась молча.
+SELF_REPOS = {"ai-office-shared", "cilly-bot"}
 
 # Railway service_id → (repo_name, main_file)
 SERVICES = {
@@ -904,6 +912,11 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
         lessons = json.loads(raw)
         new_id = max((l.get("id", 0) for l in lessons), default=0) + 1
         # Ask Haiku to convert lesson to compact AI format
+        # Ни id, ни даты у модели НЕ просим: это факты, которыми процесс уже
+        # располагает. 25.08.2026 промпт кончался словами «Add id:{new_id} and
+        # ts field with today's date» — у модели нет «сегодня», она ответила
+        # правдоподобно (2025-04-10 и 2025-01-10) и промахнулась больше чем на
+        # год. Служебные поля ставит normalize_lesson().
         prompt = (
             f"Convert this bug lesson to compact AI format JSON (like existing entries).\n"
             f"title: {title}\nsymptom: {symptom}\ncause: {cause}\n"
@@ -911,7 +924,7 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
             f"Existing format example: {json.dumps(lessons[0]) if lessons else '{}'}\n\n"
             f"Write ALL text fields (title/symptom/root_cause/why_architecture/fix/prevention/cause) "
             f"in ENGLISH — translate if the input is in Russian. Keep code/identifiers/commit hashes as-is.\n"
-            f"Return ONLY the JSON object, no markdown. Add id:{new_id} and ts field with today's date."
+            f"Return ONLY the JSON object, no markdown. Do NOT invent id, date or ts — they are set for you."
         )
         compact = await ask_claude(prompt, system="Return only valid JSON, no markdown.", model="claude-haiku-4-5-20251001")
         lesson_obj = first_json_object(compact)
@@ -919,6 +932,9 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
             # Урок, который не разобрался, дописывать в lessons.json нельзя:
             # файл читает Силли на каждом аудите, мусор в нём дороже пропуска.
             raise ValueError(f"урок не разобрался как JSON: {compact[:120]!r}")
+        # Пустая запись займёт номер и будет читаться вечно, ничего не сообщая:
+        # normalize_lesson откажет, и это дешевле мусора в файле.
+        lesson_obj = normalize_lesson(lesson_obj, lesson_id=new_id, context=context)
         lessons.append(lesson_obj)
         await push_file("ai-office-shared", LESSONS_FILE, json.dumps(lessons, ensure_ascii=False, indent=2),
                         f"lesson({new_id}): {title[:50]}")
@@ -929,7 +945,7 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
 
 
 INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
-{"intent":"push_code|fix_bot|create_bot|create_repo|create_cron|add_external_bot|get_bot_token|deploy|read_file|list_files|redis_query|board_task|trader_winrate|dev_task|delegate|update_bot_instruction|office_scan|answer","repo":"repo_name_or_null","path":"file_path_or_null","task":"task_description","bot":"имя_бота_или_null","instruction":"текст_инструкции_или_null","mode":"append|set|clear","confidence":0.0-1.0}
+{"intent":"push_code|fix_bot|create_bot|create_repo|create_cron|add_external_bot|get_bot_token|deploy|read_file|list_files|redis_query|board_task|resync_lessons|trader_winrate|dev_task|delegate|update_bot_instruction|office_scan|answer","repo":"repo_name_or_null","path":"file_path_or_null","task":"task_description","bot":"имя_бота_или_null","instruction":"текст_инструкции_или_null","mode":"append|set|clear","confidence":0.0-1.0}
 
 ГЛАВНОЕ ПРАВИЛО — различай вопрос и команду:
 - ВОПРОС о процессе ("как создать бота?", "что нужно для деплоя?", "какой стек?", "как задеплоить?", "с чего начать?") → intent=answer
@@ -939,6 +955,7 @@ INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
 
 push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не расписание!), create_repo=создать ПУСТОЙ GitHub-репозиторий и больше ничего. Сигналы: "создай репозиторий X", "заведи репо X", "нужен новый репозиторий X", "создай приватный репозиторий X". Имя репо клади в "repo". Это ОДИН вызов готового create_repo — НЕ создавай бота, НЕ ходи в BotFather, НЕ пушь шаблонный код и НЕ зови команду разработки. Если для репо нужен ещё и код, он придёт ОТДЕЛЬНОЙ задачей или его зальют снаружи. Отличие от create_bot: create_bot просят словом «бот» и он тянет за собой токен и Railway-сервис; здесь просят словом «репозиторий» и нужен только он, create_cron=создать расписание/напоминание/cron для пользователя ("напоминай каждый день", "отправляй каждое утро", "напоминалка в X время") — создаёт Railway cron-сервис, add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon, cleanup_dm=удалить сообщения с ключами/секретами в личке (gsk_, GROQ, токен) через Telethon — ищет в диалоге с user_id=int(BOT_TOKEN.split(':')[0]) (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), edit_file=точечная замена строки в файле без чтения всего файла (сигналы: замени в файле, вставь после строки, patch, добавь в начало функции — когда указан repo+path+old+new), agentic_task=многошаговая задача из 2+ шагов: читай+делай, исправь+задеплой, залей+проверь, прочитай+перепиши. Сигналы: исправь и задеплой, залей код и задеплой, прочитай X и отправь, прочитай X и перепиши, пройдись по всем, для каждого, рефакторинг, аудит. ВАЖНО: если задача содержит И (исправить код И задеплоить) — это agentic_task. При чтении большого файла (bot.py 800+ строк) — не читать целиком в цикле, читать один раз и искать нужную функцию по имени, dev_task=делегировать задачу КОМАНДЕ разработки (Девви→Рикки→Тести→Секки→Скрибби). ТОЛЬКО когда речь о новой фиче/модуле/компоненте для продукта — НЕ о правке одного файла. Требует ВЫСОКОЙ уверенности (confidence>=0.85). Чёткие сигналы: "реализуй фичу", "разработай модуль", "напиши новый компонент", "сделай PR для", "задача для команды", "отдай команде", "dev-dept", "через цепочку". НЕЯСНЫЙ запрос ("сделай что-нибудь", "напиши функцию" без контекста) → confidence<0.85 → Силли переспрашивает. Если задача про правку существующего файла/бота — это push_code или agentic_task, НЕ dev_task. Просьба СОЗДАТЬ РЕПОЗИТОРИЙ — это create_repo, а НЕ dev_task: писать код для этого не надо, у меня есть готовый вызов (31.07.2026 «создай репозиторий molly-trader» ушло в dev_task с confidence 0.92, команда три попытки писала скрипт с выдуманной организацией, репозиторий так и не появился). delegate=поручить задачу ГЛАВЕ ОТДЕЛА и проверить результат (НЕ написание кода). Сигналы: "спроси у Тилли", "пусть Милли посчитает", "делегируй Доктору", "поручи отделу", "узнай у <бот>". Заполни "bot" именем отдела. confidence>=0.85, иначе Силли переспросит. update_bot_instruction=изменить поведение бота на лету через инструкцию в системном промпте (БЕЗ редеплоя). Сигналы: "научи <бота>", "пусть <бот> всегда/больше не", "добавь <боту> правило", "обнови инструкцию <бота>", "запомни для <бота>". Заполни "bot" (кого учим), "instruction" (что добавить), "mode" (append по умолчанию; set=заменить; clear=сбросить). office_scan=самопроверка офиса по команде владельца: просканировать боты на ошибки и предложить фиксы (каждый уходит на /approve). Сигналы: "проверь офис", "просканируй ботов", "что сломалось", "самопроверка", "проверь всех ботов", "почини <бот>" (тогда заполни "bot"). Свип НЕ применяет фиксы сам — только предлагает. answer=ответить словами.
 ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis" → redis_query. redis_query ТОЛЬКО ЧИТАЕТ. Любая просьба ИЗМЕНИТЬ задачу на доске — это board_task, а не redis_query.
+resync_lessons=переиздать хвост Bug Lessons начиная с номера урока: снять сообщения и отправить заново по возрастанию номеров. Сигналы: "переиздай уроки с N", "перепубликуй уроки с N", "resync уроки", "восстанови порядок уроков". Номер урока клади в "task". По умолчанию DRY-RUN: реальное переиздание только если в тексте есть слово confirm — без него ответ показывает, что будет снято и отправлено.
 board_task=операция над задачей доски по её id. Сигналы: "верни задачу X в работу", "переоткрой задачу X", "задача X снова в очередь", "reopen X". Id — 12 hex-символов, клади его в "task". Заполни "mode": reopen (вернуть в очередь, сбросив счётчик попыток) — единственный поддерживаемый режим. Это НЕ произвольная запись в Redis: доступна ровно одна названная операция.
 ВАЖНО trader_winrate: "винрейт трейдера", "посчитай winrate", "проверь винрейт сигналов", "какой winrate у трейдера", "винрейт по сигналам", "статистика трейдера WR" → trader_winrate (читает signals:list/signal:* трейдера, считает WR по свечам, отдаёт за 7 дней и за всё время).
 ВАЖНО: "подключить бота", "добавить чужого бота" → add_external_bot, НЕ create_bot.
@@ -1673,6 +1690,7 @@ async def publish_pending_lessons(reply_func=None, limit: int = 100) -> int:
 
     capped = pending[:limit]
     posted = 0
+    reconciled = 0        # уже были в группе, чинили только флаг в файле
     failed: list = []
     consecutive = 0
     now_iso = _dt.now(_tz.utc).isoformat()
@@ -1682,6 +1700,21 @@ async def publish_pending_lessons(reply_func=None, limit: int = 100) -> int:
             # 12.08 он встал первым в очереди и запер за собой всё остальное на
             # одиннадцать дней. Режем по абзацам, а не обрезаем: потерянный хвост
             # выглядел бы как целый урок.
+            # Замок ДО отправки. Флаг posted_to_group durable в git, но
+            # гарантия нужна не файлу, а ЧТЕНИЮ: GitHub Contents API отдаёт
+            # свежую запись не сразу, и 25.08.2026 два захода публикации подряд
+            # прочитали файл, где оба урока ещё pending, и отправили их дважды.
+            if not await claim_publish(await get_redis(), lesson.get("id")):
+                # Замок занят — урок уже отправлен другим заходом, чьё «mark»
+                # до файла не доехало. Не отправляем повторно, но флаг ставим:
+                # иначе файл расходится с группой навсегда и каждый следующий
+                # аудит будет считать урок неопубликованным.
+                logger.info("[lessons] #%s уже отправлен (замок занят) — "
+                            "не дублирую, чиню флаг", lesson.get("id"))
+                lesson["posted_to_group"] = True
+                lesson.setdefault("posted_at", now_iso)
+                reconciled += 1
+                continue
             sent_ids = []
             for part in split_for_telegram(_format_lesson(lesson)):
                 sent = await _GLOBAL_BOT.send_message(chat_id=BUG_LESSONS_CHAT, text=part)
@@ -1703,17 +1736,22 @@ async def publish_pending_lessons(reply_func=None, limit: int = 100) -> int:
             # останавливаемся лишь когда сыпется подряд: это уже не кривая запись,
             # а недоступный Telegram, и долбиться в него бессмысленно.
             logger.error(f"publish_pending_lessons #{lesson.get('id')} failed: {e}")
+            # Замок снимаем: урок не ушёл и обязан уехать следующим заходом.
+            await release_publish(await get_redis(), lesson.get("id"))
             failed.append((lesson.get("id"), str(e)[:120]))
             consecutive += 1
             if consecutive >= 3:
                 logger.error("publish_pending_lessons: 3 отказа подряд, останавливаюсь")
                 break
 
-    if posted:
+    if posted or reconciled:
         try:
+            note = f"mark {posted + reconciled} posted_to_group"
+            if reconciled:
+                note += f" ({reconciled} уже были в группе)"
             await push_file("ai-office-shared", LESSONS_FILE,
                             json.dumps(lessons, ensure_ascii=False, indent=2),
-                            f"chore(lessons): mark {posted} posted_to_group")
+                            f"chore(lessons): {note}")
         except Exception as e:
             logger.error(f"publish_pending_lessons commit failed: {e}")
     if failed:
@@ -1734,15 +1772,20 @@ async def publish_pending_lessons(reply_func=None, limit: int = 100) -> int:
 async def post_lesson(title: str, symptom: str, cause: str, context: str, fix: str, how_to_avoid: str):
     """Записывает урок в durable-историю (lessons.json) и публикует НОВЫЕ уроки.
 
-    Публикация в Bug Lessons идёт ТОЛЬКО через publish_pending_lessons (идемпотентно по
-    флагу posted_to_group), поэтому повторный вызов и аудит не задваивают сообщения.
+    Задвоение исключает ЗАМОК в publish_pending_lessons, а не флаг
+    posted_to_group: флаг durable в git, но гарантия нужна не файлу, а чтению,
+    а GitHub Contents API отдаёт свежую запись не сразу (25.08.2026 — оба урока
+    ушли в группу дважды с разницей в четыре секунды).
     """
     # 1) durable-история: ждём, урок должен лечь в файл до публикации
     await append_lesson_ai(title, symptom, cause, context, fix, how_to_avoid)
     r = await get_redis()
     if r:
         await log_event(r, BOT_NAME_LOWER, "lesson_saved", title=title[:100])
-    # 2) опубликовать новые (включая только что записанный) — идемпотентно по флагу
+    # 2) опубликовать новые (включая только что записанный). Задвоение держит
+    #    замок в publish_pending_lessons, а не расстановка вызовов: у этой
+    #    функции есть ещё три вызывающих вне аудита, и снятие публикации отсюда
+    #    заставило бы их урок ждать до утра.
     try:
         await publish_pending_lessons()
     except Exception as e:
@@ -2857,14 +2900,28 @@ async def run_daily_audit() -> str:
         existing_lessons = json.loads(raw_lessons) if raw_lessons.strip() else []
 
         # Собираем все ошибки за сутки по всем сервисам
+        # Гейты те же, что у монитора. До 25.08.2026 их здесь не было ни одного,
+        # и скан записал в вечный архив (а) внешний сетевой сбой molly-trader,
+        # о котором монитор нарочно молчит, и (б) СОБСТВЕННЫЙ вывод Силли,
+        # прочитанный из её же логов, — как проблему Railway. Отчёт можно писать
+        # по чему угодно; в долгую память пишут только по улике.
         all_errors: dict[str, list[str]] = {}
         for service_id, repo in office_services:
             try:
+                if repo in SELF_REPOS:
+                    continue          # свои логи — свой же вывод, петля замкнётся
                 logs = await get_service_logs(service_id, window_s=AUDIT_LESSON_WINDOW_S)
                 errs = error_lines(strip_ignored_tracebacks(logs),
                                    ignore=IGNORE_PATTERNS)
-                if errs:
-                    all_errors[repo] = errs
+                if not errs:
+                    continue
+                if classify_fault(errs) == "external":
+                    logger.info(f"[audit] {repo}: внешний сбой — урок не пишу")
+                    continue
+                if not failure_evidence(errs):
+                    logger.info(f"[audit] {repo}: нет строки с признаком отказа — урок не пишу")
+                    continue
+                all_errors[repo] = errs
             except Exception:
                 pass
 
@@ -4410,6 +4467,34 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         )
         result = await _run_office_scan(target=target, proposal_chat_id=pcid)
         await reply_func(_format_scan_report(result, target=target))
+
+    elif intent == "resync_lessons":
+        """Переиздание хвоста Bug Lessons — тот же resync_lessons(), что у
+        владельческой команды `/resync_lessons`.
+
+        Зачем понадобился второй вход. Команда живёт только в Telegram-хендлере
+        и закрыта на YOUR_TELEGRAM_ID, поэтому починить порядок уроков могла
+        ровно одна пара рук. Уроки #118 и #119 пропали из группы 24.08, и
+        переиздание было написано в тот же день — но запустить его было некому,
+        и хвост пролежал сломанным двое суток.
+
+        ⚠️ Операция УДАЛЯЕТ сообщения в группе, а `POST /task` сегодня открыт без
+        токена (OFFICE_RPC_STRICT выключен). Поэтому здесь два тормоза, которых
+        нет у владельческой команды: dry-run по умолчанию — без слова confirm
+        ничего не снимается, — и потолок RESYNC_MAX_LESSONS=20 в resync_plan,
+        выше которого это уже миграция архива, а не починка порядка.
+        """
+        raw_task = str(intent_data.get("task") or "")
+        source_text = f"{raw_task} {message_text or ''}"
+        nums = [int(x) for x in _re_words.findall(r"\d+", source_text)]
+        if not nums:
+            await reply_func("С какого урока переиздавать? Например: "
+                             "«переиздай уроки с 118».")
+            return
+        # confirm ищем и в разборе интента, и в ИСХОДНОМ тексте: слово ставит
+        # человек, а через диспетчер оно доходит не всегда.
+        confirm = "confirm" in source_text.lower()
+        await resync_lessons(reply_func, nums[0], confirm)
 
     elif intent == "board_task":
         """Операция над задачей доски по id. Названная и узкая — намеренно.
