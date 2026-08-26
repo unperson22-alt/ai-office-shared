@@ -44,7 +44,8 @@ from ai_office_shared.shared.traceback_scan import (
     error_lines, frames, signature as error_sig, signature_basis,
 )
 from ai_office_shared.shared.lesson_record import (
-    claim_publish, normalize as normalize_lesson, release_publish,
+    claim_publish, documented_fix, is_closed as lesson_is_closed,
+    lesson_by_id, normalize as normalize_lesson, release_publish,
 )
 from ai_office_shared.shared.auth import office_auth_middleware, office_headers
 
@@ -899,7 +900,13 @@ async def search_lessons(error_logs: list[str]) -> dict:
         log_sample = "\n".join(error_logs[:20])
         prompt = f"Known bugs:\n{json.dumps(lessons)}\n\nNew error logs:\n{log_sample}"
         result = await ask_claude(prompt, system=LESSON_SEARCH_PROMPT, model="claude-haiku-4-5-20251001")
-        return first_json_object(result) or {"match": False}
+        out = first_json_object(result) or {"match": False}
+        # Саму запись достаём ИЗ ФАЙЛА по названному номеру, а не со слов
+        # модели: статус и текст фикса решают, чинить или молчать, и брать их
+        # из пересказа — то же самое, что верить исполнителю на слово.
+        if out.get("match"):
+            out["lesson"] = lesson_by_id(lessons, out.get("lesson_id")) or {}
+        return out
     except Exception as e:
         logger.debug(f"search_lessons failed: {e}")
         return {"match": False}
@@ -3742,30 +3749,74 @@ async def monitor_loop():
                 # Раньше high-confidence матч лишь менял уведомление, но дальше всё
                 # равно шёл analyze_logs → handle_bug → новое предложение. Это и был
                 # «бред»: «применяю известный фикс» и тут же «нашёл подозрительное».
+                # Известный урок ГАСИТ починку только если сам объявляет проблему
+                # решённой. 26.08.2026 монитор нашёл у villy-bot урок #8 и ответил
+                # «новых действий не требуется» — при том, что #8 несёт статус
+                # `still_relevant`, названные рядом #64 и #95 — `open`, а в самом
+                # villy-bot фикса не было вовсе: голый Application.builder() без
+                # таймаутов и ретрая. Совпадение с уроком — улика, что проблема
+                # ИЗВЕСТНА, а не что она ПОЧИНЕНА.
+                #
+                # Прежний жёсткий стоп появился не на пустом месте: до него
+                # high-confidence матч менял только текст уведомления, а дальше
+                # всё равно шёл analyze_logs → handle_bug, и офис говорил
+                # «применяю известный фикс» и тут же «нашёл подозрительное».
+                # Противоречие лечится не удалением починки, а согласованием:
+                # закрытый урок — молчим, незакрытый — чиним, назвав урок
+                # источником спеки. Одно связное утверждение вместо двух.
+                # Сбрасывается на КАЖДОМ сервисе: цикл идёт по SERVICES, и
+                # подсказка от урока предыдущего бота уехала бы в спеку следующего.
+                known_fix_hint = ""
                 known = await search_lessons(error_logs)
                 if known.get("match") and known.get("confidence") == "high":
                     lesson_id = known.get("lesson_id")
-                    logger.info(f"[monitor] known bug match in {repo}: lesson #{lesson_id}")
-                    # Дедуп: один разбор известного урока на сервис за cooldown —
-                    # не открываем то же предложение каждый цикл.
+                    lesson = known.get("lesson") or {}
+                    closed = lesson_is_closed(lesson)
+                    logger.info(f"[monitor] known bug match in {repo}: lesson #{lesson_id} "
+                                f"status={lesson.get('status', '?')} closed={closed}")
+                    # Дедуп: одна заметка на сервис за cooldown. Ключ называется
+                    # lesson_seen, а не lesson_applied: он помнит, что мы недавно
+                    # УПОМИНАЛИ урок. Прежнее имя утверждало, будто фикс применён,
+                    # хотя применять его было некому — во всём файле не было пути,
+                    # читающего поле `fix` урока.
                     _r_les = await get_redis()
-                    _les_key = f"lesson_applied:{service_id}:{lesson_id}"
+                    _les_key = f"lesson_seen:{service_id}:{lesson_id}"
                     _already = bool(await _r_les.get(_les_key)) if _r_les else False
-                    if _already:
-                        logger.info(f"[monitor] {repo}: урок #{lesson_id} уже разобран недавно — молчу")
+                    if closed:
+                        if _already:
+                            logger.info(f"[monitor] {repo}: урок #{lesson_id} уже разобран недавно — молчу")
+                            continue
+                        if _r_les:
+                            await _r_les.setex(_les_key, EXTERNAL_FAULT_COOLDOWN, "1")
+                        await notify_office(
+                            f"📚 Cilly: повтор известной проблемы в *{repo}* — урок #{lesson_id}.\n"
+                            f"_{known.get('reason', '')}_\n"
+                            f"Урок закрыт (status={lesson.get('status')}) — новых действий не требуется."
+                        )
                         continue
-                    if _r_les:
-                        await _r_les.setex(_les_key, EXTERNAL_FAULT_COOLDOWN, "1")
-                    # Известный урок = разбор уже есть. Не пере-генерируем фикс Opus-ом
-                    # и НЕ открываем повторное предложение. Тихая заметка один раз.
-                    await notify_office(
-                        f"📚 Cilly: повтор известной проблемы в *{repo}* — урок #{lesson_id}.\n"
-                        f"_{known.get('reason', '')}_\n"
-                        f"Новых действий не требуется (фикс уже задокументирован)."
-                    )
-                    continue
+                    # Урок есть, но НЕ закрыт: не молчим. Идём чинить, а текст
+                    # фикса из урока уходит в спеку — архив наконец говорит не
+                    # только человеку, но и конвейеру.
+                    _fix_text = documented_fix(lesson)
+                    if not _already:
+                        if _r_les:
+                            await _r_les.setex(_les_key, EXTERNAL_FAULT_COOLDOWN, "1")
+                        await notify_office(
+                            f"📚 Cilly: повтор известной проблемы в *{repo}* — урок #{lesson_id}, "
+                            f"и он НЕ закрыт (status={lesson.get('status') or 'не указан'}).\n"
+                            f"_{known.get('reason', '')}_\n"
+                            f"Документированный фикс: {_fix_text[:300] or '(в уроке не описан)'}\n"
+                            f"Проверяю, применён ли он здесь."
+                        )
+                    known_fix_hint = (
+                        f"\n\n--- Документированный фикс (урок #{lesson_id}, "
+                        f"status={lesson.get('status')}) ---\n{_fix_text}\n"
+                        f"Проверь по исходнику, применён ли он в ЭТОМ сервисе. "
+                        f"Если применён — is_bug=false. Если нет — предложи именно его."
+                    ) if _fix_text else ""
 
-                analysis = await analyze_logs(repo, error_logs, source_code)
+                analysis = await analyze_logs(repo, error_logs,
+                                              source_code + known_fix_hint)
 
                 # Второй слой: анализатор сам мог распознать внешний сбой → молчим.
                 if analysis.get("bug_type") == "external" or not analysis.get("is_bug"):

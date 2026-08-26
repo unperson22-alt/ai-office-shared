@@ -158,3 +158,54 @@ async def release_publish(redis_client, lesson_id) -> None:
         await redis_client.delete(publish_claim_key(lesson_id))
     except Exception as e:
         logger.warning("[lesson] замок #%s не снялся: %s", lesson_id, e)
+
+
+# ── Закрыт ли урок ────────────────────────────────────────────────────────────
+# ЗАЧЕМ (инцидент 26.08.2026): монитор нашёл у villy-bot совпадение с уроком #8
+# и ответил «Новых действий не требуется (фикс уже задокументирован)». Урок #8
+# несёт статус `still_relevant`; #64 и #95, названные рядом, — `open`. То есть
+# офис встал по стойке «смирно» на основании трёх НЕЗАКРЫТЫХ записей, а фикса в
+# villy-bot не было вовсе: голый Application.builder() без таймаутов и ретрая,
+# при том что office-dashboard тот же сбой переживал.
+#
+# Совпадение с уроком — улика, что проблема ИЗВЕСТНА, а не что она ПОЧИНЕНА.
+# Статус читается из файла, а не со слов модели, назвавшей номер.
+
+CLOSED_STATUSES = frozenset({"fixed", "closed", "resolved", "done"})
+
+
+def lesson_by_id(lessons, lesson_id):
+    """Запись урока по номеру. None — такого урока нет.
+
+    Совпадение по номеру целиком (инвариант офиса №7): int(...) == int(...),
+    а не поиск подстроки, иначе #11 нашёлся бы внутри #118.
+    """
+    try:
+        wanted = int(lesson_id)
+    except (TypeError, ValueError):
+        return None
+    for l in lessons or []:
+        try:
+            if int(l.get("id", -1)) == wanted:
+                return l
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def is_closed(lesson) -> bool:
+    """Правда ли урок объявляет проблему решённой.
+
+    Отсутствующий статус считается НЕ закрытым: молчание — не «починено».
+    """
+    return str((lesson or {}).get("status", "")).strip().lower() in CLOSED_STATUSES
+
+
+def documented_fix(lesson) -> str:
+    """Текст фикса из урока — спека для починки, а не украшение сообщения.
+
+    До 26.08.2026 это поле не читал никто: ветка известного урока писала
+    заметку и делала `continue`, поэтому архив умел объяснять баг человеку и
+    не умел ничего сообщить конвейеру починки.
+    """
+    return str((lesson or {}).get("fix", "")).strip()
