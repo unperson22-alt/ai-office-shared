@@ -22,6 +22,7 @@ lesson(123) в 20:01:27 → lesson(124) в 20:01:33, где #123 ВСЁ ЕЩЁ p
 """
 import ast
 import asyncio
+import json
 import os
 import sys
 import unittest
@@ -30,8 +31,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from ai_office_shared.shared.lesson_record import (  # noqa: E402
-    REQUIRED_TEXT, claim_publish, invented_date, normalize, publish_claim_key,
-    release_publish, today_iso,
+    REQUIRED_TEXT, claim_publish, documented_fix, invented_date, is_closed,
+    lesson_by_id, normalize, publish_claim_key, release_publish, today_iso,
 )
 
 CODER = os.path.join(ROOT, "agents", "coder.py")
@@ -211,3 +212,98 @@ class TestCoderGates(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLessonStatusGate(unittest.TestCase):
+    """Совпадение с уроком — улика, что проблема ИЗВЕСТНА, а не что починена.
+
+    26.08.2026 монитор нашёл у villy-bot урок #8 и ответил «Новых действий не
+    требуется (фикс уже задокументирован)». #8 несёт статус `still_relevant`,
+    названные рядом #64 и #95 — `open`, а в самом villy-bot фикса не было
+    вовсе: голый `Application.builder().token(...).build()`, ни таймаутов, ни
+    ретрая, — при том что office-dashboard тот же сбой переживал благодаря
+    ровно этому фиксу.
+    """
+
+    ARCHIVE = [
+        {"id": 8, "status": "still_relevant", "fix": "Raise timeouts to 30s. Add exponential backoff"},
+        {"id": 43, "status": "fixed", "fix": "get_me in a retry loop"},
+        {"id": 64, "status": "open", "fix": "Exponential backoff with a max ceiling"},
+        {"id": 118, "status": "fixed", "fix": "whole-file window"},
+    ]
+
+    def test_lesson_8_does_not_silence_the_office(self):
+        self.assertFalse(is_closed(lesson_by_id(self.ARCHIVE, 8)))
+
+    def test_a_genuinely_fixed_lesson_still_silences_it(self):
+        self.assertTrue(is_closed(lesson_by_id(self.ARCHIVE, 43)))
+
+    def test_a_missing_status_is_not_closed(self):
+        # Молчание — не «починено».
+        self.assertFalse(is_closed({"id": 999}))
+        self.assertFalse(is_closed(None))
+
+    def test_lookup_matches_the_whole_number(self):
+        # Инвариант офиса №7: #11 не живёт внутри #118.
+        self.assertIsNone(lesson_by_id(self.ARCHIVE, 11))
+        self.assertEqual(lesson_by_id(self.ARCHIVE, 118)["id"], 118)
+
+    def test_lookup_survives_a_junk_id(self):
+        self.assertIsNone(lesson_by_id(self.ARCHIVE, None))
+        self.assertIsNone(lesson_by_id(self.ARCHIVE, "восемь"))
+
+    def test_the_documented_fix_is_readable_as_a_spec(self):
+        # До 26.08 это поле не читал НИКТО: ветка писала заметку и делала
+        # continue, поэтому архив умел объяснять баг человеку и ничего не
+        # умел сообщить конвейеру починки.
+        self.assertIn("backoff", documented_fix(lesson_by_id(self.ARCHIVE, 8)))
+        self.assertEqual(documented_fix({}), "")
+
+    def test_the_real_archive_would_not_have_silenced_villy(self):
+        # Не выдумка теста: читаем настоящий lessons.json офиса.
+        with open(os.path.join(ROOT, "lessons", "lessons.json"), encoding="utf-8") as f:
+            real = json.load(f)
+        for lid in (8, 64, 95):
+            lesson = lesson_by_id(real, lid)
+            self.assertIsNotNone(lesson, f"урок #{lid} пропал из архива")
+            self.assertFalse(
+                is_closed(lesson),
+                f"#{lid} числится закрытым — тест инцидента больше не про то",
+            )
+
+
+class TestCoderLessonGate(unittest.TestCase):
+    """Проверки coder.py по AST — импортировать его нельзя."""
+
+    def _monitor(self):
+        with open(CODER, encoding="utf-8") as f:
+            src = f.read()
+        node = next(n for n in ast.walk(ast.parse(src))
+                    if isinstance(n, ast.AsyncFunctionDef) and n.name == "monitor_loop")
+        return ast.unparse(node)
+
+    def test_the_gate_reads_the_lesson_status(self):
+        self.assertIn("lesson_is_closed(lesson)", self._monitor())
+
+    def test_the_redis_key_no_longer_claims_the_fix_was_applied(self):
+        code = self._monitor()
+        self.assertIn("lesson_seen", code)
+        self.assertNotIn("lesson_applied", code)
+
+    def test_the_documented_fix_reaches_the_analyzer(self):
+        self.assertIn("source_code + known_fix_hint", self._monitor())
+
+    def test_the_hint_is_reset_per_service(self):
+        # Иначе подсказка от урока предыдущего бота уехала бы в спеку следующего.
+        code = self._monitor()
+        self.assertLess(code.index("for service_id"), code.index("known_fix_hint = ''"))
+        self.assertLess(code.index("known_fix_hint = ''"),
+                        code.index("source_code + known_fix_hint"))
+
+    def test_search_lessons_looks_the_record_up_in_the_file(self):
+        with open(CODER, encoding="utf-8") as f:
+            src = f.read()
+        node = next(n for n in ast.walk(ast.parse(src))
+                    if isinstance(n, ast.AsyncFunctionDef) and n.name == "search_lessons")
+        # Статус берётся из файла, а не из пересказа модели, назвавшей номер.
+        self.assertIn("lesson_by_id(lessons", ast.unparse(node))
