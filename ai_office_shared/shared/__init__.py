@@ -57,5 +57,12 @@
                    AI-перерисовка через Cloudflare Workers AI (опц.)
     dev_pipeline — run_dev_pipeline(...) → dict (ПАРАЛЛЕЛЬНО: Девви → Рикки‖Тести‖Секки → Скрибби)
     dev_activity — publish_activity()/read_activity() — общий эфир действий dev-dept
+    traceback_scan — error_lines()/signature(): отбор строк отказа БЛОКОМ и
+                   устойчивая сигнатура по ним. Построчный отбор оставлял от
+                   трейсбека один заголовок, и разные баги разных сервисов
+                   сходились в один хеш (25.08.2026)
+    file_window  — find_regions()/around_lines(): показать модели нужный кусок
+                   файла — по подстроке или по номеру строки из трейсбека
+    fault_evidence — dispatch_refusal(): находку без улики отделу не отдают
 """
 # Импорты по необходимости — from ai_office_shared.shared.X import Y

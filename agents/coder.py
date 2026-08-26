@@ -38,7 +38,13 @@ from ai_office_shared.shared.log_redaction import (
 )
 from ai_office_shared.shared import dev_queue
 from ai_office_shared.shared.file_window import (
-    find_regions, summary as file_summary,
+    around_lines, find_regions, summary as file_summary,
+)
+from ai_office_shared.shared.traceback_scan import (
+    error_lines, frames, signature as error_sig, signature_basis,
+)
+from ai_office_shared.shared.lesson_record import (
+    claim_publish, normalize as normalize_lesson, release_publish,
 )
 from ai_office_shared.shared.auth import office_auth_middleware, office_headers
 
@@ -101,6 +107,11 @@ TEMPLATE_BOTS_FILE = "shared/template_bots.json"  # реестр ботов со
 # Проактивная петля управления (management_loop): ревью доски задач + метрик
 MANAGEMENT_INTERVAL = int(os.getenv("CILLY_MGMT_INTERVAL", "1800"))  # 30 мин
 MGMT_STUCK_AFTER_SEC = int(os.getenv("CILLY_MGMT_STUCK_SEC", str(2 * 3600)))  # 2ч
+
+# Свои же сервисы. Скан уроков их пропускает: 25.08.2026 аудит прочитал
+# собственную строку Силли об обрезанном трейсбеке и записал её как баг
+# Railway — выход стал входом, и петля замкнулась молча.
+SELF_REPOS = {"ai-office-shared", "cilly-bot"}
 
 # Railway service_id → (repo_name, main_file)
 SERVICES = {
@@ -901,6 +912,11 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
         lessons = json.loads(raw)
         new_id = max((l.get("id", 0) for l in lessons), default=0) + 1
         # Ask Haiku to convert lesson to compact AI format
+        # Ни id, ни даты у модели НЕ просим: это факты, которыми процесс уже
+        # располагает. 25.08.2026 промпт кончался словами «Add id:{new_id} and
+        # ts field with today's date» — у модели нет «сегодня», она ответила
+        # правдоподобно (2025-04-10 и 2025-01-10) и промахнулась больше чем на
+        # год. Служебные поля ставит normalize_lesson().
         prompt = (
             f"Convert this bug lesson to compact AI format JSON (like existing entries).\n"
             f"title: {title}\nsymptom: {symptom}\ncause: {cause}\n"
@@ -908,7 +924,7 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
             f"Existing format example: {json.dumps(lessons[0]) if lessons else '{}'}\n\n"
             f"Write ALL text fields (title/symptom/root_cause/why_architecture/fix/prevention/cause) "
             f"in ENGLISH — translate if the input is in Russian. Keep code/identifiers/commit hashes as-is.\n"
-            f"Return ONLY the JSON object, no markdown. Add id:{new_id} and ts field with today's date."
+            f"Return ONLY the JSON object, no markdown. Do NOT invent id, date or ts — they are set for you."
         )
         compact = await ask_claude(prompt, system="Return only valid JSON, no markdown.", model="claude-haiku-4-5-20251001")
         lesson_obj = first_json_object(compact)
@@ -916,6 +932,9 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
             # Урок, который не разобрался, дописывать в lessons.json нельзя:
             # файл читает Силли на каждом аудите, мусор в нём дороже пропуска.
             raise ValueError(f"урок не разобрался как JSON: {compact[:120]!r}")
+        # Пустая запись займёт номер и будет читаться вечно, ничего не сообщая:
+        # normalize_lesson откажет, и это дешевле мусора в файле.
+        lesson_obj = normalize_lesson(lesson_obj, lesson_id=new_id, context=context)
         lessons.append(lesson_obj)
         await push_file("ai-office-shared", LESSONS_FILE, json.dumps(lessons, ensure_ascii=False, indent=2),
                         f"lesson({new_id}): {title[:50]}")
@@ -926,7 +945,7 @@ async def append_lesson_ai(title: str, symptom: str, cause: str, context: str, f
 
 
 INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
-{"intent":"push_code|fix_bot|create_bot|create_repo|create_cron|add_external_bot|get_bot_token|deploy|read_file|list_files|redis_query|board_task|trader_winrate|dev_task|delegate|update_bot_instruction|office_scan|answer","repo":"repo_name_or_null","path":"file_path_or_null","task":"task_description","bot":"имя_бота_или_null","instruction":"текст_инструкции_или_null","mode":"append|set|clear","confidence":0.0-1.0}
+{"intent":"push_code|fix_bot|create_bot|create_repo|create_cron|add_external_bot|get_bot_token|deploy|read_file|list_files|redis_query|board_task|resync_lessons|trader_winrate|dev_task|delegate|update_bot_instruction|office_scan|answer","repo":"repo_name_or_null","path":"file_path_or_null","task":"task_description","bot":"имя_бота_или_null","instruction":"текст_инструкции_или_null","mode":"append|set|clear","confidence":0.0-1.0}
 
 ГЛАВНОЕ ПРАВИЛО — различай вопрос и команду:
 - ВОПРОС о процессе ("как создать бота?", "что нужно для деплоя?", "какой стек?", "как задеплоить?", "с чего начать?") → intent=answer
@@ -936,6 +955,7 @@ INTENT_PROMPT = """Диспетчер AI-офиса. JSON без markdown:
 
 push_code=залить/обновить код, fix_bot=исправить баг, create_bot=ЯВНАЯ команда создать нового бота (не расписание!), create_repo=создать ПУСТОЙ GitHub-репозиторий и больше ничего. Сигналы: "создай репозиторий X", "заведи репо X", "нужен новый репозиторий X", "создай приватный репозиторий X". Имя репо клади в "repo". Это ОДИН вызов готового create_repo — НЕ создавай бота, НЕ ходи в BotFather, НЕ пушь шаблонный код и НЕ зови команду разработки. Если для репо нужен ещё и код, он придёт ОТДЕЛЬНОЙ задачей или его зальют снаружи. Отличие от create_bot: create_bot просят словом «бот» и он тянет за собой токен и Railway-сервис; здесь просят словом «репозиторий» и нужен только он, create_cron=создать расписание/напоминание/cron для пользователя ("напоминай каждый день", "отправляй каждое утро", "напоминалка в X время") — создаёт Railway cron-сервис, add_external_bot=подключить внешнего бота, get_bot_token=зарегистрировать в BotFather, deploy=задеплоить, read_file=прочитать файл, list_files=список файлов, redis_query=запрос к Redis, post_lessons=прочитать lessons.json и отправить все уроки красиво в Bug Lessons группу (-5197140411), cleanup_group=удалить старые сообщения от ботов в группе через Telethon, cleanup_dm=удалить сообщения с ключами/секретами в личке (gsk_, GROQ, токен) через Telethon — ищет в диалоге с user_id=int(BOT_TOKEN.split(':')[0]) (сигналы: удали старые, почисти группу, удали сообщения до), send_group_message=отправить сообщение в Telegram-группу от имени бота (POST /post_raw {chat_id,text,bot_name} X-Auth-Token OFFICE_CHAT_ID=-5194783850 — выполнять ПРЯМО без генерации кода), edit_file=точечная замена строки в файле без чтения всего файла (сигналы: замени в файле, вставь после строки, patch, добавь в начало функции — когда указан repo+path+old+new), agentic_task=многошаговая задача из 2+ шагов: читай+делай, исправь+задеплой, залей+проверь, прочитай+перепиши. Сигналы: исправь и задеплой, залей код и задеплой, прочитай X и отправь, прочитай X и перепиши, пройдись по всем, для каждого, рефакторинг, аудит. ВАЖНО: если задача содержит И (исправить код И задеплоить) — это agentic_task. При чтении большого файла (bot.py 800+ строк) — не читать целиком в цикле, читать один раз и искать нужную функцию по имени, dev_task=делегировать задачу КОМАНДЕ разработки (Девви→Рикки→Тести→Секки→Скрибби). ТОЛЬКО когда речь о новой фиче/модуле/компоненте для продукта — НЕ о правке одного файла. Требует ВЫСОКОЙ уверенности (confidence>=0.85). Чёткие сигналы: "реализуй фичу", "разработай модуль", "напиши новый компонент", "сделай PR для", "задача для команды", "отдай команде", "dev-dept", "через цепочку". НЕЯСНЫЙ запрос ("сделай что-нибудь", "напиши функцию" без контекста) → confidence<0.85 → Силли переспрашивает. Если задача про правку существующего файла/бота — это push_code или agentic_task, НЕ dev_task. Просьба СОЗДАТЬ РЕПОЗИТОРИЙ — это create_repo, а НЕ dev_task: писать код для этого не надо, у меня есть готовый вызов (31.07.2026 «создай репозиторий molly-trader» ушло в dev_task с confidence 0.92, команда три попытки писала скрипт с выдуманной организацией, репозиторий так и не появился). delegate=поручить задачу ГЛАВЕ ОТДЕЛА и проверить результат (НЕ написание кода). Сигналы: "спроси у Тилли", "пусть Милли посчитает", "делегируй Доктору", "поручи отделу", "узнай у <бот>". Заполни "bot" именем отдела. confidence>=0.85, иначе Силли переспросит. update_bot_instruction=изменить поведение бота на лету через инструкцию в системном промпте (БЕЗ редеплоя). Сигналы: "научи <бота>", "пусть <бот> всегда/больше не", "добавь <боту> правило", "обнови инструкцию <бота>", "запомни для <бота>". Заполни "bot" (кого учим), "instruction" (что добавить), "mode" (append по умолчанию; set=заменить; clear=сбросить). office_scan=самопроверка офиса по команде владельца: просканировать боты на ошибки и предложить фиксы (каждый уходит на /approve). Сигналы: "проверь офис", "просканируй ботов", "что сломалось", "самопроверка", "проверь всех ботов", "почини <бот>" (тогда заполни "bot"). Свип НЕ применяет фиксы сам — только предлагает. answer=ответить словами.
 ВАЖНО redis_query: "прочитай Redis", "покажи quality", "health ботов", "office:*", "scan", "hgetall", "что в Redis" → redis_query. redis_query ТОЛЬКО ЧИТАЕТ. Любая просьба ИЗМЕНИТЬ задачу на доске — это board_task, а не redis_query.
+resync_lessons=переиздать хвост Bug Lessons начиная с номера урока: снять сообщения и отправить заново по возрастанию номеров. Сигналы: "переиздай уроки с N", "перепубликуй уроки с N", "resync уроки", "восстанови порядок уроков". Номер урока клади в "task". По умолчанию DRY-RUN: реальное переиздание только если в тексте есть слово confirm — без него ответ показывает, что будет снято и отправлено.
 board_task=операция над задачей доски по её id. Сигналы: "верни задачу X в работу", "переоткрой задачу X", "задача X снова в очередь", "reopen X". Id — 12 hex-символов, клади его в "task". Заполни "mode": reopen (вернуть в очередь, сбросив счётчик попыток) — единственный поддерживаемый режим. Это НЕ произвольная запись в Redis: доступна ровно одна названная операция.
 ВАЖНО trader_winrate: "винрейт трейдера", "посчитай winrate", "проверь винрейт сигналов", "какой winrate у трейдера", "винрейт по сигналам", "статистика трейдера WR" → trader_winrate (читает signals:list/signal:* трейдера, считает WR по свечам, отдаёт за 7 дней и за всё время).
 ВАЖНО: "подключить бота", "добавить чужого бота" → add_external_bot, НЕ create_bot.
@@ -1670,6 +1690,7 @@ async def publish_pending_lessons(reply_func=None, limit: int = 100) -> int:
 
     capped = pending[:limit]
     posted = 0
+    reconciled = 0        # уже были в группе, чинили только флаг в файле
     failed: list = []
     consecutive = 0
     now_iso = _dt.now(_tz.utc).isoformat()
@@ -1679,6 +1700,21 @@ async def publish_pending_lessons(reply_func=None, limit: int = 100) -> int:
             # 12.08 он встал первым в очереди и запер за собой всё остальное на
             # одиннадцать дней. Режем по абзацам, а не обрезаем: потерянный хвост
             # выглядел бы как целый урок.
+            # Замок ДО отправки. Флаг posted_to_group durable в git, но
+            # гарантия нужна не файлу, а ЧТЕНИЮ: GitHub Contents API отдаёт
+            # свежую запись не сразу, и 25.08.2026 два захода публикации подряд
+            # прочитали файл, где оба урока ещё pending, и отправили их дважды.
+            if not await claim_publish(await get_redis(), lesson.get("id")):
+                # Замок занят — урок уже отправлен другим заходом, чьё «mark»
+                # до файла не доехало. Не отправляем повторно, но флаг ставим:
+                # иначе файл расходится с группой навсегда и каждый следующий
+                # аудит будет считать урок неопубликованным.
+                logger.info("[lessons] #%s уже отправлен (замок занят) — "
+                            "не дублирую, чиню флаг", lesson.get("id"))
+                lesson["posted_to_group"] = True
+                lesson.setdefault("posted_at", now_iso)
+                reconciled += 1
+                continue
             sent_ids = []
             for part in split_for_telegram(_format_lesson(lesson)):
                 sent = await _GLOBAL_BOT.send_message(chat_id=BUG_LESSONS_CHAT, text=part)
@@ -1700,17 +1736,22 @@ async def publish_pending_lessons(reply_func=None, limit: int = 100) -> int:
             # останавливаемся лишь когда сыпется подряд: это уже не кривая запись,
             # а недоступный Telegram, и долбиться в него бессмысленно.
             logger.error(f"publish_pending_lessons #{lesson.get('id')} failed: {e}")
+            # Замок снимаем: урок не ушёл и обязан уехать следующим заходом.
+            await release_publish(await get_redis(), lesson.get("id"))
             failed.append((lesson.get("id"), str(e)[:120]))
             consecutive += 1
             if consecutive >= 3:
                 logger.error("publish_pending_lessons: 3 отказа подряд, останавливаюсь")
                 break
 
-    if posted:
+    if posted or reconciled:
         try:
+            note = f"mark {posted + reconciled} posted_to_group"
+            if reconciled:
+                note += f" ({reconciled} уже были в группе)"
             await push_file("ai-office-shared", LESSONS_FILE,
                             json.dumps(lessons, ensure_ascii=False, indent=2),
-                            f"chore(lessons): mark {posted} posted_to_group")
+                            f"chore(lessons): {note}")
         except Exception as e:
             logger.error(f"publish_pending_lessons commit failed: {e}")
     if failed:
@@ -1731,15 +1772,20 @@ async def publish_pending_lessons(reply_func=None, limit: int = 100) -> int:
 async def post_lesson(title: str, symptom: str, cause: str, context: str, fix: str, how_to_avoid: str):
     """Записывает урок в durable-историю (lessons.json) и публикует НОВЫЕ уроки.
 
-    Публикация в Bug Lessons идёт ТОЛЬКО через publish_pending_lessons (идемпотентно по
-    флагу posted_to_group), поэтому повторный вызов и аудит не задваивают сообщения.
+    Задвоение исключает ЗАМОК в publish_pending_lessons, а не флаг
+    posted_to_group: флаг durable в git, но гарантия нужна не файлу, а чтению,
+    а GitHub Contents API отдаёт свежую запись не сразу (25.08.2026 — оба урока
+    ушли в группу дважды с разницей в четыре секунды).
     """
     # 1) durable-история: ждём, урок должен лечь в файл до публикации
     await append_lesson_ai(title, symptom, cause, context, fix, how_to_avoid)
     r = await get_redis()
     if r:
         await log_event(r, BOT_NAME_LOWER, "lesson_saved", title=title[:100])
-    # 2) опубликовать новые (включая только что записанный) — идемпотентно по флагу
+    # 2) опубликовать новые (включая только что записанный). Задвоение держит
+    #    замок в publish_pending_lessons, а не расстановка вызовов: у этой
+    #    функции есть ещё три вызывающих вне аудита, и снятие публикации отсюда
+    #    заставило бы их урок ждать до утра.
     try:
         await publish_pending_lessons()
     except Exception as e:
@@ -2194,7 +2240,10 @@ async def handle_bug(service_id: str, service_name: str, repo: str, main_file: s
 
 
 # ── Monitor loop ───────────────────────────────────────────────────────────────
-ERROR_PATTERNS = ["Traceback", "Error:", "Exception:", "CRITICAL", "crashed", "exit code"]
+# Список живёт в пакете: здесь его нельзя покрыть тестом, а именно его ПРИМЕНЕНИЕ
+# (построчно вместо блочного) обезглавило трейсбеки и слило разные баги офиса в
+# одну сигнатуру 25.08.2026. Отбор строк отказа теперь делает error_lines().
+from ai_office_shared.shared.traceback_scan import ERROR_PATTERNS  # noqa: E402
 
 # Окна аудита. Аудит НЕ должен потреблять логи водяным знаком: он ходит дважды в
 # сутки, а монитор — раз в 5 минут, и монитор всегда успевал бы первым, оставляя
@@ -2851,14 +2900,28 @@ async def run_daily_audit() -> str:
         existing_lessons = json.loads(raw_lessons) if raw_lessons.strip() else []
 
         # Собираем все ошибки за сутки по всем сервисам
+        # Гейты те же, что у монитора. До 25.08.2026 их здесь не было ни одного,
+        # и скан записал в вечный архив (а) внешний сетевой сбой molly-trader,
+        # о котором монитор нарочно молчит, и (б) СОБСТВЕННЫЙ вывод Силли,
+        # прочитанный из её же логов, — как проблему Railway. Отчёт можно писать
+        # по чему угодно; в долгую память пишут только по улике.
         all_errors: dict[str, list[str]] = {}
         for service_id, repo in office_services:
             try:
+                if repo in SELF_REPOS:
+                    continue          # свои логи — свой же вывод, петля замкнётся
                 logs = await get_service_logs(service_id, window_s=AUDIT_LESSON_WINDOW_S)
-                errs = [l for l in strip_ignored_tracebacks(logs)
-                        if any(p in l for p in ERROR_PATTERNS)]
-                if errs:
-                    all_errors[repo] = errs
+                errs = error_lines(strip_ignored_tracebacks(logs),
+                                   ignore=IGNORE_PATTERNS)
+                if not errs:
+                    continue
+                if classify_fault(errs) == "external":
+                    logger.info(f"[audit] {repo}: внешний сбой — урок не пишу")
+                    continue
+                if not failure_evidence(errs):
+                    logger.info(f"[audit] {repo}: нет строки с признаком отказа — урок не пишу")
+                    continue
+                all_errors[repo] = errs
             except Exception:
                 pass
 
@@ -3052,26 +3115,25 @@ async def _run_office_scan(target: str = "", *, proposal_chat_id: int = 0) -> di
             if not logs:
                 result["healthy"].append(repo)
                 continue
-            error_lines = [ln for ln in logs
-                           if any(ep in ln for ep in ERROR_PATTERNS)
-                           and not any(ip in ln for ip in IGNORE_PATTERNS)]
-            if not error_lines:
+            error_log_lines = error_lines(strip_ignored_tracebacks(logs),
+                                          ignore=IGNORE_PATTERNS)
+            if not error_log_lines:
                 result["healthy"].append(repo)
                 continue
-            if classify_fault(error_lines) == "external":
+            if classify_fault(error_log_lines) == "external":
                 result["external"].append(repo)
                 continue
-            known = await search_lessons(error_lines)
+            known = await search_lessons(error_log_lines)
             if known.get("match") and str(known.get("confidence", "")).lower() == "high":
                 result["known"].append(f"{repo} (lesson #{known.get('lesson_id')})")
                 continue
             source_code = await read_file(repo, main_file)
-            analysis = await analyze_logs(repo, error_lines, source_code)
+            analysis = await analyze_logs(repo, error_log_lines, source_code)
             if not analysis.get("is_bug") or analysis.get("bug_type") == "external":
                 (result["external"] if analysis.get("bug_type") == "external"
                  else result["healthy"]).append(repo)
                 continue
-            _no_proof = dispatch_refusal(analysis, error_lines)
+            _no_proof = dispatch_refusal(analysis, error_log_lines)
             if _no_proof:
                 logger.info(f"[office-scan] {repo}: находку не отдаю отделу — {_no_proof}")
                 result["healthy"].append(repo)
@@ -3250,10 +3312,18 @@ async def _deep_diagnose_and_escalate(
     5. Только если Claude не смог — эскалирует Владу с диагнозом
     """
     logger.info(f"[deep_diagnose] starting for {repo} sig={error_signature[:8]}")
+    basis = signature_basis(error_logs)
 
     # ── 1. Проверяем сколько ботов имеют эту же сигнатуру ────────────────────
+    # ⚠️ Только по ПОЛНОЙ улике. Совпадение сигнатур у неполных стеков ничего не
+    # доказывает: 25.08.2026 её основой был голый «Traceback (most recent call
+    # last):» — строка, одинаковая у любого питон-процесса. Проверка «та же
+    # сигнатура в 3+ сервисах» приняла бы это за системный шум, СТЁРЛА счётчики
+    # и замолчала — то есть коллизия не путала бы статистику, а выключила бы
+    # монитор целиком. Улика, которая не различает сервисы, не имеет права
+    # решать за все сервисы сразу.
     affected_services = []
-    if redis_client:
+    if redis_client and basis.complete:
         async for key in redis_client.scan_iter(f"fix_count:*:{error_signature}"):
             svc = key.split(":")[1]
             count = int(await redis_client.get(key) or 0)
@@ -3315,16 +3385,49 @@ async def _deep_diagnose_and_escalate(
     except Exception:
         pass
 
+    # Исходник — ОКРЕСТНОСТИ строк из трейсбека, а не начало файла. Слепой срез
+    # `source_code[:3000]` 25.08.2026 обрезал оба файла посреди строки в паре
+    # десятков строк от начала, причина лежала дальше, и модель придумывала её
+    # по тому, что видела: «вероятно, там `return r`» (в файле — корректный
+    # `return r2.json().get("text", ...)` строкой ниже среза) и «незакрытый
+    # out.sort(...)» (в файле — закрытый, с reverse=True). Обе выдумки ушли
+    # человеку как диагноз; обе опроверг компилятор.
+    tb_lines = [n for _, n, _ in frames(error_logs)]
+    src_window = around_lines(source_code, tb_lines)
+    if src_window:
+        src_block = (f"Исходник — окрестности строк из трейсбека "
+                     f"({file_summary(source_code)}):\n{src_window}")
+    elif tb_lines:
+        src_block = (f"Исходник: строк {tb_lines} в файле нет "
+                     f"({file_summary(source_code)}) — лог и прочитанный файл "
+                     f"разошлись, место падения показать нечем.")
+    else:
+        # Кадров нет — показывать нечего прицельно; берём начало и конец, но
+        # ГОВОРИМ, что середина пропущена, а не выдаём обрезок за файл.
+        head, tail = source_code[:2000], source_code[-2000:]
+        src_block = (f"Исходник целиком не показан ({file_summary(source_code)}), "
+                     f"кадров стека нет.\nНачало:\n{head}\n"
+                     f"[…середина файла пропущена…]\nКонец:\n{tail}")
+
     full_context = (
         f"Ошибки из логов (последние {len(error_logs)}):\n"
-        + "\n".join(error_logs[:10])
-        + f"\n\nИсходник (первые 3000 символов):\n{source_code[:3000]}"
+        + "\n".join(error_logs[:30])
+        + ("\n\n⚠️ СТЕК НЕПОЛНЫЙ: в логе есть заголовок трейсбека, но нет ни "
+           "класса исключения, ни кадров File(...). Причину падения по такому "
+           "логу назвать НЕЛЬЗЯ." if not basis.complete else "")
+        + f"\n\n{src_block}"
         + redis_ctx
         + ops_ctx
     )
 
     # ── 3. Глубокий анализ Claude (Sonnet — дороже, но для реальной диагностики) ──
     DEEP_ANALYSIS_PROMPT = """Ты — senior инженер AI-офиса. Этот баг уже встречался 3+ раза и стандартный фикс не помог.
+
+БАГ — ЭТО ТО, ЧТО ПОКАЗАЛИ ЛОГИ. Если в контексте стоит «СТЕК НЕПОЛНЫЙ» — причину
+назвать нечем: верни can_self_fix=false, confidence="low", root_cause="стек неполный,
+причина неизвестна" и escalate_reason про то, какой улики не хватает. НЕ угадывай
+строку кода по исходнику: непроверяемая догадка выглядит как диагноз и стоит человеку
+проверки (25.08.2026 две такие догадки опроверг компилятор).
 
 Твоя задача — поставить ТОЧНЫЙ диагноз:
 1. Что конкретно ломается (строка кода, функция, контракт)
@@ -3363,7 +3466,10 @@ async def _deep_diagnose_and_escalate(
     logger.info(f"[deep_diagnose] diagnosis: can_fix={can_fix} confidence={confidence} cause={root_cause[:60]}")
 
     # ── 4. Пробуем починить сам ───────────────────────────────────────────────
-    if can_fix and confidence in ("high", "medium"):
+    # Неполный стек чинить нельзя ни с какой уверенностью: уверенность модели
+    # относится к её гипотезе, а не к улике, которой нет. 25.08.2026 обе такие
+    # гипотезы оказались ложными — правка по ним ушла бы в здоровый код.
+    if can_fix and confidence in ("high", "medium") and basis.complete:
         action = diagnosis.get("self_fix_action")
         details = diagnosis.get("self_fix_details", "")
 
@@ -3399,12 +3505,31 @@ async def _deep_diagnose_and_escalate(
     # ── 5. Не смогла — эскалируем с ДИАГНОЗОМ, не просто криком ─────────────
     escalate_reason = diagnosis.get("escalate_reason") or "не смогла подобрать фикс с высокой уверенностью"
 
+    if basis.complete:
+        body = (f"*Причина:* {root_cause}\n"
+                f"*Почему предыдущий фикс не помог:* "
+                f"{diagnosis.get('why_fix_failed', 'неизвестно')}\n"
+                f"*Что нужно сделать:* {real_fix}\n\n"
+                f"*Почему сама не исправила:* {escalate_reason}")
+    else:
+        # Гипотезы модели о конкретной строке кода сюда НЕ идут. При неполном
+        # стеке они неотличимы от выдумки, а выглядят как диагноз и стоят
+        # человеку проверки (инвариант офиса №8: провал называет того, кто упал;
+        # промолчала дальняя сторона — так и говорим).
+        quoted = "\n".join(error_logs[:15]) or "(строк нет)"
+        body = ("*Причину назвать нечем:* в логе есть заголовок трейсбека, но "
+                "нет ни класса исключения, ни кадров `File \"...\"`. Так "
+                "выглядит смерть процесса посреди печати стека (OOM/SIGKILL) "
+                "или логгер, глотающий хвост.\n\n"
+                "*Что в логе есть дословно:*\n"
+                f"```\n{quoted[:1200]}\n```\n"
+                "*Что нужно сделать:* достать полный стек — `docker logs` / "
+                "прямой stdout контейнера и `dmesg | grep -i kill` на предмет "
+                "OOM. Диагноз по этому логу не ставится.")
+
     await notify_office(
         f"⚠️ *{repo}* — повторяющийся баг, нужна помощь\n\n"
-        f"*Причина:* {root_cause}\n"
-        f"*Почему предыдущий фикс не помог:* {diagnosis.get('why_fix_failed', 'неизвестно')}\n"
-        f"*Что нужно сделать:* {real_fix}\n\n"
-        f"*Почему сама не исправила:* {escalate_reason}\n"
+        f"{body}\n"
         f"Сигнатура: `{error_signature[:16]}` | fix_count={fix_count}"
     )
     logger.warning(f"[deep_diagnose] escalated {repo}: {escalate_reason}")
@@ -3484,20 +3609,16 @@ async def monitor_loop():
                 if noisy != len(logs):
                     logger.info(f"[monitor] {repo}: отброшено {noisy - len(logs)} шумовых строк, осталось {len(logs)}")
 
-                # === Filter Layer 2: есть ли реальные ошибки помимо deployment-шума
-                error_logs = [l for l in logs if any(p in l for p in ERROR_PATTERNS)]
+                # === Filter Layer 2: есть ли реальные ошибки помимо deployment-шума.
+                # Отбор БЛОЧНЫЙ. Построчный (как было до 25.08.2026) оставлял от
+                # трейсбека один заголовок: кадры `File "…"` не содержат ни одного
+                # ERROR_PATTERN, а строка исключения проходила, только если класс
+                # оканчивался на Error/Exception перед двоеточием. Диагноз потом
+                # ставился по тому, что уцелело, — то есть ни по чему.
+                error_logs = error_lines(logs, ignore=IGNORE_PATTERNS)
                 if not error_logs:
+                    logger.info(f"[monitor] {repo}: строк отказа нет (или только игнорируемые)")
                     continue
-
-                # Доп. per-line ignore (на случай других известных шумовых паттернов)
-                filtered_errors = [
-                    l for l in error_logs
-                    if not any(p in l for p in IGNORE_PATTERNS)
-                ]
-                if not filtered_errors:
-                    logger.info(f"[monitor] {repo}: only ignorable errors after per-line filter, skipping")
-                    continue
-                error_logs = filtered_errors
 
                 # === Filter Layer 3: внешний/транзиентный сбой — НЕ наш баг → МОЛЧИМ.
                 # Telegram/Railway API, DNS, сеть (NetworkError/ConnectError/
@@ -3528,27 +3649,24 @@ async def monitor_loop():
                         )
                     continue
 
-                # Дедупликация: УСТОЙЧИВАЯ сигнатура (тип ошибки + файл + сообщение
-                # без чисел), чтобы один и тот же баг не пере-детектился из-за разных
-                # номеров строк/динамики и не обнулял fix_count по кругу.
-                import hashlib, re as _re
-                _err_text = "\n".join(error_logs)
-                _exc = _re.findall(r"\b([A-Za-z_]+(?:Error|Exception))\b", _err_text)
-                _files = _re.findall(r'File "[^"]*?([^"/\\]+\.py)"', _err_text)
-                _msg = ""
-                for _line in reversed(error_logs):
-                    if _exc and _exc[-1] in _line:
-                        _msg = _line
-                        break
-                _msg_norm = _re.sub(r"0x[0-9a-fA-F]+|\d+", "", _msg).strip()
-                _sig_basis = "|".join([
-                    _exc[-1] if _exc else "",
-                    _files[-1] if _files else "",
-                    _msg_norm,
-                ]).strip("|")
-                if not _sig_basis:  # фолбэк: нормализованный текст без чисел
-                    _sig_basis = _re.sub(r"0x[0-9a-fA-F]+|\d+", "", _err_text)[:500]
-                error_signature = hashlib.md5(_sig_basis.encode()).hexdigest()
+                # Дедупликация: УСТОЙЧИВАЯ сигнатура (тип исключения + файл +
+                # сообщение без чисел), чтобы один и тот же баг не пере-детектился
+                # из-за разных номеров строк и не обнулял fix_count по кругу.
+                # Считается в пакете — там её можно покрыть тестом, и там же
+                # записано, чем неполная улика отличается от полной.
+                _basis = signature_basis(error_logs)
+                error_signature = error_sig(error_logs, scope=service_id)
+                if not _basis.complete:
+                    # В логе есть заголовок трейсбека, но ни исключения, ни кадров:
+                    # процесс умер посреди печати стека (SIGKILL/OOM) либо логгер
+                    # проглотил хвост. Молчать об этом нельзя — по такой улике
+                    # диагноз не ставится, а сигнатура без scope была бы общей для
+                    # всего офиса (инцидент 25.08.2026, хеш 1b21026f…).
+                    logger.warning(
+                        f"[monitor] {repo}: стек неполный — ни класса исключения, "
+                        f"ни кадров File(...). Сигнатура привязана к сервису. "
+                        f"Улика: {failure_evidence(error_logs)[:160]!r}"
+                    )
                 now = time.time()
                 redis_key = f"seen_error:{service_id}:{error_signature}"
                 r = await get_redis()
@@ -4349,6 +4467,34 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         )
         result = await _run_office_scan(target=target, proposal_chat_id=pcid)
         await reply_func(_format_scan_report(result, target=target))
+
+    elif intent == "resync_lessons":
+        """Переиздание хвоста Bug Lessons — тот же resync_lessons(), что у
+        владельческой команды `/resync_lessons`.
+
+        Зачем понадобился второй вход. Команда живёт только в Telegram-хендлере
+        и закрыта на YOUR_TELEGRAM_ID, поэтому починить порядок уроков могла
+        ровно одна пара рук. Уроки #118 и #119 пропали из группы 24.08, и
+        переиздание было написано в тот же день — но запустить его было некому,
+        и хвост пролежал сломанным двое суток.
+
+        ⚠️ Операция УДАЛЯЕТ сообщения в группе, а `POST /task` сегодня открыт без
+        токена (OFFICE_RPC_STRICT выключен). Поэтому здесь два тормоза, которых
+        нет у владельческой команды: dry-run по умолчанию — без слова confirm
+        ничего не снимается, — и потолок RESYNC_MAX_LESSONS=20 в resync_plan,
+        выше которого это уже миграция архива, а не починка порядка.
+        """
+        raw_task = str(intent_data.get("task") or "")
+        source_text = f"{raw_task} {message_text or ''}"
+        nums = [int(x) for x in _re_words.findall(r"\d+", source_text)]
+        if not nums:
+            await reply_func("С какого урока переиздавать? Например: "
+                             "«переиздай уроки с 118».")
+            return
+        # confirm ищем и в разборе интента, и в ИСХОДНОМ тексте: слово ставит
+        # человек, а через диспетчер оно доходит не всегда.
+        confirm = "confirm" in source_text.lower()
+        await resync_lessons(reply_func, nums[0], confirm)
 
     elif intent == "board_task":
         """Операция над задачей доски по id. Названная и узкая — намеренно.
