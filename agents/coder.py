@@ -33,6 +33,7 @@ from ai_office_shared.shared.bug_lessons import (
     resync_plan, select_lesson_parts, stale_link,
 )
 from ai_office_shared.shared.fault_evidence import dispatch_refusal, failure_evidence
+from ai_office_shared.shared import fault_class as _fault_class
 from ai_office_shared.shared.log_redaction import (
     install_secret_redaction, quiet_http_client_logs, redact,
 )
@@ -42,6 +43,7 @@ from ai_office_shared.shared.file_window import (
 )
 from ai_office_shared.shared.traceback_scan import (
     error_lines, frames, signature as error_sig, signature_basis,
+    unterminated_tail,
 )
 from ai_office_shared.shared.lesson_record import (
     claim_publish, normalize as normalize_lesson, release_publish,
@@ -750,6 +752,10 @@ async def multi_file_refactor(
 
 # Последние seen timestamps логов по сервису чтобы не дублировать
 last_seen: dict = {}  # fallback in-memory (Redis preferred)
+# Отложенный недочитанный трейсбек: service_id → метка времени его заголовка.
+# Тот же фолбэк, что и у last_seen, и по той же причине — без Redis монитор
+# должен работать, просто без памяти между рестартами.
+_tb_holdback: dict = {}
 
 # Дедупликация: hash ошибки → timestamp последнего анализа
 # Персистентно хранится в Redis; fallback на in-memory seen_errors при недоступности Redis
@@ -1213,7 +1219,7 @@ async def get_service_logs(service_id: str, window_s: float | None = None) -> li
     else:
         r = await get_redis()
         cutoff = float(await r.get(f"last_seen:{service_id}") or 0) if r else last_seen.get(service_id, 0)
-    new_logs = []
+    kept: list[tuple[float, str]] = []   # (метка, строка) — метка нужна ниже
     latest_ts = cutoff
     for l in logs:
         ts_str = l.get("timestamp", "")
@@ -1225,13 +1231,63 @@ async def get_service_logs(service_id: str, window_s: float | None = None) -> li
         if ts > cutoff:
             # Чужие логи чистим на входе: боты печатают токен в строках httpx, а
             # отсюда строка уезжает в промпт анализатора, в отчёт и в чат (#118).
-            new_logs.append(redact(l.get("message", "")))
+            kept.append((ts, redact(l.get("message", ""))))
             if ts > latest_ts:
                 latest_ts = ts
+    new_logs = [m for _, m in kept]
     if window_s is not None:
         return new_logs               # 🔴 отметку НЕ двигаем: иначе окно съело бы
                                       # логи у монитора и он ослеп бы вместо аудита
+
+    # 🔴 НЕДОЧИТАННЫЙ ТРЕЙСБЕК НЕ ОТДАЁМ И НЕ СЪЕДАЕМ.
+    #
+    # Railway отдаёт каждую строку стека отдельной записью со своей меткой
+    # времени. Чтение, попавшее в середину выгрузки, забирало заголовок с
+    # кадрами БЕЗ строки исключения — и терялись обе половины: огрызок уходил
+    # на разбор без имени исключения (отсюда 11 ложных заметок 27–29.08), а
+    # хвост в следующем цикле приезжал сиротой, без заголовка, и его отбрасывал
+    # ERROR_PATTERNS. Поэтому хвостовой блок без исключения откладывается: из
+    # выдачи он вырезается, а отметка не двигается за его заголовок, и
+    # следующее чтение забирает стек целиком.
+    #
+    # Придерживаем РОВНО ОДИН раз (инвариант №6: у петли есть потолок). Если
+    # на следующем чтении блок всё ещё не дописан — процесс умер посреди печати
+    # (SIGKILL/OOM), дописывать некому. Тогда отпускаем как есть, и дальше это
+    # уже забота classify_fault: у неё для такого стека вердикт "unknown".
+    hold_idx = unterminated_tail(new_logs)
+    _hold_key = f"tb_holdback:{service_id}"
     r = await get_redis()
+    _held = float(await r.get(_hold_key) or 0) if r else _tb_holdback.get(service_id, 0)
+    if hold_idx is not None:
+        hdr_ts = kept[hold_idx][0]
+        if _held != hdr_ts:
+            # Отметку ставим на последнюю строку ПЕРЕД заголовком: следующее
+            # чтение начнётся ровно с него.
+            latest_ts = max([t for t, _ in kept[:hold_idx]], default=cutoff)
+            new_logs = new_logs[:hold_idx]
+            if r:
+                await r.setex(_hold_key, 3600, hdr_ts)
+            else:
+                _tb_holdback[service_id] = hdr_ts
+            logger.info(
+                f"[logs] {service_id}: хвостовой трейсбек не дописан "
+                f"({len(kept) - hold_idx} строк) — откладываю до следующего чтения"
+            )
+        else:
+            logger.warning(
+                f"[logs] {service_id}: трейсбек не дописался и со второго чтения — "
+                f"отдаю как есть, стек неполный"
+            )
+            if r:
+                await r.delete(_hold_key)
+            else:
+                _tb_holdback.pop(service_id, None)
+    elif _held:
+        if r:
+            await r.delete(_hold_key)
+        else:
+            _tb_holdback.pop(service_id, None)
+
     if r:
         await r.set(f"last_seen:{service_id}", latest_ts)
     else:
@@ -2307,59 +2363,38 @@ def strip_ignored_tracebacks(logs: list[str]) -> list[str]:
         i += 1
     return out
 
-# Внешние/транзиентные сбои — НЕ наш баг. Если корневая причина в недоступности
-# стороннего сервиса (Telegram/Railway API, DNS, сеть), а бот жив — Силли МОЛЧИТ
-# (по требованию владельца), а не предлагает фикс. Список шире IGNORE_PATTERNS:
-# ловит сбои не только на polling/getUpdates, но и при отправке/любых POST.
-EXTERNAL_FAULT_PATTERNS = [
-    "telegram.error.NetworkError",
-    "NetworkError",
-    "httpx.ConnectError",
-    "httpx.ConnectTimeout",
-    "httpx.ReadTimeout",
-    "httpx.RemoteProtocolError",
-    "httpcore.RemoteProtocolError",
-    "ConnectTimeout",
-    "ReadTimeout",
-    "RemoteProtocolError",
-    "Server disconnected",
-    "Bad Gateway",
-    " 502",
-    " 503",
-    " 504",
-    "getaddrinfo failed",
-    "Temporary failure in name resolution",
-    "Connection reset by peer",
-    "Connection aborted",
-]
+# Классификация отказа переехала в пакет: ai_office_shared/shared/fault_class.py.
+# Здесь её нельзя было покрыть тестом (coder.py не импортируется), а дефект
+# 27–29.08.2026 сидел именно в ней — вердикт по умолчанию «наш баг».
+# Имена оставлены связанными: на них ссылаются докстринги и старый код.
+EXTERNAL_FAULT_PATTERNS = _fault_class.EXTERNAL_FAULT_PATTERNS
+OUR_BUG_MARKERS = _fault_class.OUR_BUG_MARKERS
 
 
 def classify_fault(error_logs: list[str]) -> str:
-    """Внешний транзиентный сбой vs наш баг.
+    """Внешний транзиентный сбой / наш баг / нечем судить.
 
-    Возвращает "external" если корневая причина — недоступность стороннего
-    сервиса (Telegram/Railway API, DNS, сеть) И в логах НЕТ признаков нашего
-    структурного бага (NameError/ImportError/SyntaxError/KeyError/AttributeError).
-    Иначе "internal".
+    Вердикта ТРИ, а не два. "unknown" — трейсбек без строки исключения: стек
+    оборван (водяной знак разрезал выгрузку логов, SIGKILL/OOM посреди печати).
+    Раньше такой огрызок возвращался как "internal" и открывал гейт тишины —
+    отсюда 11 сообщений «повтор известной проблемы» за трое суток по сбоям,
+    про которые монитор обязан молчать. Разбор — в докстринге fault_class.
+
+    Звать так: `!= "internal"` («не доказано, что чинить нам»), а НЕ
+    `== "external"`, иначе "unknown" снова попадёт в ветку нашего бага.
     """
-    text = "\n".join(error_logs)
-    OUR_BUG_MARKERS = (
-        "NameError", "ImportError", "ModuleNotFoundError", "SyntaxError",
-        "IndentationError", "KeyError", "AttributeError", "TypeError",
-        "ValueError", "IndexError", "UnboundLocalError",
-    )
-    if any(m in text for m in OUR_BUG_MARKERS):
-        return "internal"
-    if any(p in text for p in EXTERNAL_FAULT_PATTERNS):
-        return "external"
-    return "internal"
+    return _fault_class.classify(error_logs)
 
 
 # Cooldown для внешних/известных-урочных сбоев — не дёргаемся по кругу (секунды).
 EXTERNAL_FAULT_COOLDOWN = 6 * 3600  # 6 часов тишины по сигнатуре
 
-# Игнорировать ошибки старше этого времени (секунды) — стартовый шум редеплоя
-ERROR_MAX_AGE = 120  # 2 минуты
+# ERROR_MAX_AGE = 120 удалена 29.08.2026: константа была мёртвой — объявлена и
+# не использована ни разу, при этом читалась как «старые ошибки отсекаются по
+# возрасту», чего не происходило. Отсечка по времени реально живёт в водяном
+# знаке last_seen (get_service_logs) и в окне window_s; вторая, невключённая,
+# только вводила в заблуждение при разборе. Стартовый шум редеплоя режется не
+# возрастом, а IGNORE_PATTERNS и strip_ignored_tracebacks.
 
 # Фразы которые означают что боту не хватает инструмента
 RESPONSE_ANALYZER_PROMPT = """Анализатор ответов AI-агентов. Есть ли проблема с возможностями?
@@ -2509,10 +2544,13 @@ async def _handle_health_failures(health_fail: list[str], lines: list[str]) -> l
                 logger.warning(f"[audit_health] logs failed for {name}: {ex}")
         crash_text = "\n".join(svc_logs[:20])
 
-        if svc_logs and classify_fault(svc_logs) == "external":
+        if svc_logs and classify_fault(svc_logs) != "internal":
+            _v = classify_fault(svc_logs)
             lines.append(
-                f"🌐 *{name}* — health {detail}, в логах внешний/сетевой сбой "
-                f"(не наш баг), молчу"
+                f"🌐 *{name}* — health {detail}, "
+                + ("в логах внешний/сетевой сбой (не наш баг), молчу"
+                   if _v == "external" else
+                   "стек в логах оборван — назвать причину не на чем, молчу")
             )
             continue
 
@@ -2687,10 +2725,13 @@ async def run_daily_audit() -> str:
                 # Классификация ДО анализа/редеплоя (как в _handle_health_failures):
                 # внешний/сетевой сбой (Telegram/Railway, DNS) — не наш баг, молчим.
                 # Иначе can_autofix от Haiku редеплоит бот по чужому сбою.
-                if crash_logs and classify_fault(crash_logs) == "external":
+                if crash_logs and classify_fault(crash_logs) != "internal":
+                    _v = classify_fault(crash_logs)
                     lines.append(
-                        f"🌐 *{svc_name}* — {svc_status}, в логах внешний/сетевой сбой "
-                        f"(не наш баг), молчу"
+                        f"🌐 *{svc_name}* — {svc_status}, "
+                        + ("в логах внешний/сетевой сбой (не наш баг), молчу"
+                           if _v == "external" else
+                           "стек в логах оборван — назвать причину не на чем, молчу")
                     )
                     continue
 
@@ -2736,12 +2777,17 @@ async def run_daily_audit() -> str:
                 )
                 if not ok:
                     await notify_office(f"⚠️ *{svc_name}* — редеплой не удался, нужен ручной разбор")
-            elif classify_fault(crash_logs or [crash_reason]) == "external":
+            elif classify_fault(crash_logs or [crash_reason]) != "internal":
                 # Внешний/сетевой сбой (Telegram/Railway API, DNS) — НЕ наш баг,
                 # команду не дёргаем. Тихая строка в отчёт, без делегирования.
+                # "unknown" сюда же: стек оборван, причину назвать не на чем —
+                # занимать отдел догадкой нельзя (инвариант №8).
+                _v = classify_fault(crash_logs or [crash_reason])
                 lines.append(
-                    f"🌐 *{svc_name}* — внешний/сетевой сбой (не наш баг), молчу\n"
-                    f"   📍 Причина: {crash_reason[:120]}"
+                    (f"🌐 *{svc_name}* — внешний/сетевой сбой (не наш баг), молчу\n"
+                     if _v == "external" else
+                     f"🌐 *{svc_name}* — стек оборван, причину назвать не на чем\n")
+                    + f"   📍 Причина: {crash_reason[:120]}"
                 )
             else:
                 # Пробуем делегировать команде если это код-проблема
@@ -2915,8 +2961,11 @@ async def run_daily_audit() -> str:
                                    ignore=IGNORE_PATTERNS)
                 if not errs:
                     continue
-                if classify_fault(errs) == "external":
-                    logger.info(f"[audit] {repo}: внешний сбой — урок не пишу")
+                if classify_fault(errs) != "internal":
+                    # "unknown" сюда же и по той же причине, что и "external":
+                    # урок, написанный по оборванному стеку, — это выдуманная
+                    # причина в постоянном архиве (уроки #123 и #124).
+                    logger.info(f"[audit] {repo}: {classify_fault(errs).reason} — урок не пишу")
                     continue
                 if not failure_evidence(errs):
                     logger.info(f"[audit] {repo}: нет строки с признаком отказа — урок не пишу")
@@ -3120,7 +3169,7 @@ async def _run_office_scan(target: str = "", *, proposal_chat_id: int = 0) -> di
             if not error_log_lines:
                 result["healthy"].append(repo)
                 continue
-            if classify_fault(error_log_lines) == "external":
+            if classify_fault(error_log_lines) != "internal":
                 result["external"].append(repo)
                 continue
             known = await search_lessons(error_log_lines)
@@ -3625,7 +3674,13 @@ async def monitor_loop():
                 # RemoteProtocolError/Bad Gateway/5xx) при живом боте: предлагать фикс
                 # нельзя — это не наша вина. Тихо логируем раз в EXTERNAL_FAULT_COOLDOWN,
                 # в офис ничего не шлём. Watchdog поднимет бота, если он реально лёг.
-                if classify_fault(error_logs) == "external":
+                # "unknown" (стек без строки исключения) проходит ТЕМ ЖЕ путём:
+                # молчать надо не потому, что виноват кто-то другой, а потому,
+                # что виноватого назвать не на чем. Отдельно только запись в
+                # журнал — чтобы обрыв улики был виден как факт, а не растворялся
+                # в тишине (инварианты №4 и №8).
+                _verdict = classify_fault(error_logs)
+                if _verdict != "internal":
                     import hashlib as _h3
                     _ext_sig = _h3.md5(
                         "\n".join(error_logs)[:500].encode()
@@ -3638,14 +3693,19 @@ async def monitor_loop():
                             await _r_ext.setex(_ext_key, EXTERNAL_FAULT_COOLDOWN, "1")
                         try:
                             await log_event(
-                                _r_ext, BOT_NAME_LOWER, "external_fault_ignored",
-                                service=repo, sample="\n".join(error_logs[:3])[:300],
+                                _r_ext, BOT_NAME_LOWER,
+                                "external_fault_ignored" if _verdict == "external"
+                                else "truncated_stack_ignored",
+                                service=repo, verdict=str(_verdict),
+                                reason=_verdict.reason,
+                                sample="\n".join(error_logs[:3])[:300],
                             )
                         except Exception:
                             pass
                         logger.info(
-                            f"[monitor] {repo}: внешний/сетевой сбой (не наш баг) — молчу, "
-                            f"cooldown {EXTERNAL_FAULT_COOLDOWN//3600}ч"
+                            f"[monitor] {repo}: {_verdict.reason} — молчу, "
+                            f"cooldown {EXTERNAL_FAULT_COOLDOWN//3600}ч. "
+                            f"Улика: {failure_evidence(error_logs)[:160]!r}"
                         )
                     continue
 
@@ -3756,13 +3816,36 @@ async def monitor_loop():
                         continue
                     if _r_les:
                         await _r_les.setex(_les_key, EXTERNAL_FAULT_COOLDOWN, "1")
-                    # Известный урок = разбор уже есть. Не пере-генерируем фикс Opus-ом
-                    # и НЕ открываем повторное предложение. Тихая заметка один раз.
-                    await notify_office(
-                        f"📚 Cilly: повтор известной проблемы в *{repo}* — урок #{lesson_id}.\n"
-                        f"_{known.get('reason', '')}_\n"
-                        f"Новых действий не требуется (фикс уже задокументирован)."
+                    # Известный урок = разбор уже есть. Не пере-генерируем фикс
+                    # Opus-ом, не открываем повторное предложение — и В ОФИС НЕ
+                    # ПИШЕМ.
+                    #
+                    # До 29.08.2026 здесь стояло notify_office с текстом, который
+                    # сам себя опровергал: «Новых действий не требуется». За
+                    # 27–29.08 таких сообщений пришло 11 из четырёх сервисов —
+                    # каждое требовало от человека прочитать его и убедиться, что
+                    # делать ничего не надо. Сообщение, не требующее решения, не
+                    # экономит внимание, а тратит его; при этом рядом лежит уже
+                    # написанный канал для того же факта — журнал.
+                    #
+                    # Повтор, который действительно стоит разбора, сюда не дойдёт:
+                    # fix_count инкрементится ВЫШЕ по циклу, и на третьем повторе
+                    # срабатывает _deep_diagnose_and_escalate — эскалация с уликой,
+                    # а не заметка. Тишина здесь не прячет баг, она уступает место
+                    # тому, кто умеет о нём сказать по делу.
+                    logger.info(
+                        f"[monitor] {repo}: известный урок #{lesson_id}, "
+                        f"fix_count={fix_count} — в офис не пишу. "
+                        f"Совпадение: {str(known.get('reason', ''))[:160]!r}"
                     )
+                    try:
+                        await log_event(
+                            _r_les, BOT_NAME_LOWER, "known_lesson_repeat",
+                            service=repo, lesson_id=lesson_id, fix_count=fix_count,
+                            sample="\n".join(error_logs[:3])[:300],
+                        )
+                    except Exception:
+                        pass
                     continue
 
                 analysis = await analyze_logs(repo, error_logs, source_code)
