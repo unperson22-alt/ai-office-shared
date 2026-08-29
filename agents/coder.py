@@ -43,6 +43,7 @@ from ai_office_shared.shared.file_window import (
 )
 from ai_office_shared.shared.traceback_scan import (
     error_lines, frames, signature as error_sig, signature_basis,
+    unterminated_tail,
 )
 from ai_office_shared.shared.lesson_record import (
     claim_publish, normalize as normalize_lesson, release_publish,
@@ -751,6 +752,10 @@ async def multi_file_refactor(
 
 # Последние seen timestamps логов по сервису чтобы не дублировать
 last_seen: dict = {}  # fallback in-memory (Redis preferred)
+# Отложенный недочитанный трейсбек: service_id → метка времени его заголовка.
+# Тот же фолбэк, что и у last_seen, и по той же причине — без Redis монитор
+# должен работать, просто без памяти между рестартами.
+_tb_holdback: dict = {}
 
 # Дедупликация: hash ошибки → timestamp последнего анализа
 # Персистентно хранится в Redis; fallback на in-memory seen_errors при недоступности Redis
@@ -1214,7 +1219,7 @@ async def get_service_logs(service_id: str, window_s: float | None = None) -> li
     else:
         r = await get_redis()
         cutoff = float(await r.get(f"last_seen:{service_id}") or 0) if r else last_seen.get(service_id, 0)
-    new_logs = []
+    kept: list[tuple[float, str]] = []   # (метка, строка) — метка нужна ниже
     latest_ts = cutoff
     for l in logs:
         ts_str = l.get("timestamp", "")
@@ -1226,13 +1231,63 @@ async def get_service_logs(service_id: str, window_s: float | None = None) -> li
         if ts > cutoff:
             # Чужие логи чистим на входе: боты печатают токен в строках httpx, а
             # отсюда строка уезжает в промпт анализатора, в отчёт и в чат (#118).
-            new_logs.append(redact(l.get("message", "")))
+            kept.append((ts, redact(l.get("message", ""))))
             if ts > latest_ts:
                 latest_ts = ts
+    new_logs = [m for _, m in kept]
     if window_s is not None:
         return new_logs               # 🔴 отметку НЕ двигаем: иначе окно съело бы
                                       # логи у монитора и он ослеп бы вместо аудита
+
+    # 🔴 НЕДОЧИТАННЫЙ ТРЕЙСБЕК НЕ ОТДАЁМ И НЕ СЪЕДАЕМ.
+    #
+    # Railway отдаёт каждую строку стека отдельной записью со своей меткой
+    # времени. Чтение, попавшее в середину выгрузки, забирало заголовок с
+    # кадрами БЕЗ строки исключения — и терялись обе половины: огрызок уходил
+    # на разбор без имени исключения (отсюда 11 ложных заметок 27–29.08), а
+    # хвост в следующем цикле приезжал сиротой, без заголовка, и его отбрасывал
+    # ERROR_PATTERNS. Поэтому хвостовой блок без исключения откладывается: из
+    # выдачи он вырезается, а отметка не двигается за его заголовок, и
+    # следующее чтение забирает стек целиком.
+    #
+    # Придерживаем РОВНО ОДИН раз (инвариант №6: у петли есть потолок). Если
+    # на следующем чтении блок всё ещё не дописан — процесс умер посреди печати
+    # (SIGKILL/OOM), дописывать некому. Тогда отпускаем как есть, и дальше это
+    # уже забота classify_fault: у неё для такого стека вердикт "unknown".
+    hold_idx = unterminated_tail(new_logs)
+    _hold_key = f"tb_holdback:{service_id}"
     r = await get_redis()
+    _held = float(await r.get(_hold_key) or 0) if r else _tb_holdback.get(service_id, 0)
+    if hold_idx is not None:
+        hdr_ts = kept[hold_idx][0]
+        if _held != hdr_ts:
+            # Отметку ставим на последнюю строку ПЕРЕД заголовком: следующее
+            # чтение начнётся ровно с него.
+            latest_ts = max([t for t, _ in kept[:hold_idx]], default=cutoff)
+            new_logs = new_logs[:hold_idx]
+            if r:
+                await r.setex(_hold_key, 3600, hdr_ts)
+            else:
+                _tb_holdback[service_id] = hdr_ts
+            logger.info(
+                f"[logs] {service_id}: хвостовой трейсбек не дописан "
+                f"({len(kept) - hold_idx} строк) — откладываю до следующего чтения"
+            )
+        else:
+            logger.warning(
+                f"[logs] {service_id}: трейсбек не дописался и со второго чтения — "
+                f"отдаю как есть, стек неполный"
+            )
+            if r:
+                await r.delete(_hold_key)
+            else:
+                _tb_holdback.pop(service_id, None)
+    elif _held:
+        if r:
+            await r.delete(_hold_key)
+        else:
+            _tb_holdback.pop(service_id, None)
+
     if r:
         await r.set(f"last_seen:{service_id}", latest_ts)
     else:
@@ -2334,8 +2389,12 @@ def classify_fault(error_logs: list[str]) -> str:
 # Cooldown для внешних/известных-урочных сбоев — не дёргаемся по кругу (секунды).
 EXTERNAL_FAULT_COOLDOWN = 6 * 3600  # 6 часов тишины по сигнатуре
 
-# Игнорировать ошибки старше этого времени (секунды) — стартовый шум редеплоя
-ERROR_MAX_AGE = 120  # 2 минуты
+# ERROR_MAX_AGE = 120 удалена 29.08.2026: константа была мёртвой — объявлена и
+# не использована ни разу, при этом читалась как «старые ошибки отсекаются по
+# возрасту», чего не происходило. Отсечка по времени реально живёт в водяном
+# знаке last_seen (get_service_logs) и в окне window_s; вторая, невключённая,
+# только вводила в заблуждение при разборе. Стартовый шум редеплоя режется не
+# возрастом, а IGNORE_PATTERNS и strip_ignored_tracebacks.
 
 # Фразы которые означают что боту не хватает инструмента
 RESPONSE_ANALYZER_PROMPT = """Анализатор ответов AI-агентов. Есть ли проблема с возможностями?

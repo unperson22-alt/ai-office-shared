@@ -34,6 +34,7 @@ sys.path.insert(0, ROOT)
 from ai_office_shared.shared.file_window import around_lines  # noqa: E402
 from ai_office_shared.shared.traceback_scan import (  # noqa: E402
     ERROR_PATTERNS, error_lines, frames, signature, signature_basis,
+    unterminated_tail,
 )
 
 CODER = os.path.join(ROOT, "agents", "coder.py")
@@ -250,3 +251,71 @@ class TestCoderNoLongerCutsBlind(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUnterminatedTail(unittest.TestCase):
+    """Дочитан ли хвостовой трейсбек — вопрос до диагноза, а не после.
+
+    Инцидент 27–29.08.2026: водяной знак резал выгрузку Railway посреди стека,
+    и терялись ОБЕ половины — огрызок уходил на разбор без строки исключения,
+    а хвост в следующем цикле приезжал сиротой и отбрасывался ERROR_PATTERNS.
+    """
+
+    FULL = [
+        "Traceback (most recent call last):",
+        '  File "/app/bot.py", line 214, in fetch',
+        "    response = await client.get(url)",
+        "httpx.ReadTimeout: timed out",
+    ]
+
+    def test_complete_block_is_not_held(self):
+        self.assertIsNone(unterminated_tail(self.FULL))
+
+    def test_truncated_tail_returns_header_index(self):
+        self.assertEqual(unterminated_tail(self.FULL[:-1]), 0)
+
+    def test_header_index_is_of_the_tail_block(self):
+        lines = ["INFO: starting"] + self.FULL + ["INFO: retry"] + self.FULL[:-1]
+        self.assertEqual(unterminated_tail(lines), 6)
+
+    def test_block_followed_by_other_lines_is_not_a_tail(self):
+        """Блок в середине уже не дописать — придерживать нечего."""
+        lines = self.FULL[:-1] + ["INFO: bot continues"]
+        self.assertIsNone(unterminated_tail(lines))
+
+    def test_no_traceback_at_all(self):
+        self.assertIsNone(unterminated_tail(["INFO: fine", "WARNING: slow"]))
+        self.assertIsNone(unterminated_tail([]))
+
+    def test_header_alone_is_unterminated(self):
+        self.assertEqual(unterminated_tail(["INFO: x", "Traceback (most recent call last):"]), 1)
+
+
+class TestHoldbackWiring(unittest.TestCase):
+    """coder.py не импортируется — проводку проверяем по тексту."""
+
+    def setUp(self):
+        with open("agents/coder.py", encoding="utf-8") as fh:
+            self.code = fh.read()
+
+    def test_get_service_logs_uses_holdback(self):
+        body = self.code.split("async def get_service_logs(", 1)[1].split("\nasync def ", 1)[0]
+        self.assertIn("unterminated_tail(new_logs)", body)
+        self.assertIn("tb_holdback:", body)
+
+    def test_holdback_is_bounded(self):
+        """Инвариант №6: у петли есть потолок. Придерживаем ровно один раз."""
+        body = self.code.split("async def get_service_logs(", 1)[1].split("\nasync def ", 1)[0]
+        # Ветка «уже придерживали» обязана отпускать, а не держать снова.
+        self.assertIn("_held != hdr_ts", body)
+        self.assertIn("отдаю как есть", body)
+
+    def test_window_mode_untouched(self):
+        """Окно (аудит) ничего не потребляет — придерживать ему нечего."""
+        body = self.code.split("async def get_service_logs(", 1)[1].split("\nasync def ", 1)[0]
+        hold = body.index("unterminated_tail(new_logs)")
+        ret = body.index("return new_logs               # 🔴 отметку НЕ двигаем")
+        self.assertLess(ret, hold, "придержка обязана быть ПОСЛЕ выхода оконного режима")
+
+    def test_dead_error_max_age_removed(self):
+        self.assertNotIn("\nERROR_MAX_AGE = ", self.code)
