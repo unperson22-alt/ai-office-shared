@@ -2182,6 +2182,7 @@
       "agents/coder.py:classify_fault",
       "ai_office_shared/shared/traceback_scan.py:unterminated_tail"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-08-29T15:56:43.100138+00:00"
   }
 ]
