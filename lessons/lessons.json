@@ -2230,7 +2230,8 @@
       "ai_office_shared/shared/task_request.py:EmptyTask",
       "ai_office_shared/shared/worker.py:run_worker"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-09-02T23:27:25.613490+00:00"
   },
   {
     "id": 128,
@@ -2250,7 +2251,8 @@
     "anchors": [
       "ai_office_shared/shared/photo_retouch.py:hair_mask"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-09-02T23:27:25.613490+00:00"
   },
   {
     "id": 129,
@@ -2271,6 +2273,7 @@
       "ai_office_shared/shared/build_info.py:build_info",
       "ai_office_shared/shared/build_info.py:shared_commit"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-09-02T23:27:25.613490+00:00"
   }
 ]
