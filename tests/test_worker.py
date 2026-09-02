@@ -111,6 +111,20 @@ class TestWorkerRoutes(unittest.TestCase):
         self.assertIn(("GET", "/health"), routes)
         self.assertIn(("POST", "/reply"), routes)
 
+    def test_version_endpoint_exists_and_names_the_running_build(self):
+        """
+        `/health` одинаков до и после деплоя, поэтому «работает ли уже фикс»
+        было некому подтвердить, кроме того, кто деплой и выполнял (02.09.2026,
+        инвариант 5). `/version` отвечает на этот вопрос — и обязан честно
+        говорить «не знаю», а не подставлять правдоподобное.
+        """
+        routes = {(r.method, r.resource.canonical) for r in self.app.router.routes()}
+        self.assertIn(("GET", "/version"), routes)
+        handler = self._handler("GET", "/version")
+        body = json.loads(run(handler(FakeRequest({}))).text)
+        self.assertEqual(set(body), {"bot", "service_commit", "shared_commit"})
+        self.assertEqual(body["bot"], "рикки")
+
     def test_health_shape_unchanged(self):
         handler = self._handler("GET", "/health")
         resp = run(handler(FakeRequest({})))
@@ -204,6 +218,28 @@ class TestWorkerTask(unittest.TestCase):
         os.environ.pop("REDIS_URL", None)
         resp = run(h(FakeRequest({"message": "x", "task_id": "t1"})))
         self.assertIn("response", json.loads(resp.text))
+
+    def test_refuses_a_request_with_no_work_in_it(self):
+        """
+        Заявка без `message` — отказ 400, а не пустая строка в модель.
+
+        02.09.2026 Силли на просьбу «задеплой kriss-bot», ушедшую полем `task`,
+        ответила приветствием и статусом `done`: пустая строка доехала до LLM,
+        та ответила на пустой вопрос, а обработчик отрапортовал успех. У
+        воркера была ровно та же дыра, и через него ходит весь отдел
+        разработки.
+        """
+        for body in ({"task": "почини импорт"}, {"message": "  "}, {}):
+            resp = run(self.handler(FakeRequest(body)))
+            self.assertEqual(resp.status, 400, f"тело {body} принято как заявка")
+            said = json.loads(resp.text)["response"]
+            self.assertIn("message", said, "отказ не назвал нужное поле")
+            self.assertNotIn("system", self.seen,
+                             f"тело {body} доехало до модели")
+
+    def test_the_refusal_points_at_the_field_the_work_arrived_in(self):
+        resp = run(self.handler(FakeRequest({"task": "почини импорт"})))
+        self.assertIn("task", json.loads(resp.text)["response"])
 
     def test_refuses_to_work_when_file_cannot_be_read(self):
         """🔴 Правка вслепую запрещена: модель НЕ должна вызываться вообще.

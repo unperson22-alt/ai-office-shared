@@ -1,0 +1,87 @@
+"""
+ai_office_shared.shared.build_info — какая версия кода РЕАЛЬНО запущена.
+
+ЗАЧЕМ
+
+02.09.2026 в main приехала починенная ретушь, `kriss-bot/requirements.txt`
+получил новый SHA пакета, обе ветки были смёржены — и всё это ничего не
+говорило о том, что видит Яна. Между «смёржено» и «работает» стоит деплой, а
+единственным способом узнать, случился ли он, был текст Силли «✅ kriss-bot
+задеплоен». То есть улику об успехе ставил тот, кто выполнял работу, — прямое
+нарушение инварианта 5, и ровно та подпись, которую собственный промт Силли
+запрещает ей ставить («реальные деплои подтверждаются деплой-шагом, а не твоим
+текстом»).
+
+`GET /health` отвечал `{"status": "ok"}` и на старом коде, и на новом: он
+проверяет, что процесс жив, а не что он тот самый. Поэтому вопрос «работает ли
+уже фикс» был неотвечаем ни для сессии, ни для владельца, ни для watchdog.
+
+ЧЕСТНОСТЬ ВАЖНЕЕ ПОЛНОТЫ
+
+Функции ниже возвращают `None`, когда версию установить не удалось, и никогда
+не подставляют правдоподобное. Выдуманный SHA хуже отсутствующего: по нему
+принимают решение «фикс уже раскатан», и следующий разбор начинается с ложной
+посылки. «Не знаю» — валидный и полезный ответ, «наверное, тот» — нет.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+
+_DIST = "ai-office-shared"
+
+# Railway кладёт SHA собранного коммита в окружение. Имена перечислены явно, а
+# не угаданы по префиксу: переменная, названная почти так же, но означающая
+# другое, — это молча неверный ответ на вопрос «что запущено».
+_COMMIT_ENV = ("RAILWAY_GIT_COMMIT_SHA", "GIT_COMMIT_SHA", "SOURCE_COMMIT",
+               "COMMIT_SHA")
+
+
+def service_commit() -> str | None:
+    """SHA коммита самого сервиса, если платформа его сообщила."""
+    for name in _COMMIT_ENV:
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def shared_commit() -> str | None:
+    """
+    SHA пакета `ai-office-shared`, который РЕАЛЬНО установлен в окружении.
+
+    Читается из `direct_url.json` (PEP 610) — файла, который pip кладёт рядом с
+    метаданными, когда пакет ставили из git. Именно так его ставят боты:
+    `ai-office-shared @ git+https://…@<sha>`. Значение берётся из установленного
+    дистрибутива, а не из requirements.txt: requirements говорит, что ХОТЕЛИ
+    поставить, а вопрос стоит о том, что запущено.
+    """
+    try:
+        from importlib.metadata import Distribution
+        raw = Distribution.from_name(_DIST).read_text("direct_url.json")
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        info = json.loads(raw).get("vcs_info") or {}
+    except Exception:
+        return None
+    commit = str(info.get("commit_id") or "").strip()
+    return commit or None
+
+
+def build_info(bot: str = "") -> dict:
+    """
+    Готовое тело для `GET /version`.
+
+    Ключи всегда присутствуют — отсутствие ключа читалось бы как «поле не
+    поддерживается этой версией», а нужно ровно обратное: «версия неизвестна»
+    обязано быть видно.
+    """
+    return {
+        "bot": bot,
+        "service_commit": service_commit(),
+        "shared_commit": shared_commit(),
+    }
