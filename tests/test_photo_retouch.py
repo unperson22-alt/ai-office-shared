@@ -164,6 +164,54 @@ def _framed(im: Image.Image, pad: int) -> Image.Image:
     return canvas
 
 
+
+# ── Портретная геометрия ──────────────────────────────────────────────────────
+# Все фикстуры выше — лицо во весь кадр. У настоящего портрета кожа лежит ещё и
+# на плечах, груди и руке, а между этими пятнами — волосы и одежда, поэтому
+# ВЫРЕЗ ПО КОЖЕ занимает весь кадр и заполнен кожей лишь наполовину. От этого
+# числа зависит рабочий масштаб детекции, то есть все ядра сразу: на эталонном
+# кадре Влада доля кожи в вырезе 0.47 и k=2.31, а на «лице во весь кадр» — 0.9
+# и k=1.35. Дефекты трёх предыдущих заходов жили именно на 2.3, и ни одна
+# фикстура туда не доставала.
+_PORTRAIT = (1440, 2560)
+
+
+def _portrait(face: Image.Image, points):
+    """Лицо в портретном кадре: волосы по бокам, плечи и рука снизу, одежда."""
+    width, height = _PORTRAIT
+    canvas = Image.new("RGB", (width, height), (58, 68, 88))
+    d = ImageDraw.Draw(canvas)
+    for x0, x1 in ((0, int(width * 0.30)), (int(width * 0.70), width)):
+        d.rectangle([x0, int(height * 0.02), x1, int(height * 0.62)],
+                    fill=(46, 36, 30))
+        for k in range(4000):                       # пряди: волосам нужна текстура
+            xx = x0 + (k * 37) % max(1, (x1 - x0))
+            yy = int(height * 0.02) + (k * 53) % int(height * 0.60)
+            d.line([xx, yy, xx + 2, yy + 9], fill=(78, 62, 50), width=1)
+    fx, fy = (width - face.width) // 2, int(height * 0.04)
+    canvas.paste(face, (fx, fy))
+    d.ellipse([int(width * 0.18), int(height * 0.60),
+               int(width * 0.82), int(height * 0.86)], fill=SKIN)      # грудь
+    d.rectangle([int(width * 0.02), int(height * 0.66),
+                 int(width * 0.24), height], fill=SKIN)                # рука
+    d.rectangle([int(width * 0.30), int(height * 0.80),
+                 int(width * 0.72), height], fill=(120, 122, 128))     # одежда
+    px = canvas.load()
+    for y in range(int(height * 0.58), height):     # микротекстура кожи ниже лица
+        for x in range(width):
+            r, g, b = px[x, y]
+            if (r, g, b) == SKIN:
+                n = ((x * 7 + y * 13) % 11) - 5
+                px[x, y] = (r + n, g + n, b + n)
+    moved = [(x + fx, y + fy) for x, y in points]
+    for i, (x, y) in enumerate(moved):              # волоски поверх щеки
+        d.line([x - 90, y - 96 + i * 7, x + 90, y - 52 + i * 7],
+               fill=(96, 78, 64), width=2)
+        d.line([x - 100, y + 46 + i * 5, x + 80, y + 104 + i * 5],
+               fill=(110, 90, 74), width=1)
+    return canvas, moved
+
+
 def _jpeg(im: Image.Image) -> bytes:
     buf = io.BytesIO()
     im.save(buf, "JPEG", quality=95)
@@ -493,6 +541,52 @@ class TestRealAcneFailures(unittest.TestCase):
             self.assertLess(left, gap * 0.25,
                             f"ядро пятна {xy} вернулось на место: было {gap:.1f}, "
                             f"стало {left:.1f}")
+
+    def test_a_real_portrait_geometry_is_where_this_bug_lived(self):
+        """
+        Кадр, где кожа рассыпана по лицу, плечам и руке, а между ними волосы:
+        вырез по коже занимает весь кадр и заполнен наполовину. Это геометрия
+        эталонного фото Влада (доля кожи 0.47, k=2.31), а фикстуры «лицо во
+        весь кадр» дают k≈1.35 — масштаб, которого на реальных портретах не
+        бывает, и все ядра на нём другие.
+
+        ЧТО ЭТОТ ТЕСТ СТОРОЖИТ, А ЧТО НЕТ — измерено, а не предположено.
+        Провал 02.09 он НЕ воспроизводит: на этой фикстуре старый код убирает
+        пятна даже чище нового (осталось 7% против 15%). Синтетическое пятно —
+        крупный тёмный диск, то есть ровно то, что детектор «по темноте» брал
+        легко на любом масштабе; на настоящем акне, где сигнал в красноте, тот
+        же код не находил ничего. Разница между 7% и 15% — цена перехода на
+        красноту, и она уплачена сознательно.
+
+        Ценность теста в другом: он единственный гоняет ретушь на том рабочем
+        масштабе, на котором она работает у людей. Любая будущая правка,
+        ломающая ретушь ИМЕННО на портретной геометрии, здесь покраснеет — а
+        на «лице во весь кадр» прошла бы незамеченной.
+        """
+        from ai_office_shared.shared import photo_retouch as pr
+        face, points = _cored(_face())
+        dirty, moved = _portrait(face, points)
+        clean, _ = _portrait(_face().resize(_CORE_FACE, Image.LANCZOS), points)
+
+        work, box, share = pr._work_copy(dirty.convert("RGB"))
+        inside = share * (dirty.width * dirty.height) / \
+            ((box[2] - box[0]) * (box[3] - box[1]))
+        self.assertLess(inside, 0.60,
+                        f"кожа заполняет вырез на {inside:.2f} — это «лицо во "
+                        "весь кадр», а не портрет: масштаб проверяется не тот")
+        k = max(work.size) / 384.0
+        self.assertGreater(k, 2.0,
+                           f"рабочий масштаб k={k:.2f} — ниже того, на котором "
+                           "жили дефекты (эталон: 2.31)")
+
+        data, _, _ = retouch(_jpeg(dirty))
+        out = Image.open(io.BytesIO(data)).convert("RGB")
+        for xy in moved:
+            gap = abs(_patch_mean(dirty, xy, half=3) - _patch_mean(clean, xy, half=3))
+            left = abs(_patch_mean(out, xy, half=3) - _patch_mean(clean, xy, half=3))
+            self.assertLess(left, gap * 0.35,
+                            f"на портретной геометрии пятно {xy} осталось: "
+                            f"было {gap:.1f}, стало {left:.1f}")
 
     def test_texture_survives_the_healing(self):
         """

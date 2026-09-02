@@ -2208,5 +2208,68 @@
       "ai_office_shared/shared/photo_retouch.py:_grow_into"
     ],
     "posted_to_group": false
+  },
+  {
+    "id": 127,
+    "date": "2026-09-02",
+    "kind": "lesson",
+    "bot": "Cilly (POST /task) + all dev-dept workers (shared/worker.py)",
+    "layer": "HTTP request contract",
+    "title": "A task with no work in it was answered with a greeting and reported as done, and the caller blamed the callee",
+    "symptom": "A Claude session asked Cilly twice to redeploy kriss-bot - once with a fully specified request naming the service and both commit SHAs, once with the bare trigger phrase «Задеплой kriss-bot» that matches her own documented deploy intent. Both returned {\"status\": \"accepted\"} and then {\"status\": \"done\"}, with a response body containing her self-introduction: «Привет! Я - Силли, технический мозг AI-офиса». No deploy happened. Half an hour went into diagnosing «why Cilly does not execute commands», an Active Vulnerabilities entry was written against the office, and the owner was told the ops channel was broken. It was not.",
+    "root_cause": "The request carried the text in a field named `task`. The handler reads `text = data.get(\"message\", \"\")`. The empty string travelled the whole way: into the intent classifier, into the LLM, which answered an empty question the only way an assistant can - with a greeting - and out through a handler that reported success because nothing had thrown. Every link honoured its own contract; what was wrong was the CONTRACT ITSELF, in which «no work supplied» was not an error. The same hole was in shared/worker.py, the handler every dev-dept bot runs, so an empty task there reached ask_claude and produced a confident answer to nothing. kriss-bot alone refused an empty message - but with the words «empty message», naming neither the field it wanted nor the field the work had arrived in, which returns the caller to exactly where they started.",
+    "why_architecture": "Two properties combined. (1) Absence of work was indistinguishable from completed work in BOTH the status and the body - the shape of lesson #93, where evidence of success was signed by something that had nothing to run on. A caller cannot detect this: a greeting is a valid-looking response, and `done` is a valid-looking status. (2) The rule about what constitutes a request lived in three places in three different forms, so fixing it in one taught the others nothing. Underneath both: the endpoint's body shape was documented in SYSTEM_STATE.md, which a session reads only if it goes looking, and NOT in CLAUDE.md, which every session reads automatically - so the one file guaranteed to be read named the endpoint without naming its contract, and guessing `task` from a URL called /task is the obvious guess.",
+    "fix": "ai-office-shared: new `shared/task_request.py` holds the single rule - `task_text(data)` returns the work or raises `EmptyTask` whose message names the expected field, names the field the text actually arrived in when it recognises a near miss (task/text/prompt/query/msg/...), lists the keys received, and states that the task was NOT performed. Wired into `shared/worker.py` (400 instead of an answer to nothing) and into kriss-bot. `agents/coder.py` gets the same call in `_handle_cilly_task_inner`, by hand on a branch through a PR for Vlad's review, because that file is never edited any other way (lesson #70); its guard is an AST test, since coder.py cannot be imported. CLAUDE.md now carries the body shape `{message, agent, source}` at the point where it names the endpoint, plus the reason it is written there.",
+    "status": "fixed",
+    "prevention": "An endpoint that receives no work must refuse, and the refusal must name the field - both halves are load-bearing. A refusal that says «empty message» costs the caller the same half hour as no refusal at all, because it does not close the gap between what was sent and what was expected. Where a rule about request shape exists, it belongs in the shared package with its reasoning, not re-implemented per service: three implementations of one rule diverged into refuse-vaguely, accept-silently, accept-silently. And a contract that callers are expected to honour belongs in the file they are guaranteed to read: documentation that must be sought out is documentation for people who already know the answer.",
+    "cause": "absence of work reported as work performed",
+    "tag": "http-contract",
+    "anchors": [
+      "ai_office_shared/shared/task_request.py:task_text",
+      "ai_office_shared/shared/task_request.py:EmptyTask",
+      "ai_office_shared/shared/worker.py:run_worker"
+    ],
+    "posted_to_group": false
+  },
+  {
+    "id": 128,
+    "date": "2026-09-02",
+    "kind": "lesson",
+    "bot": "Claude session (retouch diagnosis)",
+    "layer": "diagnosis / measurement discipline",
+    "title": "A number measured on a prototype cannot name a cause in production, and 87% turned out to be 1.3%",
+    "symptom": "While fixing the retouch, a prototype was used to trace why the detector lost the defects. It reported that the hair mask was swallowing 87% of the real blemishes on the reference frame, and that scaling its fine-texture radii along with the other kernels was the cause. That figure was written into the `hair_mask` docstring as the reason those two radii must stay absolute, reported to the owner, and recorded in Notion as an invariant that no test guards. Re-measured afterwards against the shipped code: the hair mask covers 0.2% of the reference blemishes, and with the radii scaled, 1.3%. Real, six times worse, and nowhere near 87%.",
+    "root_cause": "The prototype differed from production in three ways at once - it scaled the hair-density blur radius, the erosion and dilation kernels, and the fine/busy radii together - and the 87% was measured against a ground-truth mask that had not yet been restricted to skin, so most of the pixels it counted as «blemishes eaten by the hair mask» were hair, correctly covered. One number, produced by three simultaneous changes and a contaminated reference, was attributed to one of the three.",
+    "why_architecture": "Nothing in the process objects to this. The prototype existed precisely to move faster than production, so divergence was its purpose; the ground truth was built in the same session and looked plausible on the crop that was inspected. The figure then travelled: docstring, chat, Notion - each copy citing the previous one, none re-derived. This is invariant 8 («a failure names whoever fell») applied to diagnosis rather than to runtime: the measurement named a culprit it had no standing to name.",
+    "fix": "The `hair_mask` docstring now carries the measured production numbers (0.2% versus 1.3% at k=2.31), states plainly that the earlier 87% was wrong and why, and says that no test guards the invariant because the difference does not reproduce on a fixture. The Notion entry was corrected in the same pass rather than left to age.",
+    "status": "fixed",
+    "prevention": "A number is evidence about the code it was measured on. Before a prototype's measurement is allowed to name a cause, the same measurement is repeated on the shipped code with one variable moved at a time - and if that is not done, the number does not go into a docstring, a report, or Notion, because from there it is quoted rather than re-derived. When a figure is surprising in magnitude (87% of defects vanishing without anyone noticing), the surprise is the signal to re-measure, not to write it down.",
+    "cause": "a measurement from a divergent prototype attributed to one production cause",
+    "tag": "diagnosis",
+    "anchors": [
+      "ai_office_shared/shared/photo_retouch.py:hair_mask"
+    ],
+    "posted_to_group": false
+  },
+  {
+    "id": 129,
+    "date": "2026-09-02",
+    "kind": "lesson",
+    "bot": "kriss-bot + all dev-dept workers",
+    "layer": "deploy verification",
+    "title": "Merged is not running, and the only witness to the difference was whoever performed the deploy",
+    "symptom": "The retouch fix was merged to main, the shared SHA in kriss-bot/requirements.txt was bumped, both branches were merged - and none of it said anything about what Yana would see. Between main and a person stands a deploy. The only statement that it had happened was Cilly's own sentence «✅ kriss-bot задеплоен»: the executor signing off her own work, which is invariant 5 exactly, and which her own system prompt forbids her to do («real deploys are confirmed by the deploy step, not by your text»). `GET /health` answered {\"status\": \"ok\"} identically before and after, so there was nothing to check her against.",
+    "root_cause": "Every service exposed liveness and nothing else. `/health` answers «the process is up», never «the process is the one you merged». The information existed - Railway sets the built commit in the environment, and pip records the exact installed commit of a git dependency in direct_url.json (PEP 610) - but no endpoint read it, so the question «is the fix live» had no addressee except the party with an interest in the answer.",
+    "why_architecture": "Liveness checks are written when a service first ships, when there is only one version and the question does not exist. Version drift becomes visible much later, and by then /health has been «the health endpoint» long enough that nobody re-opens it. The office had also grown a habit that hid the gap: deploys are delegated, so the delegate's report was the natural place to look, and it reads like evidence.",
+    "fix": "`shared/build_info.py` reports the service commit (from the platform environment) and the commit of the installed ai-office-shared (from direct_url.json), returning null - never a plausible-looking string - when it cannot tell. `GET /version` added to shared/worker.py, so every dev-dept bot answers it, and to kriss-bot. CLAUDE.md states «merged is not running» with the endpoint to ask, next to the deploy instructions.",
+    "status": "fixed",
+    "prevention": "After a deploy, ask the service which build it is running; a report from whoever performed the deploy is not evidence of it (invariant 5). An unknown version must be reported as unknown: a fabricated SHA is worse than a missing one, because decisions are made on it and the next investigation starts from a false premise. Any new service gets /version alongside /health - the question «which version is this» arrives later than the service, but it always arrives.",
+    "cause": "no way to ask a running service which build it is",
+    "tag": "deploy",
+    "anchors": [
+      "ai_office_shared/shared/build_info.py:build_info",
+      "ai_office_shared/shared/build_info.py:shared_commit"
+    ],
+    "posted_to_group": false
   }
 ]

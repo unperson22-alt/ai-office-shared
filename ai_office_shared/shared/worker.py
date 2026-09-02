@@ -43,6 +43,8 @@ from .auth import office_auth_middleware
 from .dev_activity import format_activity_for_prompt, publish_activity, read_activity
 from .log_redaction import install_secret_redaction, quiet_http_client_logs
 from .logging import log_event
+from .build_info import build_info
+from .task_request import EmptyTask, task_text
 from .verify import extract_code, retry_prompt, verify_code
 
 logger = logging.getLogger("ai_office_shared.worker")
@@ -243,7 +245,16 @@ def build_app(bot_name: str, system_prompt: str, state: dict) -> web.Application
 
     async def handle_task(request):
         data = await request.json()
-        message = data.get("message", "")
+        try:
+            # Заявка без работы — отказ, а не пустая строка в LLM. Раньше она
+            # доезжала до ask_claude, та отвечала на пустой вопрос, и воркер
+            # рапортовал успех: улику ставил тот, кому не на чем было
+            # исполниться (урок #93). Разбор — в shared/task_request.py.
+            message = task_text(data)
+        except EmptyTask as empty:
+            msg = f"ERROR: {bot_name} не получил задачу — {empty.detail}"
+            logger.error("[%s] %s", bot_name, msg)
+            return web.json_response({"response": msg}, status=400)
         user_id = data.get("user_id", 0)
         repo = data.get("repo", "")
         file_path = data.get("file_path", "")
@@ -314,6 +325,12 @@ def build_app(bot_name: str, system_prompt: str, state: dict) -> web.Application
     async def handle_health(request):
         return web.json_response({"status": "ok", "bot": bot_name})
 
+    async def handle_version(request):
+        # `/health` отвечает «жив», а не «тот самый»: он одинаков до и после
+        # деплоя. Вопрос «работает ли уже фикс» без этого эндпоинта было
+        # некому задать, кроме исполнителя деплоя. Разбор — shared/build_info.py.
+        return web.json_response(build_info(bot_name))
+
     async def handle_reply(request):
         data = await request.json()
         chat_id = data.get("chat_id", 0)
@@ -325,6 +342,7 @@ def build_app(bot_name: str, system_prompt: str, state: dict) -> web.Application
     app = web.Application(middlewares=[office_auth_middleware])
     app.router.add_post("/task", handle_task)
     app.router.add_get("/health", handle_health)
+    app.router.add_get("/version", handle_version)
     app.router.add_post("/reply", handle_reply)
     return app
 
