@@ -28,6 +28,7 @@ from ai_office_shared.shared.json_extract import first_json_object
 from ai_office_shared.shared.verify import extract_code
 from ai_office_shared.shared.target_repo import repo_looks_valid, target_repo
 from ai_office_shared.shared.telegram_text import split_for_telegram
+from ai_office_shared.shared.task_request import EmptyTask, task_text
 from ai_office_shared.shared.bug_lessons import (
     edit_plan, forget_messages, known_messages, remember_messages,
     resync_plan, select_lesson_parts, stale_link,
@@ -7674,7 +7675,6 @@ async def handle_cilly_task(request):
         return web.json_response({"status": "error", "detail": str(e), "trace": traceback.format_exc()[-1000:]}, status=200)
 
 async def _handle_cilly_task_inner(data, *, privileged: bool = False):
-    text    = data.get("message", "")
     agent   = data.get("agent", "Unknown")
     source  = data.get("source", "")
     # source=CLAUDE → полная тишина: не пишем промежуточные шаги ни в группу ни в личку
@@ -7688,6 +7688,29 @@ async def _handle_cilly_task_inner(data, *, privileged: bool = False):
     payload_file = data.get("file_path", "")
 
     responses = []
+
+    # ЗАЯВКА БЕЗ РАБОТЫ — ОТКАЗ, А НЕ ПУСТАЯ СТРОКА В LLM.
+    #
+    # 02.09.2026 сессия Клода дважды попросила задеплоить kriss-bot и дважды
+    # получила {"status": "done"} с текстом приветствия Силли. Заявка ушла
+    # полем `task`, работа берётся из `message`, пустая строка доехала до
+    # модели, та честно ответила на пустой вопрос, а обработчик так же честно
+    # отрапортовал успех. Полчаса ушло на разбор «почему Силли не исполняет
+    # команду», и виновной была назначена она — притом что упал вызывающий
+    # (инвариант 8: провал называет того, кто упал).
+    #
+    # Отказ обязан НАЗЫВАТЬ ПОЛЕ и говорить, что задача не выполнялась:
+    # формулировка — рабочая часть, а не оформление. Правило и его разбор
+    # живут в пакете (shared/task_request.py), а не здесь, потому что та же
+    # дыра была у worker.py — то есть у всего отдела разработки.
+    try:
+        text = task_text(data)
+    except EmptyTask as empty:
+        logger.warning("[/task] отказ: %s", empty.detail)
+        return web.json_response(
+            {"status": "error", "detail": empty.detail, "responses": [
+                f"🚫 Задача не принята: {empty.detail}"]},
+            status=400)
 
     # /railway <gql> — ПЕРВЫЙ перехват, до LLM, не требует ANTHROPIC_API_KEY
     if text.strip().startswith("/railway"):
