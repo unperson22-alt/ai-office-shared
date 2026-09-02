@@ -91,7 +91,10 @@ class PhotoResult(NamedTuple):
 
     def as_file(self) -> tuple[io.BytesIO, str]:
         """(BytesIO, filename) — прямо в reply_document/reply_photo."""
-        return io.BytesIO(self.data or b""), f"{self.op}.{'jpg' if self.fmt == 'jpeg' else self.fmt}"
+        # op у цепочки — «retouch+preset:чб»: двоеточие и плюс в имени файла
+        # часть клиентов не любит, поэтому оставляем только буквы и цифры.
+        name = re.sub(r"[^\w-]+", "_", self.op, flags=re.UNICODE).strip("_") or "photo"
+        return io.BytesIO(self.data or b""), f"{name}.{'jpg' if self.fmt == 'jpeg' else self.fmt}"
 
 
 def _err(text: str, op: str = "error") -> PhotoResult:
@@ -194,6 +197,8 @@ HELP_LINES = [
     "• «убери фон» / «размой фон» / «белый фон» — работа с фоном",
     "• «стикер» — 512px PNG для стикерпака, «аватар» — квадрат 640×640",
     "• «квадрат» / «стори» — кроп под Инсту, «увеличь» — апскейл ×2, «сожми» — вес",
+    "Просьбы складываются: «ретушь и чб» — и то, и другое на одной фотографии.",
+    "Следующая просьба идёт поверх результата; «с оригинала» — начать заново.",
     "Без подписи делаю автокоррекцию.",
 ]
 PHOTO_HELP = "\n".join(HELP_LINES)
@@ -219,25 +224,91 @@ _NEGATIVE_WORDS = ("темнее", "затемни", "убавь", "меньше
                    "темніше", "прибери", "менше", "знизь", "зменш")
 
 
-def parse_request(text: str) -> PhotoRequest:
+# Порядок конвейера. «Ретуш і ч/б фільтр на одній фотографії» — это ДВА шага,
+# и выполнять их надо не в том порядке, в каком человек их назвал, а в том, в
+# каком они не ломают друг друга:
+#   • ретушь ищет кожу по цвету (r > g > b) — на уже обесцвеченном кадре маска
+#     кожи пуста, и ретушь после «чб» не сделала бы РОВНО НИЧЕГО;
+#   • rembg отделяет фон тем увереннее, чем цвет ближе к исходному;
+#   • кроп, апскейл и сжатие меняют размер, а не содержание — им место в конце.
+_PIPELINE_ORDER = ("retouch", "remove_bg", "blur_bg", "white_bg", "preset",
+                   "sticker", "square", "story", "avatar", "upscale", "compress")
+
+# Короткие имена шагов — для честной приписки, когда шаг не получился.
+_OP_TITLES = {
+    "retouch": "ретушь", "remove_bg": "удаление фона", "blur_bg": "размытие фона",
+    "white_bg": "белый фон", "preset": "фильтр", "sticker": "стикер",
+    "square": "кроп", "story": "кроп", "avatar": "кроп",
+    "upscale": "увеличение", "compress": "сжатие", "ai": "перерисовка",
+}
+
+
+def parse_plan(text: str) -> list[PhotoRequest]:
     """
-    Разбирает подпись к фото в операцию. Никогда не падает: непонятный текст —
-    это «авто», потому что молчать или ругаться на живую речь нельзя.
+    Разбирает подпись в ЦЕПОЧКУ операций.
+
+    «Ретуш і ч/б фільтр на одній фотографії» — это ретушь, А ПОТОМ чб, а не
+    что-то одно на выбор. До 02.09.2026 здесь возвращался первый попавшийся
+    шаг: цикл по _OP_ALIASES выходил на первом совпадении, «ретушь» стояла в
+    словаре раньше «чб», и составная просьба превращалась в половину. Яна
+    переформулировала её трижды («мені потрібно ОДНОЧАСНО і ретуш і чб») и
+    трижды получала одну ретушь — ошибка была не в её словах.
+
+    Порядок шагов задаёт _PIPELINE_ORDER, а не порядок слов в просьбе.
+    Пустой текст и текст без совпадений — это «авто»: молчать нельзя.
     """
     low = (text or "").strip().lower()
     if not low:
-        return PhotoRequest("preset", "авто")
+        return [PhotoRequest("preset", "авто")]
 
+    steps: dict[str, PhotoRequest] = {}
     for op, words in _OP_ALIASES.items():
-        if any(w in low for w in words):
-            if op in ("ai", "retouch"):
-                # prompt несёт исходный текст: у «ai» это задание модели,
-                # у «retouch» — сила («чуть-чуть» / «сильнее»).
-                return PhotoRequest(op, prompt=text.strip())
-            return PhotoRequest(op)
+        if not any(w in low for w in words):
+            continue
+        if op == "ai":
+            # Перерисовка возвращает другую картинку целиком — смешивать её с
+            # фильтрами нечего, да и просьба тут ровно одна.
+            return [PhotoRequest("ai", prompt=text.strip())]
+        # prompt у ретуши несёт силу («чуть-чуть» / «сильнее»).
+        steps[op] = PhotoRequest(op, prompt=text.strip() if op == "retouch" else "")
 
     tweaks, tweak_words = _parse_tweaks(low)
+    preset = _match_preset(low, tweaks, tweak_words, bool(steps))
+    if preset or tweaks:
+        steps["preset"] = PhotoRequest("preset", preset, tweaks)
 
+    if not steps:
+        return [PhotoRequest("preset", "авто")]
+    return [steps[op] for op in _PIPELINE_ORDER if op in steps]
+
+
+def parse_request(text: str) -> PhotoRequest:
+    """
+    Первый шаг плана. Оставлен для вызывающих, которым нужна одна операция;
+    полную просьбу разбирает parse_plan, и process_photo зовёт именно его.
+    """
+    return parse_plan(text)[0]
+
+
+# Пресеты «по умолчанию»: их выбирают, когда больше ничего не опознано. Стоят
+# особняком, потому что опознаются по словам, которые называют СЮЖЕТ и НАМЕРЕНИЕ,
+# а не обработку: «улучши», «обработай», «лицо», «селфи», «обличчя». В составной
+# просьбе такие слова — не второй шаг: «прибери недоліки на обличчі» это ретушь
+# лица, а не ретушь ПЛЮС портретный фильтр, который смягчил бы весь кадр поверх
+# неё. Ровно на этом Яна и получала «маскирует всё, но не то, что нужно».
+_FALLBACK_PRESETS = ("авто", "портрет")
+
+
+def _match_preset(low: str, tweaks: dict, tweak_words: set,
+                  has_ops: bool = False) -> str:
+    """
+    Какой пресет просят. Пустая строка — «пресета нет» (возможны одни подкрутки).
+
+    Пресеты из _FALLBACK_PRESETS берутся только если ничего другого не нашлось:
+    в «улучши и сделай чб» пресетом должно стать чб, а не автокоррекция, а рядом
+    с операцией («ретушь на лице») их не подмешиваем вовсе — их не просили.
+    """
+    fallback = ""
     for preset, words in _PRESET_ALIASES.items():
         hits = [w for w in words if w in low]
         if not hits:
@@ -248,12 +319,25 @@ def parse_request(text: str) -> PhotoRequest:
         # по вхождению подстроки «сочнее цвета» теряло пресет «сочное».
         if tweaks and all(w in tweak_words for w in hits):
             break
-        return PhotoRequest("preset", preset, tweaks)
+        if preset in _FALLBACK_PRESETS:
+            fallback = fallback or preset
+            continue
+        return preset
+    return "" if has_ops else fallback
 
-    if tweaks:
-        return PhotoRequest("preset", "", tweaks)
 
-    return PhotoRequest("preset", "авто")
+# «Зроби чб з оригіналу» — просьба начать заново, а не поверх предыдущей
+# обработки. Нужна потому, что просьба вдогонку теперь ложится на ПОСЛЕДНИЙ
+# результат: без выхода из цепочки вернуться к исходнику можно было бы только
+# кнопками под первым сообщением.
+_ORIGINAL_WORDS = ("оригинал", "оригінал", "исходн", "вихідн", "з нуля",
+                   "с нуля", "без обработки", "без обробки", "первоначальн")
+
+
+def wants_original(text: str) -> bool:
+    """Просят применить к ИСХОДНОМУ фото, а не к последнему результату."""
+    low = (text or "").lower()
+    return any(w in low for w in _ORIGINAL_WORDS)
 
 
 def is_photo_request(text: str) -> bool:
@@ -636,9 +720,15 @@ async def process_photo(raw: bytes, request: str = "") -> PhotoResult:
     """
     Обрабатывает фото по текстовой просьбе. Не бросает исключений никогда.
 
+    Просьба может содержать НЕСКОЛЬКО операций сразу («ретуш і ч/б фільтр на
+    одній фотографії») — они выполняются цепочкой, каждая по результату
+    предыдущей, в порядке _PIPELINE_ORDER. Подпись перечисляет всё, что
+    сделано; шаг, который выполнить нечем, пропускается с объяснением, а не
+    подменяется другим.
+
     Args:
         raw: байты картинки (например base64.b64decode(ImagePayload.b64))
-        request: подпись к фото («сделай ярче», «убери фон», «винтаж»)
+        request: подпись к фото («сделай ярче», «убери фон», «ретушь и чб»)
 
     Returns:
         PhotoResult — либо data+caption, либо error с готовым текстом.
@@ -651,13 +741,52 @@ async def process_photo(raw: bytes, request: str = "") -> PhotoResult:
         return _err("⚠️ На сервере не установлен Pillow — обработка фото недоступна. "
                     "Скажи Силли: добавить pillow в requirements бота.")
 
-    req = parse_request(request)
-    try:
-        return await _dispatch(raw, req)
-    except Exception as e:
-        logger.error("[photo] op=%s failed: %s", req.op, e)
-        return _err("⚠️ Не смогла обработать эту картинку. "
-                    "Попробуй другую или другой фильтр.", req.op)
+    plan = parse_plan(request)
+    data, fmt = raw, "jpeg"
+    ops: list[str] = []
+    captions: list[str] = []
+    notes: list[str] = []
+
+    for step in plan:
+        try:
+            res = await _dispatch(data, step)
+        except Exception as e:
+            logger.error("[photo] op=%s failed: %s", step.op, e)
+            if len(plan) == 1:
+                return _err("⚠️ Не смогла обработать эту картинку. "
+                            "Попробуй другую или другой фильтр.", step.op)
+            notes.append(f"{_OP_TITLES.get(step.op, step.op)} не получилась")
+            continue
+
+        if res.error:
+            if len(plan) == 1:
+                return res
+            notes.append(res.error.lstrip("⚠️ ").rstrip("."))
+            continue
+
+        # _dispatch умеет подменять шаг, когда выполнить его нечем: нет rembg —
+        # отдаёт портретную обработку, не нашёл лица — автокоррекцию. В одиночной
+        # просьбе это честный компромисс, а в цепочке — самоуправство: человек
+        # просил ретушь и чб, а получил бы ещё и незаказанный «портрет». Поэтому
+        # подменённый шаг просто пропускаем, сохранив его объяснение.
+        if len(plan) > 1 and res.op.split(":")[0] != step.op:
+            notes.append(res.caption)
+            continue
+
+        data, fmt = res.data, res.fmt
+        ops.append(res.op)
+        captions.append(res.caption)
+
+    if not captions:
+        return _err("⚠️ " + ("; ".join(notes) or "не смогла обработать эту картинку")
+                    + ".", plan[0].op)
+
+    if len(data) > MAX_OUTPUT_BYTES:
+        data = await asyncio.to_thread(compress, data, 5000)
+    caption = " · ".join(captions + notes)
+    if len(caption) > 900:
+        caption = caption[:897].rstrip() + "…"
+    return PhotoResult(data, fmt, "+".join(ops), caption)
 
 
 async def _dispatch(raw: bytes, req: PhotoRequest) -> PhotoResult:
