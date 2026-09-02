@@ -7,6 +7,11 @@
    чем её отсутствие.
 3. Просьба на украинском («прибери недоліки на обличчі») попадает в ретушь, а
    не уезжает в LLM с ответом «я не умею редактировать изображения».
+4. Три причины, по которым ретушь не работала на настоящем акне (02.09.2026) —
+   TestRealAcneFailures. Числа там сняты с эталонной пары «до / после
+   Фотошопа» и записаны, чтобы починку нельзя было тихо «улучшить» подгонкой
+   порогов; сами фотографии в репозиторий не кладутся, поэтому каждый провал
+   воспроизведён на фикстуре, а не на кадре.
 """
 import asyncio
 import io
@@ -93,10 +98,85 @@ def _spotted(im: Image.Image) -> Image.Image:
     return out
 
 
+def _red_spotted(im: Image.Image) -> Image.Image:
+    """
+    Пятна, которые КРАСНЕЕ кожи, но почти не темнее её.
+
+    Так выглядит настоящее акне, и это измерено, а не придумано: на эталонном
+    кадре внутри щеки отклонение ЯРКОСТИ у вылеченных Фотошопом пятен
+    неотличимо от обычной кожи (медиана дефекта ниже 95-го перцентиля чистой
+    кожи), а отклонение КРАСНОТЫ отделяется. Детектор, построенный на темноте,
+    такое пятно не видит вовсе — и ровно поэтому «ретушь» и «ретушь сильнее»
+    на щеке Яны были неотличимы от оригинала.
+    """
+    # Пятно подобрано РАВНОЯРКИМ коже (яркость расходится на 0.1 из 255) и
+    # отличается от неё только краснотой: +15 к r−g. Иначе тест ничего не
+    # сторожит — детектор снимет такое пятно по темноте, и подмена канала
+    # обратно на яркостный останется незамеченной (проверено мутацией).
+    r, g, b = SKIN
+    spot = (r + 10, int(round(g - 10 * 0.299 / 0.587)), b)
+    out = im.copy()
+    d = ImageDraw.Draw(out)
+    for x, y in SPOTS:
+        d.ellipse([x - 5, y - 5, x + 5, y + 5], fill=spot)
+    return out
+
+
+# Пропорции ЭТАЛОННОГО дефекта, померенные на паре «до / после Фотошопа»
+# (кадр 1440×2560, лицо ~700 px): пятно ~40 px, тёмное ядро внутри него
+# ~10 px, яркость ядра 0.74 / 0.56 / 0.53 от чистой кожи по каналам.
+# Синтетическое лицо для этого увеличивается: на 400 px то же соотношение
+# «пятно : ядро» физически не выражается, и фикстура проверяла бы не дефект,
+# а собственную арифметику — ошибка, на которой этот файл уже горел дважды.
+_CORE_FACE = (1200, 1380)
+_CORE_SCALE = 3
+_CORE_SPOT_R = 15
+_CORE_CORE_R = 4
+
+
+def _cored(im: Image.Image):
+    """
+    Лицо с пятнами, у каждого из которых есть тёмное ядро — корка.
+
+    Возвращает (кадр, координаты пятен): координаты уезжают вместе с
+    масштабом, и вычислять их на стороне теста — верный способ проверить не то.
+    """
+    big = im.resize(_CORE_FACE, Image.LANCZOS)
+    out = big.copy()
+    d = ImageDraw.Draw(out)
+    r, g, b = SKIN
+    spot = (int(r * 0.95), int(g * 0.70), int(b * 0.68))
+    core = (int(r * 0.74), int(g * 0.56), int(b * 0.53))
+    points = [(x * _CORE_SCALE, y * _CORE_SCALE) for x, y in SPOTS]
+    for x, y in points:
+        d.ellipse([x - _CORE_SPOT_R, y - _CORE_SPOT_R,
+                   x + _CORE_SPOT_R, y + _CORE_SPOT_R], fill=spot)
+        d.ellipse([x - _CORE_CORE_R, y - _CORE_CORE_R,
+                   x + _CORE_CORE_R, y + _CORE_CORE_R], fill=core)
+    return out, points
+
+
+def _framed(im: Image.Image, pad: int) -> Image.Image:
+    """Тот же кадр, но лицо занимает меньшую долю: вокруг — фон."""
+    canvas = Image.new("RGB", (im.width + 2 * pad, im.height + 2 * pad),
+                       (60, 70, 90))
+    canvas.paste(im, (pad, pad))
+    return canvas
+
+
 def _jpeg(im: Image.Image) -> bytes:
     buf = io.BytesIO()
     im.save(buf, "JPEG", quality=95)
     return buf.getvalue()
+
+
+def _patch_redness(im: Image.Image, xy, half=4) -> float:
+    """Средняя КРАСНОТА (r−g) на пятачке. Яркость про акне не отвечает."""
+    from PIL import ImageStat
+    x, y = xy
+    box = im.convert("RGB").crop((x - half, y - half, x + half, y + half))
+    red, green, _ = ImageStat.Stat(box).mean
+    return red - green
 
 
 def _patch_mean(im: Image.Image, xy, half=4) -> float:
@@ -310,6 +390,125 @@ class TestRetouchContract(unittest.TestCase):
         data, _, skin = retouch(_jpeg(_spotted(big)))
         self.assertGreater(skin, 0.05)
         self.assertEqual(Image.open(io.BytesIO(data)).size, (1400, 1610))
+
+
+@unittest.skipUnless(HAS_PIL, "Pillow не установлен")
+class TestRealAcneFailures(unittest.TestCase):
+    """
+    Три причины, по которым ретушь ничего не делала на настоящем акне.
+
+    Найдены 02.09.2026 по эталонной паре «до / после Фотошопа» (кадр
+    1440×2560, подтверждённые дефекты в (712,826) и (752,746)). Каждая
+    причина здесь воспроизведена отдельно: тест, который проверяет их скопом,
+    краснеет от чего угодно и не говорит, что именно сломали.
+    """
+
+    # ── а) масштаб детекции был привязан к КАДРУ, а не к лицу ──────────────
+    def test_defect_is_removed_whatever_share_of_frame_the_face_takes(self):
+        """
+        Одно и то же лицо в трёх кадрах разной ширины. Раньше детект-копия
+        масштабировалась от стороны КАДРА (384 px), поэтому размер дефекта в
+        её пикселях зависел от того, сколько вокруг лица пустого места: на
+        ростовом портрете прыщ приходил к детектору втрое мельче, чем на
+        селфи, распадался на обрывки в 1–2 px и погибал при чистке шума.
+        """
+        clean = _face()
+        dirty = _spotted(clean)
+        for pad in (0, 260, 620):
+            frame = _framed(dirty, pad)
+            data, _, _ = retouch(_jpeg(frame))
+            out = Image.open(io.BytesIO(data)).convert("RGB")
+            for x, y in SPOTS:
+                xy = (x + pad, y + pad)
+                before = abs(_patch_mean(_framed(dirty, pad), xy)
+                             - _patch_mean(_framed(clean, pad), xy))
+                after = abs(_patch_mean(out, xy)
+                            - _patch_mean(_framed(clean, pad), xy))
+                self.assertLess(after, before * 0.5,
+                                f"поля {pad}px: пятно {x, y} осталось "
+                                f"(было {before:.1f}, стало {after:.1f})")
+
+    def test_detect_copy_holds_the_same_amount_of_skin_at_any_framing(self):
+        """
+        Прямая проверка того же корня: рабочая копия подбирается по ПЛОЩАДИ
+        КОЖИ, поэтому кожи в ней всегда примерно поровну — сколько бы фона ни
+        было вокруг лица. Именно это и делает один набор ядер пригодным и для
+        селфи, и для ростового портрета.
+        """
+        from ai_office_shared.shared import photo_retouch as pr
+        areas = []
+        for pad in (0, 260, 620):
+            frame = _framed(_spotted(_face()), pad).convert("RGB")
+            work, _scale, _share = pr._work_copy(frame)
+            skin = pr._coverage(pr.skin_mask(work))
+            areas.append(skin * work.size[0] * work.size[1])
+            self.assertLessEqual(work.size[0] * work.size[1], pr._DETECT_MAX_PX,
+                                 "рабочая копия крупнее потолка — это время в чате")
+        self.assertLess(max(areas) / min(areas), 1.7,
+                        f"кожи в детект-копии разное количество: {areas} — "
+                        "значит масштаб снова привязан к кадру, а не к лицу")
+
+    # ── б) детектор искал темноту, а акне выдаёт себя краснотой ────────────
+    def test_red_but_barely_dark_defect_is_removed(self):
+        """
+        Пятно краснее кожи и почти не темнее её — портрет настоящего акне.
+        Детектор, у которого краснота идёт вторым каналом и с порогом ВЫШЕ
+        яркостного, такое пятно не берёт: на эталоне отклик по красноте у
+        дефектов был 9–11 при яркостном пороге 21.
+        """
+        clean = _face()
+        dirty = _red_spotted(clean)
+        # even_tone выключен НАМЕРЕННО: частотное разделение по всей коже само
+        # сглаживает низкую частоту и убрало бы это пятно мимо детектора —
+        # тогда тест сторожил бы не тот механизм (проверено мутацией).
+        data, _, _ = retouch(_jpeg(dirty), even_tone=False)
+        out = Image.open(io.BytesIO(data)).convert("RGB")
+        for xy in SPOTS:
+            # Проверяем по яркости, что пятно и правда равнояркое: иначе тест
+            # незаметно превратится в ещё одну проверку темноты.
+            self.assertLess(abs(_patch_mean(dirty, xy) - _patch_mean(clean, xy)), 2.0,
+                            f"фикстура {xy} темнее кожи — тест проверяет не то")
+            before = abs(_patch_redness(dirty, xy) - _patch_redness(clean, xy))
+            after = abs(_patch_redness(out, xy) - _patch_redness(clean, xy))
+            self.assertLess(after, before * 0.5,
+                            f"красное пятно {xy} осталось: краснота была "
+                            f"+{before:.1f}, стала +{after:.1f}")
+
+    # ── в) лечение возвращало тёмное ядро дефекта обратно ──────────────────
+    def test_dark_core_of_a_spot_is_healed_not_restored(self):
+        """
+        У пятна есть тёмное ядро мельче его самого. Оно целиком помещалось в
+        радиус «своей текстуры» (~0.35% стороны), то есть текстурой и
+        считалось: пятно закрашивалось медианой, а ядро подмешивалось
+        обратно. На эталонном кадре центр дефекта менялся на 7 единиц из 55
+        возможных — работа шла, а на фотографии не было видно ничего.
+        """
+        clean = _face().resize(_CORE_FACE, Image.LANCZOS)
+        dirty, points = _cored(_face())
+        data, _, _ = retouch(_jpeg(dirty))
+        out = Image.open(io.BytesIO(data)).convert("RGB")
+        for xy in points:
+            gap = abs(_patch_mean(dirty, xy, half=3) - _patch_mean(clean, xy, half=3))
+            left = abs(_patch_mean(out, xy, half=3) - _patch_mean(clean, xy, half=3))
+            self.assertLess(left, gap * 0.25,
+                            f"ядро пятна {xy} вернулось на место: было {gap:.1f}, "
+                            f"стало {left:.1f}")
+
+    def test_texture_survives_the_healing(self):
+        """
+        Обратная сторона той же правки: радиус текстуры нельзя занижать без
+        предела. Эталон Влада сохраняет поры, пушок и волоски поверх щеки —
+        значит после лечения микроконтраст кожи ОБЯЗАН остаться.
+        """
+        from PIL import ImageStat
+        dirty, _points = _cored(_face())
+        data, _, _ = retouch(_jpeg(dirty), even_tone=False)
+        out = Image.open(io.BytesIO(data)).convert("RGB")
+        box = (330, 480, 870, 990)          # чистая кожа щеки, без пятен
+        before = ImageStat.Stat(dirty.convert("L").crop(box)).stddev[0]
+        after = ImageStat.Stat(out.convert("L").crop(box)).stddev[0]
+        self.assertGreater(after, before * 0.7,
+                           f"текстуру кожи съели: контраст {before:.2f} → {after:.2f}")
 
 
 if __name__ == "__main__":

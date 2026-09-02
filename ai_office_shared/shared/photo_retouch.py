@@ -1,23 +1,55 @@
 """
 ai_office_shared.shared.photo_retouch — ретушь лица: убрать дефекты кожи.
 
-ЧТО ЭТО ЗА ЗАДАЧА (три захода за 21.08.2026, все с фото на руках):
+ЧТО ЭТО ЗА ЗАДАЧА (четыре захода, все с фото на руках):
     1. Кнопка «🧴 Ретушь» вела в пресет «нежное» — размытие всего кадра. Прыщ
        остаётся прыщом, лицо теряет текстуру.
     2. Первая точечная версия прошла все тесты и превратила живое лицо в мыло:
        брови размазаны, ресницы съедены. Тесты гонялись на синтетическом лице
        из плоских заливок, где этот класс ошибки физически невидим.
     3. Вторая версия, зажатая до предела ради безопасности, вернула фото БЕЗ
-       ЕДИНОГО изменения: она искала изолированные тёмные точки на гладком
-       фоне, а настоящее «прибрати недоліки» — это пятнистость тона на
-       пол-щеки, а не россыпь точек.
+       ЕДИНОГО изменения: правило «темнее кожи — значит волос» пометило
+       волосами сами дефекты.
+    4. Третья версия (частотное разделение по всей коже плюс детектор точек)
+       на лице с настоящим акне снова не меняла ничего заметного. Жалоба Яны
+       дословно: «маскує все, але не те, що потрібно».
 
-ЧТО РАБОТАЕТ (то, чем ретушируют в редакторах):
-    ЧАСТОТНОЕ РАЗДЕЛЕНИЕ. Кадр раскладывается на тон (низкие частоты —
-    покраснения, пятна, неровный цвет) и текстуру (высокие — поры, волоски,
-    микрорельеф). Тон берётся сглаженный, текстура — исходная, и они
-    собираются обратно. Пятнистость уходит, кожа остаётся кожей.
-    Поверх — точечное лечение выраженных элементов медианой окрестности.
+ПОЧЕМУ НЕ РАБОТАЛ ЗАХОД №4 — три независимые причины, найденные по эталону
+(пара «до / после Фотошопа» от Влада, 02.09.2026; кадр 1440×2560):
+
+    а) МАСШТАБ ДЕТЕКЦИИ БЫЛ ПРИВЯЗАН К КАДРУ, А НЕ К ЛИЦУ. Ядра задавались в
+       пикселях детект-копии, а копия масштабировалась от стороны КАДРА. Доля
+       кадра, которую занимает лицо, — величина свободная: на селфи крупным
+       планом прыщ давал ~15 px детект-копии, на ростовом портрете ~3 px. При
+       384 px прыщ занимал ~5 px, порог брал из него обрывки в 1–2 px, и
+       чистка зерна 3×3 стирала их вместе с шумом матрицы. Теперь копия
+       подбирается так, чтобы ПЛОЩАДЬ КОЖИ всегда занимала ~210 000 пикселей:
+       дефект приходит к детектору одного размера с любого кадра.
+
+    б) ДЕТЕКТОР ИСКАЛ ТЕМНОТУ, А АКНЕ ВЫДАЁТ СЕБЯ КРАСНОТОЙ. Измерено на
+       эталоне: внутри щеки отклонение яркости у вылеченных Фотошопом пятен
+       неотличимо от обычной кожи (медиана дефекта ниже 95-го перцентиля
+       чистой кожи), а по красноте они отделяются. Добавление яркостного
+       слагаемого к красноте ухудшало разделение в КАЖДОМ замере. Поэтому
+       краснота — основной канал, темнота — только вспомогательное ядро.
+
+    в) ЛЕЧЕНИЕ ВОЗВРАЩАЛО ДЕФЕКТ ОБРАТНО. Пятно закрашивалось медианой, но
+       поверх подмешивалась «своя текстура», снятая с радиусом ~0.35% стороны
+       (9 px на этом кадре). Тёмное ядро прыща целиком помещается в этот
+       радиус, то есть считалось текстурой и восстанавливалось: пиксель в
+       центре дефекта менялся на 7 из 55 возможных. Радиус текстуры теперь
+       порядка поры (~0.08% стороны), и низкая частота под маской заменяется
+       целиком.
+
+КАК ЭТО РАБОТАЕТ СЕЙЧАС:
+    Порог по красноте даёт ЯДРА дефектов (специфично, но узко), после чего
+    ядро дорастает по более мягкому порогу — ограниченной геодезической
+    дилатацией, шагов не больше радиуса прыща. Это разделяет две работы,
+    которые один порог выполнить не может: «где точно дефект» и «докуда он
+    простирается». Всё, что после смыкания разрывов переживает эрозию ядром
+    крупнее прыща, — не прыщ (крыло носа, тень скулы, глаз), и вычитается.
+    Лечение: низкая частота под маской берётся от окрестности, высокая
+    (поры, пушок, волоски поверх щеки) остаётся своя.
 
 ГРАНИЦЫ РАБОТЫ:
     Только внутри маски кожи и мимо маски волос. Волос отличается от дефекта
@@ -33,7 +65,9 @@ ai_office_shared.shared.photo_retouch — ретушь лица: убрать д
 ПРАВИЛО, ВЫСТРАДАННОЕ ЭТИМ МОДУЛЕМ:
     Зелёные тесты на синтетике не заменяют просмотр реальных фотографий. Всё,
     что здесь настроено, проверялось глазами на настоящих портретах — включая
-    лица с настоящим акне, а не только с гладкой кожей.
+    лица с настоящим акне, а не только с гладкой кожей. Числа в
+    tests/test_photo_retouch.py сняты с эталонного кадра, чтобы починку
+    нельзя было тихо «улучшить» подгонкой порогов.
 
 Функция не бросает исключений: на любой беде возвращает исходную картинку и
 честный отчёт, потому что молчаливая порча фото хуже, чем «ничего не изменил».
@@ -42,6 +76,7 @@ ai_office_shared.shared.photo_retouch — ретушь лица: убрать д
 from __future__ import annotations
 
 import logging
+import math
 from typing import NamedTuple
 
 logger = logging.getLogger("ai_office_shared.photo_retouch")
@@ -49,20 +84,29 @@ logger = logging.getLogger("ai_office_shared.photo_retouch")
 # Разрешение, под которое подобраны радиусы. Настоящая обработка идёт в полном
 # размере, здесь только пересчёт «сколько пикселей занимает прыщ».
 _REFERENCE_SIDE = 1200
-# Дефекты ищутся на маленькой копии — и это не экономия, а суть метода. Ядра
-# фильтров фиксированные, поэтому «маленькое пятно» и «крупная черта лица»
-# определяются в долях кадра, а не в пикселях: прыщ на селфи 4000px и на
-# сжатом Телеграмом 900px — это одна и та же доля лица.
-# Дефекты ищутся на уменьшенной копии — и это не экономия, а суть метода. Ядра
-# фильтров задаются в долях кадра, поэтому «маленькое пятно» и «крупная черта
-# лица» определяются одинаково для селфи 4000px и сжатого Телеграмом 900px.
+
+# СКОЛЬКО ПИКСЕЛЕЙ ДЕТЕКТ-КОПИИ ДОЛЖНА ЗАНИМАТЬ КОЖА. Это и есть привязка
+# масштаба к лицу, а не к кадру. Раньше копия масштабировалась от стороны
+# КАДРА (384 px), и размер дефекта в её пикселях зависел от того, какую долю
+# кадра занимает лицо: ~15 px на селфи крупным планом, ~3 px на ростовом
+# портрете. Одни и те же ядра не могут обслуживать оба случая — это та же
+# ошибка, что порог, привязанный к сегодняшним размерам файлов (15.08.2026).
 #
-# Размер копии выбран не «поменьше»: на 384px прыщ занимал 4–6 пикселей и
-# распадался на обрывки тоньше трёх, которые чистка шума честно выбрасывала
-# вместе с самим дефектом — на лице с настоящим акне ретушь находила крохи и
-# возвращала фото без изменений (фото Влада, третий заход 21.08.2026).
-_DETECT_SIDE = 384
-_K = _DETECT_SIDE / 384.0          # все ядра ниже подобраны при 384
+# 210 000 подобрано по эталонному кадру: дефект приходит к детектору
+# диаметром ~14 px, то есть в середине полосы 10–20 px, где ядра ниже
+# осмысленны. Меньше — прыщ рассыпается в обрывки и его съедает чистка зерна;
+# больше — время растёт квадратично, а фото обрабатывается в чате.
+_DETECT_SKIN_PX = 210_000
+# Границы площади детект-копии: снизу — чтобы не потерять мелкие лица, сверху
+# — чтобы разговор не вставал на секунды.
+_DETECT_MIN_PX = 384 * 384
+_DETECT_MAX_PX = 1_100_000
+# Дешёвая копия: на ней меряется доля кожи (чтобы выбрать масштаб) и на ней же
+# считается фон-медиана. Второе важнее первого: медиана стоит O(ядро²) на
+# пиксель, и, посчитанная в полном рабочем масштабе, она одна съедала бы
+# больше времени, чем весь остальной проход. Фон по построению гладкий,
+# поэтому мельче он ничего не теряет.
+_SCAN_SIDE = 384
 
 
 def _odd(value: float, lo: int = 3, hi: int = 31) -> int:
@@ -73,12 +117,41 @@ def _odd(value: float, lo: int = 3, hi: int = 31) -> int:
     return max(lo, min(hi, size))
 
 
-_PROBE = _odd(13 * _K)       # окно «каким это место должно быть» ≈ 3.4% кадра
-_OPEN = _odd(9 * _K)         # что переживает эрозию этим ядром — не прыщ, а глаз
-_GROW = _odd(3 * _K)         # дорастить пятно от найденного контура внутрь
-_GRAIN = _odd(3 * _K)        # чистка шума: одиночные пиксели матрицы
-_HOLE = _odd(9 * _K)         # дырки в маске кожи размером с прыщ — закрыть
-_EDGE = _odd(5 * _K)         # отступ от края кожи
+class _Kernels(NamedTuple):
+    """
+    Размеры ядер В ПИКСЕЛЯХ РАБОЧЕЙ КОПИИ. Раньше это были константы модуля, и
+    в них была зашита ровно та ошибка, которую чинит _DETECT_SKIN_PX.
+
+    Верхняя граница у _odd (31) здесь не годится: при рабочей копии крупнее
+    ~1300 px ядра молча переставали расти, и _PROBE становился относительно
+    меньше дефекта. Поэтому потолок снят, а стоимость сбита тем, что эрозия и
+    дилатация раскладываются на повторы 3×3 (см. _erode/_dilate).
+    """
+    probe: int      # окно «каким это место должно быть» ≈ 2 диаметра дефекта
+    open: int       # что переживает эрозию этим ядром — не прыщ: глаз, крыло носа
+    close: int      # сомкнуть разрывы ВНУТРИ одного пятна — но не склеить соседние
+    grain: int      # чистка шума матрицы: она в пикселях сенсора, не в долях лица
+    hole: int       # дырки в маске кожи размером с прыщ — закрыть
+    edge: int       # отступ от края кожи
+    steps: int      # докуда пятно вправе дорасти от своего ядра
+
+
+def _kernels(work_side: int) -> _Kernels:
+    k = work_side / 384.0
+    return _Kernels(
+        probe=_odd(13 * k, hi=999),
+        open=_odd(11 * k, hi=999),
+        # Смыкание намеренно много меньше ядра «крупное»: с большим ядром
+        # соседние прыщи слипались в одно пятно, которое эрозия честно
+        # признавала «слишком крупным для прыща» и выбрасывала оба.
+        close=_odd(9 * k, hi=999),
+        grain=3,
+        hole=_odd(9 * k, hi=999),
+        edge=_odd(5 * k, hi=999),
+        steps=max(2, int(round(13 * k / 3))),
+    )
+
+
 # Потолок площади ретуши — доля КОЖИ, а не кадра, и считается ПОСЛЕ дорастания
 # маски. Обе оговорки выстраданы за один день 21.08.2026: сначала потолок стоял
 # до дорастания, и дилатация раздувала уже проверенную маску втрое (лицо
@@ -89,6 +162,14 @@ _EDGE = _odd(5 * _K)         # отступ от края кожи
 # 15% кожи — это «много, но правдоподобно». Выше начинается не ретушь, а
 # заливка лица, и правильный ответ — поднять порог и взять только худшее.
 _MAX_SPOT_SHARE = 0.15
+# Пороги детекта. КРАСНОТА — основной канал: измерено на эталоне, что по
+# яркости дефект от обычной кожи внутри щеки не отделяется, а по красноте
+# отделяется (и любое добавление яркости к красноте разделение ухудшало).
+# Темнота оставлена вторым ядром: свежий воспалённый прыщ даёт и её.
+_SEED_RED = 7        # «здесь точно дефект» — узко и специфично
+_SEED_DARK = 34      # тёмное ядро: чёрная точка, корка
+_GROW_RED = 3        # «досюда дефект простирается» — мягко, но только от ядра
+_GROW_DARK = 22
 # Ниже этой яркости RGB-правило кожи не работает в принципе — только там
 # подключается тест по цветности. Иначе он тянет в маску всё телесно-рыжее:
 # деревянный шкаф на фоне, пол, светлое дерево.
@@ -117,6 +198,54 @@ def _both(a, b):
 def _either(a, b):
     from PIL import ImageChops
     return ImageChops.lighter(a, b)
+
+
+def _erode(mask, size: int):
+    """
+    Эрозия квадратным ядром `size`, разложенная на повторы 3×3.
+
+    Так дешевле и так снимается потолок _odd: PIL считает ранговый фильтр
+    наивно, O(ядро²) на пиксель, а n повторов 3×3 дают ровно ядро 2n+1 за
+    O(9n). Для ядра 21 это 90 операций вместо 441.
+    """
+    from PIL import ImageFilter
+    for _ in range((int(size) - 1) // 2):
+        mask = mask.filter(ImageFilter.MinFilter(3))
+    return mask
+
+
+def _dilate(mask, size: int):
+    """Дилатация квадратным ядром `size` — см. _erode."""
+    from PIL import ImageFilter
+    for _ in range((int(size) - 1) // 2):
+        mask = mask.filter(ImageFilter.MaxFilter(3))
+    return mask
+
+
+def _grow_into(seed, guide, steps: int):
+    """
+    Ограниченная геодезическая дилатация: расти из ядра, но только там, где
+    разрешает guide, и не дальше `steps` пикселей.
+
+    Зачем вообще два порога. Один порог обязан одновременно ответить на два
+    разных вопроса — «здесь точно дефект?» и «докуда он простирается?» — и на
+    настоящем акне это несовместимо: строгий порог берёт из пятна пару
+    пикселей ядра, мягкий заливает пол-щеки. Ядро отвечает за первое, guide за
+    второе, а потолок шагов не даёт пятну утечь в тень или в край волос.
+    """
+    from PIL import ImageFilter
+    current = seed
+    for _ in range(int(steps)):
+        current = _both(current.filter(ImageFilter.MaxFilter(3)), guide)
+    return current
+
+
+def _paste_back(mask, crop_size, box, full_size):
+    """Маску, посчитанную на вырезе, вернуть в координаты полного кадра."""
+    from PIL import Image, ImageChops
+    canvas = ImageChops.constant(Image.new("L", full_size), 0)
+    canvas.paste(mask.resize(crop_size, Image.BILINEAR), (box[0], box[1]))
+    return canvas
 
 
 def _coverage(mask) -> float:
@@ -165,14 +294,96 @@ def skin_mask(im):
     return _either(by_rgb, dark).filter(ImageFilter.MedianFilter(5))
 
 
-def _detect_darker(small):
+def _skin_box(skin_scan, size, margin: float = 0.12):
+    """
+    Прямоугольник кадра, в котором лежит кожа, плюс запас по краям.
+
+    Нужен затем же, зачем и весь этот масштаб: детектору важна кожа, а не
+    кадр. На ростовом портрете лицо занимает проценты площади, и рабочая
+    копия, посчитанная от целого кадра, упирается в потолок _DETECT_MAX_PX
+    раньше, чем дефект дорастает до пригодного размера. Вырез убирает из
+    расчёта фон, который детектору не нужен.
+
+    Маска перед замером эродируется: одинокий телесный пиксель в углу (шкаф,
+    пол, чужая рука) растянул бы вырез обратно на весь кадр.
+    """
+    box = _erode(skin_scan, 5).getbbox()
+    if not box:
+        return (0, 0) + size
+    scan_w, scan_h = skin_scan.size
+    kx, ky = size[0] / float(scan_w), size[1] / float(scan_h)
+    left, top, right, bottom = (box[0] * kx, box[1] * ky, box[2] * kx, box[3] * ky)
+    pad_x = (right - left) * margin
+    pad_y = (bottom - top) * margin
+    return (max(0, int(left - pad_x)), max(0, int(top - pad_y)),
+            min(size[0], int(right + pad_x)), min(size[1], int(bottom + pad_y)))
+
+
+def _work_copy(im):
+    """
+    Рабочая копия, на которой ищутся дефекты: вырез с кожей и его масштаб.
+
+    Масштаб выбирается так, чтобы КОЖА заняла ~_DETECT_SKIN_PX пикселей — не
+    кадр, а именно кожа. Доля кожи меряется на дешёвой копии: полный проход
+    ради одного числа не нужен, а маска кожи на 384 px даёт ту же долю.
+
+    Возвращает (копия, вырез в координатах кадра, доля кожи в кадре).
+    """
+    from PIL import Image
+
+    scan = im.copy()
+    scan.thumbnail((_SCAN_SIDE, _SCAN_SIDE), Image.LANCZOS)
+    skin_scan = skin_mask(scan)
+    share = _coverage(skin_scan)
+    box = _skin_box(skin_scan, im.size)
+    crop = im.crop(box)
+    width, height = crop.size
+    if width < 2 or height < 2:
+        return im, (0, 0) + im.size, share
+
+    # Доля кожи считается ВНУТРИ выреза: снаружи её по построению нет.
+    inside = share * (im.size[0] * im.size[1]) / float(width * height)
+    want = _DETECT_SKIN_PX / max(min(inside, 1.0), 0.02)
+    want = max(_DETECT_MIN_PX, min(_DETECT_MAX_PX, want))
+    # Увеличивать кадр бессмысленно: пикселей, которых в нём нет, интерполяция
+    # не создаст, зато время вырастет.
+    scale = min(1.0, math.sqrt(want / float(width * height)))
+    size = (max(1, int(width * scale)), max(1, int(height * scale)))
+    while size[0] * size[1] > _DETECT_MAX_PX:            # округление вверх — тоже перерасход
+        size = (max(1, size[0] - 1), max(1, size[1] - 1))
+    return crop.resize(size, Image.LANCZOS), box, share
+
+
+def _background(channel, probe: int):
+    """
+    «Каким это место должно быть»: медиана окрестности шире дефекта.
+
+    Считается на копии не крупнее _SCAN_SIDE и растягивается обратно. Медиана
+    стоит O(ядро²) на пиксель, и в полном рабочем масштабе (ядро ~31) она одна
+    заняла бы больше времени, чем весь остальной проход. Фон гладкий по
+    построению — мельче он ничего не теряет, а дефект в окно медианы всё так
+    же не помещается.
+    """
+    from PIL import Image, ImageFilter
+
+    width, height = channel.size
+    factor = min(1.0, _SCAN_SIDE / float(max(width, height)))
+    if factor > 0.999:
+        return channel.filter(ImageFilter.MedianFilter(_odd(probe)))
+    small = channel.resize((max(1, int(round(width * factor))),
+                            max(1, int(round(height * factor)))), Image.LANCZOS)
+    return small.filter(ImageFilter.MedianFilter(_odd(probe * factor))).resize(
+        (width, height), Image.BILINEAR)
+
+
+def _detect_darker(small, probe: int = 13):
     """Карта «насколько темнее локальной медианы» — вход для hair_mask."""
-    from PIL import ImageChops, ImageFilter
+    from PIL import ImageChops
     lum = small.convert("L")
-    return ImageChops.subtract(lum.filter(ImageFilter.MedianFilter(_PROBE)), lum)
+    return ImageChops.subtract(_background(lum, probe), lum)
 
 
-def hair_mask(small, darker, skin_luma: float = 0.0):
+def hair_mask(small, darker, skin_luma: float = 0.0, kern=None):
     """
     Где в кадре ВОЛОСЫ: брови, ресницы, щетина, борода, край причёски.
 
@@ -190,12 +401,21 @@ def hair_mask(small, darker, skin_luma: float = 0.0):
     2. Умеренная текстура ПЛЮС темнее кожи — тёмные волосы, борода в тени.
     3. Плотность «темнее локальной медианы» плюс протяжённость — густые
        массивы волос, где отдельные волоски уже не разрешаются.
+
+    РАДИУСЫ ТЕКСТУРЫ (fine, busy) НАМЕРЕННО НЕ МАСШТАБИРУЮТСЯ вместе с
+    остальными ядрами, и это не забытая правка. Волос — тонкая линия шириной в
+    пиксели сенсора, а не доля лица: он не становится толще оттого, что лицо
+    занимает больше кадра. Отмасштабированные вместе со всеми, эти радиусы
+    съедали 87% настоящих дефектов на эталонном кадре — маска волос накрывала
+    прыщ, оказавшийся рядом со случайной прядкой на щеке.
     """
     from PIL import ImageChops, ImageFilter
 
-    dense = _ge(darker, 9).filter(ImageFilter.GaussianBlur(6.0 * _K))
-    spread = _ge(dense, 88).filter(ImageFilter.MinFilter(_odd(3 * _K)))
-    hair = spread.filter(ImageFilter.MaxFilter(_odd(9 * _K)))
+    kern = kern or _kernels(max(small.size))
+    k = max(small.size) / 384.0
+    dense = _ge(darker, 9).filter(ImageFilter.GaussianBlur(6.0 * k))
+    spread = _erode(_ge(dense, 88), _odd(3 * k, hi=999))
+    hair = _dilate(spread, _odd(9 * k, hi=999))
 
     lum = small.convert("L")
     fine = _either(
@@ -211,7 +431,7 @@ def hair_mask(small, darker, skin_luma: float = 0.0):
         factor = 0.74 - 0.10 * (1.0 - min(1.0, skin_luma / 150.0))
         deep = _le(lum, int(skin_luma * factor))
         hair = _either(hair, _both(deep, _ge(busy, 84)).filter(
-            ImageFilter.MaxFilter(_odd(5 * _K))))
+            ImageFilter.MaxFilter(5)))
     return hair
 
 
@@ -238,16 +458,30 @@ def _skin_contrast_scale(luma: float) -> float:
     return max(0.45, min(1.15, luma / 150.0))
 
 
-def _blemish_mask(small, skin):
+def _blemish_mask(small, skin, kern=None):
     """
-    Маска дефектов на уменьшенной копии: маленькие пятна на коже, которые
-    темнее или краснее своего окружения.
+    Маска дефектов на рабочей копии: небольшие пятна на коже, которые краснее
+    (и часто темнее) своего окружения.
+
+    ДВА ПОРОГА, А НЕ ОДИН. Строгий порог по красноте даёт ЯДРА — там дефект
+    точно есть, но это пара пикселей из пятна. Мягкий порог показывает, докуда
+    пятно простирается, но сам по себе заливает пол-щеки. Ядро дорастает по
+    мягкому порогу ограниченной геодезической дилатацией (_grow_into): один
+    порог эти две работы выполнить не может, и попытка заставить его —
+    причина, по которой заход №4 не находил ничего (замерено: при пороге 21
+    из пятна оставалось 14 пикселей на окно 21×21, и чистка зерна стирала их).
+
+    КРАСНОТА ПЕРВИЧНА. На эталоне (пара «до/после Фотошопа») внутри щеки
+    отклонение яркости у вылеченных пятен неотличимо от обычной кожи, а
+    отклонение красноты отделяется; добавление яркостного слагаемого к
+    красноте ухудшало разделение во всех замеренных вариантах.
 
     Четыре защиты, каждая от своего провала:
 
-    1. Открытие (эрозия + дилатация) ядром _OPEN. Всё, что его переживает,
-       крупнее прыща: глаз, ноздря, тень под скулой, граница волос. Оно
-       вычитается — ретушь физически не может залечить глаз.
+    1. «Слишком крупное, чтобы быть прыщом»: сомкнуть разрывы (иначе крыло
+       носа проходит эрозию как россыпь узких лоскутов), затем открыть ядром
+       kern.open. Что это пережило — глаз, ноздря, тень под скулой, граница
+       волос, — вычитается. Ретушь физически не может залечить глаз.
     2. Маска волос по плотности (hair_mask). Открытие не спасает от тонких
        структур: отдельный волосок брови мелкий и «темнее окружения», то есть
        формально неотличим от прыща. Спасает только плотность.
@@ -259,60 +493,49 @@ def _blemish_mask(small, skin):
     Порог поднимается, пока площадь не станет правдоподобной; не уложились ни
     на одном — возвращаем пусто. Лучше не тронуть ничего, чем замылить лицо.
     """
-    from PIL import ImageChops, ImageFilter
+    from PIL import ImageChops
 
+    kern = kern or _kernels(max(small.size))
     lum = small.convert("L")
     r, g, _ = small.convert("RGB").split()
 
-    local = lum.filter(ImageFilter.MedianFilter(_PROBE))
-    darker = ImageChops.subtract(local, lum)              # темнее окружения
+    darker = ImageChops.subtract(_background(lum, kern.probe), lum)
     redness = ImageChops.subtract(r, g)
-    redder = ImageChops.subtract(
-        redness, redness.filter(ImageFilter.MedianFilter(_PROBE)))
+    redder = ImageChops.subtract(redness, _background(redness, kern.probe))
 
     # Дырки в маске кожи размером с прыщ надо ЗАКРЫТЬ, иначе дефект вылетает
     # из области работы вместе с окрестностью: сам прыщ цветовой тест кожи не
     # проходит (на тёмной коже — тем более), а последующая эрозия расширяет
     # дырку втрое. Закрытие крупных дыр — глаз, ноздрей — не трогает.
-    closed = skin.filter(ImageFilter.MaxFilter(_HOLE)).filter(
-        ImageFilter.MinFilter(_HOLE))
-    inner = closed.filter(ImageFilter.MinFilter(_EDGE))   # отступ от края кожи
+    closed = _erode(_dilate(skin, kern.hole), kern.hole)
+    inner = _erode(closed, kern.edge)                    # отступ от края кожи
     luma = _skin_luma(small, inner)
     skin_share = _coverage(inner)
-    allowed = _both(inner,
-                    hair_mask(small, darker, luma).point(lambda v: 255 - v))
+    allowed = _both(inner, hair_mask(small, darker, luma, kern).point(
+        lambda v: 255 - v))
 
     # Пороги масштабируются по яркости кожи. Абсолютный порог — ошибка: тот же
     # дефект на тёмной коже даёт вдвое меньший перепад в единицах яркости, и
-    # фиксированные 22 просто не замечали его (провал на тоне 66,45,38).
+    # фиксированные значения просто не замечали его (провал на тоне 66,45,38).
     k = _skin_contrast_scale(luma)
+    guide = _both(_either(_ge(redder, max(3, round(_GROW_RED * k))),
+                          _ge(darker, max(6, round(_GROW_DARK * k)))), allowed)
 
-    for level in (round(22 * k), round(30 * k), round(40 * k),
-                  round(52 * k), round(66 * k)):
-        # Цветовой порог тоже масштабируется: на тёмной коже дефект выдаёт
-        # себя краснотой, а не яркостью, и абсолютные 10 единиц он не берёт.
-        spots = _either(_ge(darker, max(6, level)),
-                        _ge(redder, max(6, level + round(8 * k))))
-        spots = _both(spots, allowed)
+    for step in (1.0, 1.25, 1.55, 1.95, 2.5):
+        seed = _either(_ge(redder, max(4, round(_SEED_RED * k * step))),
+                       _ge(darker, max(12, round(_SEED_DARK * k * step))))
+        seed = _both(seed, allowed)
         # Снять «песок»: на тёмной коже и на сжатом JPEG порог ловит шум
-        # матрицы — одиночные пиксели раздували площадь, порог повышался, и
-        # настоящий дефект терялся вместе с шумом (провал на тоне 66,45,38).
-        spots = spots.filter(ImageFilter.MinFilter(_GRAIN)).filter(
-            ImageFilter.MaxFilter(_GRAIN))
-        big = spots.filter(ImageFilter.MinFilter(_OPEN)).filter(
-            ImageFilter.MaxFilter(_OPEN))
-        small_only = ImageChops.subtract(spots, big)
-
-        # КОМПАКТНОСТЬ. Прыщ круглый, у него есть плотное ядро; кайма вдоль
-        # брови или ресницы — вытянутая полоска в два-три пикселя шириной и
-        # ядра не имеет. Оставляем только те пятна, что пережили эрозию, и
-        # достраиваем их обратно до исходной формы (открытие с реконструкцией).
-        # Без этого «дефекты» ложились полосами ровно по краю брови.
-        seed = small_only.filter(ImageFilter.MinFilter(_GRAIN))
-        core = _both(seed.filter(ImageFilter.MaxFilter(_PROBE)), small_only)
-        grown = _both(core.filter(ImageFilter.MaxFilter(_GROW)), allowed)
-        if _coverage(grown) <= _MAX_SPOT_SHARE * max(skin_share, 0.05):
-            return grown
+        # матрицы. Ядро тут постоянное, а не масштабируемое: шум живёт в
+        # пикселях сенсора. Открытие, а не эрозия — 3×3 подряд два раза
+        # стирало ядра настоящих дефектов вместе с шумом.
+        seed = _dilate(_erode(seed, kern.grain), kern.grain)
+        grown = _grow_into(seed, guide, kern.steps)
+        solid = _erode(_dilate(grown, kern.close), kern.close)
+        big = _dilate(_erode(solid, kern.open), kern.open)
+        spots = ImageChops.subtract(grown, big)
+        if _coverage(spots) <= _MAX_SPOT_SHARE * max(skin_share, 0.05):
+            return spots
     return ImageChops.constant(skin, 0)
 
 
@@ -334,7 +557,7 @@ def _edge_mask(im, scale: float):
     return _ge(edges, 26).filter(ImageFilter.GaussianBlur(max(1.0, 1.0 * scale)))
 
 
-def even_skin_tone(im, mask, strength: float):
+def even_skin_tone(im, mask, strength: float, face_side: int = 0):
     """
     Выравнивание тона через ЧАСТОТНОЕ РАЗДЕЛЕНИЕ — то, что в редакторах и
     называют ретушью кожи.
@@ -354,7 +577,9 @@ def even_skin_tone(im, mask, strength: float):
     """
     from PIL import ImageChops, ImageFilter
 
-    side = max(im.size)
+    # Сторона ЛИЦА, а не кадра: радиус тона — доля лица. Без этого на
+    # ростовом портрете выравнивание тона размазывало пол-лица одним ядром.
+    side = face_side or max(im.size)
     tone_radius = max(3.0, side * 0.020)
     detail_radius = max(1.0, side * 0.0035)
 
@@ -365,6 +590,51 @@ def even_skin_tone(im, mask, strength: float):
 
     out = im.copy()
     out.paste(rebuilt, (0, 0), mask.point(lambda v, s=strength: int(v * s)))
+    return out
+
+
+def _heal_spots(base, spots, box, work_size, kern, strength: float):
+    """
+    Залечить пятна: под маской подменяется НИЗКАЯ частота, высокая остаётся своя.
+
+    Фон под пятном — медиана окрестности шире дефекта, поэтому сам дефект её
+    не сдвигает; поверх возвращается собственная текстура кадра.
+
+    Радиус текстуры — порядка поры (~0.08% стороны), и это главная правка
+    этого шага. Раньше он был ~0.35% (9 px на кадре 1440×2560): тёмное ядро
+    прыща целиком помещается в такой радиус, то есть считалось «текстурой» и
+    честно возвращалось на место. Пиксель в центре дефекта менялся на 7 из 55
+    возможных — ретушь работала, а на фотографии не было видно ничего.
+    Мельче радиус брать нельзя по обратной причине: поры, пушок и волоски
+    поверх щеки живут ровно здесь, а эталон Влада их сохраняет.
+    """
+    from PIL import Image, ImageChops, ImageFilter
+
+    # Радиусы берутся от ЛИЦА (стороны выреза), а не от кадра. Пора — это
+    # доля лица, а не доля кадра: на ростовом портрете, где лицо занимает
+    # проценты площади, радиус «поры», посчитанный от стороны кадра,
+    # оказывался в несколько раз крупнее самого дефекта, и лечение снова
+    # возвращало пятно на место. Та же ошибка, что и в масштабе детекции,
+    # только этажом ниже.
+    side = max(box[2] - box[0], box[3] - box[1])
+    detail_radius = max(0.8, side * 0.0008)
+
+    lowres = base.crop(box).resize(work_size, Image.LANCZOS)
+    clean = Image.merge("RGB", [_background(c, kern.probe) for c in lowres.split()])
+    patch = base.copy()
+    patch.paste(clean.resize((box[2] - box[0], box[3] - box[1]), Image.LANCZOS),
+                (box[0], box[1]))
+    clean = patch
+    detail = ImageChops.subtract(
+        base, base.filter(ImageFilter.GaussianBlur(detail_radius)),
+        scale=1, offset=128)
+    healed = ImageChops.add(clean, detail, scale=1, offset=-128)
+
+    mask = spots.filter(ImageFilter.GaussianBlur(max(1.0, side * 0.0025)))
+    if strength < 1.0:
+        mask = mask.point(lambda v, s=strength: int(v * s))
+    out = base.copy()
+    out.paste(healed, (0, 0), mask)
     return out
 
 
@@ -379,8 +649,8 @@ def retouch(im, strength: float = 1.0, even_tone: bool = True) -> tuple:
             только если человек просит убрать ровно пятна и ничего больше.
 
     Два шага, оба только по коже и мимо волос:
-        1. Точечное лечение выраженных дефектов — медиана окрестности вместо
-           пятна.
+        1. Точечное лечение дефектов: низкая частота под маской берётся от
+           окрестности, текстура остаётся своя.
         2. Выравнивание тона частотным разделением: гладкий тон плюс исходная
            текстура.
 
@@ -392,7 +662,6 @@ def retouch(im, strength: float = 1.0, even_tone: bool = True) -> tuple:
     try:
         base = im.convert("RGB")
         full_side = max(base.size)
-        full_scale = max(0.5, full_side / _REFERENCE_SIDE)
 
         skin_full = skin_mask(base)
         skin_share = _coverage(skin_full)
@@ -402,47 +671,61 @@ def retouch(im, strength: float = 1.0, even_tone: bool = True) -> tuple:
             return base, RetouchReport(skin_share, 0.0, False,
                                        "лица на фото не нашла")
 
-        detect = base.copy()
-        detect.thumbnail((_DETECT_SIDE, _DETECT_SIDE), Image.LANCZOS)
-        skin_small = skin_mask(detect)
-        darker = _detect_darker(detect)
-        hair_small = hair_mask(detect, darker,
-                               _skin_luma(detect, skin_small))
-        spots = _blemish_mask(detect, skin_small)
+        # Масштаб рабочей копии — от площади КОЖИ, а не от стороны кадра:
+        # дефект обязан прийти к детектору одного размера с любого портрета.
+        work, box, _share = _work_copy(base)
+        crop_size = (box[2] - box[0], box[3] - box[1])
+        kern = _kernels(max(work.size))
+        skin_small = skin_mask(work)
+        darker = _detect_darker(work, kern.probe)
+        hair_small = hair_mask(work, darker, _skin_luma(work, skin_small), kern)
+        spots = _blemish_mask(work, skin_small, kern)
         spot_share = _coverage(spots)
 
-        hair = hair_small.resize(base.size, Image.BILINEAR).filter(
+        hair = _paste_back(hair_small, crop_size, box, base.size).filter(
             ImageFilter.MaxFilter(3))
 
         out = base
-        if spot_share > 0.0005:
-            patch = detect.filter(ImageFilter.MedianFilter(_PROBE))
-            patch = patch.resize(base.size, Image.LANCZOS)
-            mask = spots.resize(base.size, Image.BILINEAR)
+        if spot_share > 0.0002:
             # Ограничиваем область склейки. Полноразмерная маска кожи нужна,
             # чтобы не заехать на ресницы и брови, но одной её мало: сам
             # дефект цветовой тест кожи не проходит и оказывается ДЫРКОЙ в
             # ней — на тёмной коже так терялось всё лечение целиком.
-            closed = skin_small.filter(ImageFilter.MaxFilter(_HOLE)).filter(
-                ImageFilter.MinFilter(_HOLE)).resize(base.size, Image.BILINEAR)
+            closed = _paste_back(
+                _erode(_dilate(skin_small, kern.hole), kern.hole),
+                crop_size, box, base.size)
             allow = _both(_either(skin_full, closed),
                           hair.point(lambda v: 255 - v))
-            mask = _both(mask, allow.filter(ImageFilter.MinFilter(3)))
-            mask = mask.filter(ImageFilter.GaussianBlur(max(1.0, 1.2 * full_scale)))
-            if strength < 1.0:
-                mask = mask.point(lambda v, s=strength: int(v * s))
-            out = base.copy()
-            out.paste(patch, (0, 0), mask)
+            allowed_spots = _both(_paste_back(spots, crop_size, box, base.size),
+                                  allow.filter(ImageFilter.MinFilter(3)))
+            out = _heal_spots(base, allowed_spots, box, work.size, kern, strength)
 
         toned = False
         if even_tone:
             skin_area = _both(skin_full, hair.point(lambda v: 255 - v))
-            skin_area = skin_area.filter(ImageFilter.MinFilter(3)).filter(
-                ImageFilter.GaussianBlur(max(2.0, full_side * 0.004)))
-            out = even_skin_tone(out, skin_area, 0.75 * strength)
+            # Отступ от волос делается ПО РАДИУСУ РАСТУШЁВКИ, а не на один
+            # пиксель. Растушёвка размывает край маски в обе стороны, то есть
+            # заводит выравнивание тона внутрь брови на свой радиус — и бровь
+            # темнеет, потому что её собственная чернота попадает в «тон»
+            # окрестности. Постоянная эрозия 3×3 покрывала это, только пока
+            # маски считались на копии 384 px.
+            #
+            # Считается на уменьшенной копии: край маски всё равно уходит под
+            # растушёвку, а эрозия ядром 21 по кадру 1440×2560 стоила дороже
+            # всей остальной ретуши вместе.
+            feather = max(2.0, max(crop_size) * 0.004)
+            shrink_k = min(1.0, _SCAN_SIDE / float(full_side))
+            small = (max(1, int(base.size[0] * shrink_k)),
+                     max(1, int(base.size[1] * shrink_k)))
+            shrink = _erode(skin_area.resize(small, Image.BILINEAR),
+                            _odd(2 * feather * shrink_k + 1, hi=999))
+            skin_area = shrink.resize(base.size, Image.BILINEAR).filter(
+                ImageFilter.GaussianBlur(feather))
+            out = even_skin_tone(out, skin_area, 0.75 * strength,
+                                 face_side=max(crop_size))
             toned = True
 
-        if spot_share > 0.0005:
+        if spot_share > 0.0002:
             note = ("убрала дефекты и выровняла тон кожи" if toned
                     else "точечно убрала дефекты кожи — остальное не трогала")
         else:
