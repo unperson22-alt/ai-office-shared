@@ -125,5 +125,55 @@ class TestRuleLivesInOnePlace(unittest.TestCase):
                       "worker.py разбирает заявку мимо общего правила")
 
 
+
+class TestSillyAnswersWhichBuildSheIs(unittest.TestCase):
+    """
+    `/version` у Силли — та же проверка, что у Крисс и у воркеров, но её
+    приложение собирается в coder.py, поэтому и здесь через AST.
+
+    02.09.2026: фикс лежал в main, SHA пакета был поднят, обе ветки смёржены —
+    и единственным свидетельством того, что это дошло до человека, были слова
+    исполнителя деплоя. `/health` отвечает одинаково до и после.
+    """
+
+    def setUp(self):
+        self.tree = ast.parse(open(CODER, encoding="utf-8").read(), filename=CODER)
+
+    def test_handler_exists_and_reports_the_installed_build(self):
+        handler = next((n for n in ast.walk(self.tree)
+                        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and n.name == "handle_version"), None)
+        self.assertIsNotNone(handler, "у Силли нет handle_version")
+        called = {n.func.id for n in ast.walk(handler)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        self.assertIn("build_info", called,
+                      "версия собирается мимо общего build_info — значит правило "
+                      "снова живёт в каждом сервисе по-своему")
+
+    def test_the_route_is_registered(self):
+        registered = set()
+        for call in ast.walk(self.tree):
+            if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)):
+                continue
+            if call.func.attr != "add_get" or not call.args:
+                continue
+            first = call.args[0]
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                registered.add(first.value)
+        self.assertIn("/version", registered,
+                      "маршрут /version не зарегистрирован: обработчик есть, "
+                      "но спросить его некому")
+
+    def test_version_is_reachable_without_the_office_token(self):
+        """
+        Проверка, которой нужен секрет офиса, независимой не является. Сегодня
+        она прошла бы и так — OFFICE_RPC_TOKEN не выставлен, middleware в
+        Фазе A, — но включение enforcement отдельная задача, и в тот день
+        эндпоинт молча начал бы отдавать 401.
+        """
+        from ai_office_shared.shared.auth import _OPEN_PATHS
+        self.assertIn("/version", _OPEN_PATHS)
+
+
 if __name__ == "__main__":
     unittest.main()

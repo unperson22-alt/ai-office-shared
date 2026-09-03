@@ -29,6 +29,7 @@ from ai_office_shared.shared.verify import extract_code
 from ai_office_shared.shared.target_repo import repo_looks_valid, target_repo
 from ai_office_shared.shared.telegram_text import split_for_telegram
 from ai_office_shared.shared.task_request import EmptyTask, task_text
+from ai_office_shared.shared.build_info import build_info
 from ai_office_shared.shared.bug_lessons import (
     edit_plan, forget_messages, known_messages, remember_messages,
     resync_plan, select_lesson_parts, stale_link,
@@ -7925,6 +7926,24 @@ async def handle_health(request):
     return web.json_response({"status": "ok", "service": "cilly-bot"})
 
 
+async def handle_version(request):
+    """
+    Какой код Силли РЕАЛЬНО запущен: SHA сервиса и SHA установленного пакета.
+
+    `/health` отвечает «процесс жив», а не «процесс тот самый»: он одинаков до
+    деплоя и после. 02.09.2026 из-за этого вопрос «раскатан ли фикс» было
+    некому задать, кроме того, кто деплой и выполнял, — а подпись исполнителя
+    под собственной работой уликой не является (инвариант 5), что запрещает и
+    её собственный промт: «реальные деплои подтверждаются деплой-шагом, а не
+    твоим текстом».
+
+    Силли получает этот эндпоинт последней: боты отдела разработки и Крисс уже
+    отвечают на него через shared/worker.py и свой bot.py, а её HTTP-приложение
+    собирается здесь, и этот файл правится только через ревью.
+    """
+    return web.json_response(build_info("cilly-bot"))
+
+
 # ── REACTIONS HANDLER: 👍/👎 на сообщения Силли → office:quality:силли ──────
 @dp.message_reaction()
 async def handle_reaction(reaction: MessageReactionUpdated):
@@ -8703,6 +8722,7 @@ async def main():
     app.router.add_post("/post_raw", handle_post_raw)
     app.router.add_post("/promote_bots", handle_promote_bots)
     app.router.add_get("/health", handle_health)
+    app.router.add_get("/version", handle_version)   # что запущено, а не «жив ли»
     app.router.add_get("/envcheck", handle_envcheck)
     app.router.add_get("/logs", handle_logs)   # сводка по office:logs, см. handle_logs
     app.router.add_post("/redis", handle_redis)
