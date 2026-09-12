@@ -41,6 +41,14 @@
                    наблюдённое значение, а не «проверил, работает»
     phantom      — looks_like_phantom() — офф-персонажные заглушки Ollama
     railway_vars — set_var_allowed() — что Силли можно писать в env
+    execution_claim — unexecuted_report(text, actions_run=) → ExecutionClaim,
+                   capability_hint(): отчёт об исполнении БЕЗ исполнения.
+                   Сверяет заявку со счётчиком исполненных действий, а не с
+                   правдоподобием текста: на пути `answer` у Силли счётчик
+                   ноль по построению. 12.09.2026 на просьбу прочитать env
+                   трёх сервисов пришёл скрипт с placeholder-токеном и
+                   придуманные значения — при том что check_var работает
+                   (инварианты №4, №5)
     models       — MODEL_SONNET, MODEL_HAIKU, MODEL_OPUS (id моделей + env-override)
     prompt       — enhance_prompt() — уточнение запроса лёгкой моделью
     auth         — office_auth_middleware, office_headers(), check_office_token() — auth RPC-меша
