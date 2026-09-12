@@ -2296,6 +2296,7 @@
       "ai_office_shared/shared/group_post.py:PostResult",
       "ai_office_shared/shared/group_post.py:log_delivery"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-09-12T21:09:43.585362+00:00"
   }
 ]
