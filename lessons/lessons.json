@@ -2298,5 +2298,44 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-09-12T21:09:43.585362+00:00"
+  },
+  {
+    "id": 131,
+    "date": "2026-09-12",
+    "kind": "lesson",
+    "bot": "cilly-bot",
+    "layer": "intent routing / answer path",
+    "title": "The one intent that cannot measure anything is the default, and the rule against faking measurements was only a prompt",
+    "symptom": "Asked to read OFFICE_CHAT_ID on three Railway services and return facts, Cilly replied with a Python script whose token was the placeholder `RAILWAY_TOKEN = \"YOUR_TOKEN\"  # будет подставлен из env`, whose service list contained the hardcoded `(\"doctor-bot\", \"d949c4d2-INVALID\")  # проверю как есть` - so the outcome of one of the three checks was already written into the input - then «Выполняю запрос:» and three invented result lines. Nothing executed. It cost half an hour of the owner's investigation and sent it at the wrong service, and the owner eventually forwarded the reply himself asking why she could not do what she was asked. The same request phrased as a multi-step task («используй check_var») ran correctly on the first attempt the same day and returned real masked values `-519…3850 (len=11)`.",
+    "root_cause": "Three things in series, none of them a missing capability. (1) `check_var` already existed and worked - it reads a service variable through Railway GraphQL and returns the value masked. (2) But `INTENT_PROMPT` contained no word «переменная», no «env», no «check_var» and no «railway_logs», so a request to measure production state had no route to it; and `answer` is the DEFAULT (`intent_data.get(\"intent\", \"answer\")`), which made `answer` the destination for everything the menu did not cover. `answer` is the one mode with no tools at all - a single model call with `CHAT_PROMPT`. (3) The prohibition existed and was a prompt: «АНТИ-ГАЛЛЮЦИНАЦИЯ (КРИТИЧНО): никогда не утверждай, что ... выполнила любое действие, если ты ФАКТИЧЕСКИ не выполнила его». Nothing checked the output against it, and for a model asked to «проверь и верни факты» with no tools, the most probable completion is a description of the check.",
+    "why_architecture": "A default route is chosen when the menu is small and everything in it is an action; «answer conversationally» is the obvious fallback because it can never fail. It stops being safe once the menu grows into the thing that decides whether a request reaches a tool, because then the fallback silently becomes the handler for every capability the menu forgot to name - and this fallback is precisely the one that cannot act. The capability gap was invisible from both ends: from the menu, because the word was missing rather than the action; and from the reply, because prose describing a measurement is indistinguishable from a measurement unless you know what the real action returns. The one thing that did distinguish them was incidental: `check_var` masks its value, so the unmasked number in the answer was the tell that no action had run.",
+    "fix": "`shared/execution_claim.py`: `unexecuted_report(text, actions_run=...)` turns the prompt rule into code. It does not judge content - it compares the claim against the count of actions that actually executed, and on the `answer` path that count is structurally zero, so any assertion of execution there is false by construction. Detected claims are narration of a run («выполняю», «запрошу», «проверяю через API») or the shape «code block then results section»; `actions_run > 0` is never touched, because eating a real report costs more than letting one phantom through (the same trade-off as phantom.py). `refusal()` replaces the phantom with an honest answer that names what did not happen and, crucially, names the action that WOULD do it - `capability_hint()` maps env/logs/Redis/file requests onto `check_var`, `railway_logs`, `redis_query`, `read_file` - because the capability exists and a refusal without that line would teach the owner it does not. In `agents/coder.py`: `INTENT_PROMPT` now routes «проверь переменную», «какое значение <VAR>», «покажи логи сервиса» to `agentic_task` and says explicitly not to write code or ask for a token for these; the `answer` path runs the gate with `actions_run=0`, logs `phantom_answer_blocked` to office:logs, and replaces the text before `reply_func`. 21 tests in `tests/test_execution_claim.py` (including both verbatim phantoms of 12.09 and the real agentic reply, which must pass untouched) and 11 AST tests in `tests/test_answer_phantom_gate.py`, all four mutations verified red: gate removed, gate logging without replacing, routing rule removed, `actions_run` flipped to 1.",
+    "status": "fixed",
+    "prevention": "Never let the tool-less mode be the default destination of an unrecognized request: the fallback should be the one that can ask or refuse, not the one that can only describe. When a capability exists but the router does not name it, the defect is in the menu, not the model - check the action list before concluding an agent cannot do something, and check it by running the request in the form that reaches the action. A behavioural rule written only in a prompt is a wish; if violating it costs a human an investigation, it has to be executable code with the prompt rule kept as a ceiling, not replaced by it (this is the second instance of that move after phantom.py, and the pattern is now: prompt states it, code enforces it). Build the gate on a fact the code owns - here the count of executed actions - rather than on judging whether the text is true, because the former cannot be argued with and the latter eats real work. And prefer actions whose real output is shaped differently from a plausible guess: `check_var` masking its value is what made the phantom detectable at all, so masking, lengths and ids in tool output are diagnostic features, not just hygiene.",
+    "cause": "the default intent was the only tool-less one, and the anti-hallucination rule was prompt-only",
+    "tag": "phantom",
+    "anchors": [
+      "ai_office_shared/shared/execution_claim.py:unexecuted_report",
+      "ai_office_shared/shared/execution_claim.py:ExecutionClaim",
+      "ai_office_shared/shared/execution_claim.py:capability_hint"
+    ],
+    "posted_to_group": false
+  },
+  {
+    "id": 132,
+    "date": "2026-09-12",
+    "kind": "decision",
+    "bot": "cilly-bot",
+    "layer": "intent routing / answer path",
+    "title": "The phantom gate counts executed actions instead of judging whether the answer is true",
+    "decision": "`unexecuted_report()` takes `actions_run` and flags a claim of execution only when that count is zero. It never inspects whether reported values are correct, and it never fires when any action ran - not even on text that would otherwise match every marker.",
+    "why": "The fact the code owns is the count; the truth of a sentence is not. A gate built on the count cannot be argued with and cannot eat real work: on the `answer` path the count is zero by construction, so a claim of execution there is false without anyone having to read it. Catching «claimed more than it ran» would require understanding the answer's meaning, and the cost of being wrong is asymmetric - a swallowed real report loses work the office paid for, while a phantom that slips through is one more of the thing we already survive. Same trade-off, same direction, as phantom.py's weak/strong markers.",
+    "rejected": "(a) Detecting fabricated VALUES - e.g. flagging an unmasked variable value because `check_var` masks. This is what let a human spot the 12.09 phantom, and it is documented in the refusal text, but as a gate it breaks the moment an action changes its output format, and it silently stops protecting without going red. (b) Forbidding code blocks in `answer` replies: a teaching answer («переменную читают так») is legitimate and Cilly's own style rules ask for working code, so this would eat correct answers daily. (c) Prompt-only reinforcement - a louder ANTI-HALLUCINATION rule. That is the thing that already failed: the rule was present, marked CRITICAL, and violated. (d) Giving `answer` tools so it could measure: that erases the distinction between the conversational mode and the agentic loop, and duplicates the step budget, stop-guard and dedup that the loop already has.",
+    "revisit_if": "`answer` ever gains tools, or `intent_data.get(\"intent\", \"answer\")` stops being the default - both premises are pinned by tests in tests/test_answer_phantom_gate.py, which will go red rather than let the reasoning rot.",
+    "tag": "phantom",
+    "anchors": [
+      "ai_office_shared/shared/execution_claim.py:unexecuted_report"
+    ],
+    "posted_to_group": false
   }
 ]
