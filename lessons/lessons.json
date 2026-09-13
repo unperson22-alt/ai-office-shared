@@ -2402,6 +2402,7 @@
       "ai_office_shared/shared/group_post.py:post_to_group",
       "ai_office_shared/shared/banter.py:strip_self_prefix"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-09-13T15:55:31.995644+00:00"
   }
 ]
