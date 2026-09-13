@@ -2361,5 +2361,25 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-09-13T11:39:32.530524+00:00"
+  },
+  {
+    "id": 134,
+    "date": "2026-09-13",
+    "kind": "lesson",
+    "bot": "kriss-bot, filly-bot",
+    "layer": "office RPC auth",
+    "title": "Kriss answered every office call with 401 and dropped out of the banter, and the log that said so was never read",
+    "symptom": "Kriss never appears in office banter. Her `/task` returns 401 to every caller - to Filly's fanout and to a direct probe alike - so she generates nothing and posts nothing. Nobody noticed the absence, because a bot that says nothing looks exactly like a bot with nothing to say. Found while verifying the supergroup fix: six bots could be exercised and Kriss could not, and her row in the delivery check read «no failures» purely because no attempt had ever been made.",
+    "root_cause": "Two different header names for the same idea. Kriss guards her endpoint with `X-Secret-Token == HTTP_SECRET`, a check she added before the office mesh existed and never revisited; the mesh's `office_headers()` sends `X-Office-Token` from `OFFICE_RPC_TOKEN`, which is not set at all today (Phase A). So every office call to Kriss carried no header she recognised. Filly holds the very same `HTTP_SECRET` in its own environment - the secret was present, simply never sent.",
+    "why_architecture": "The mesh was introduced alongside an existing per-bot secret rather than replacing it, and the migration stopped at the bot that already had auth - the one place where the old scheme kept working locally while breaking every call from outside. The failure was in fact detected and recorded: `banter.fanout` checks the status code explicitly and wrote `banter_ping agents=нет failed=КРИС:401` on 2026-09-10, during the exact burst that started this investigation. That check exists because a previous incident taught that a silent ping is indistinguishable from a delivered one - so the machinery worked and the record sat in Filly's log unread for three days. Detection without a reader is only half a signal, and an office where nobody watches the failure counters spends them on nothing.",
+    "fix": "`shared/auth.office_headers()` now sends both headers when both secrets are present: `X-Office-Token` for the mesh and `X-Secret-Token` from `HTTP_SECRET` for Kriss. The extra header is inert for every bot that does not check it. This is stated in the code as a temporary measure rather than a design: the correct end is Kriss moving to `office_auth_middleware` like everyone else and `LEGACY_*` disappearing. 5 tests in `tests/test_auth_open_paths.py`, mutation-verified red.",
+    "status": "fixed",
+    "prevention": "When a shared auth scheme is introduced, the bots that already have their own are the migration, not the exception - they are exactly where two schemes will coexist and disagree. And a failure counter is worth only as much as the habit of reading it: `failed=КРИС:401` was correct, specific, and ignored for three days, so any per-call failure that repeats should surface where someone actually looks rather than only in the caller's log. Absence is the hardest symptom to notice - a participant that stops participating produces no artifact at all, so it needs an explicit check, not a watcher waiting to be bothered.",
+    "cause": "two header names for one secret, and nobody read the failure counter that said so",
+    "tag": "auth",
+    "anchors": [
+      "ai_office_shared/shared/auth.py:office_headers"
+    ],
+    "posted_to_group": false
   }
 ]
