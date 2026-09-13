@@ -86,6 +86,7 @@ SEND_TIMEOUT = 10.0
 NO_CHAT_ID  = "no_chat_id"       # OFFICE_CHAT_ID не задан в env сервиса
 NO_TOKEN    = "no_token"         # TELEGRAM_TOKEN не задан
 REFUSED     = "telegram_refused" # ответ пришёл, ok:false — причина ЕСТЬ
+MIGRATED    = "chat_migrated"     # группу повысили до супергруппы, id сменился
 UNREACHABLE = "unreachable"      # до api.telegram.org не доехали
 BAD_BODY    = "bad_body"         # 200, но тело не разобрать
 SENT        = "sent"
@@ -107,6 +108,10 @@ class PostResult:
     message_id: int | None = None
     chat_id: str = ""
     error_code: int | None = None
+    # Новый chat_id, если Telegram его назвал. Отдельным полем, а не внутри
+    # reason: это не пояснение, а ДЕЙСТВИЕ — значение, которое надо положить в
+    # OFFICE_CHAT_ID. Строкой в тексте его пришлось бы выковыривать регуляркой.
+    migrate_to: str = ""
 
     def __bool__(self) -> bool:
         return self.ok
@@ -125,7 +130,11 @@ class PostResult:
         head = f"НЕ доставлено ({self.kind})"
         if self.error_code is not None:
             head += f" [{self.error_code}]"
-        return f"{head}: {self.reason}" if self.reason else head
+        tail = f"{head}: {self.reason}" if self.reason else head
+        if self.migrate_to:
+            tail += (f". Новый chat_id: {self.migrate_to} — его и надо "
+                     f"положить в OFFICE_CHAT_ID сервисов")
+        return tail
 
 
 async def post_to_group(
@@ -210,9 +219,20 @@ async def post_to_group(
         # строчки в логах. Telegram здесь САМ говорит, почему отказал —
         # «chat not found», «bot was kicked from the group chat», «Too Many
         # Requests: retry after 37». Цитируем его, не пересказываем.
+        #
+        # И забираем ВСЁ, что он сказал, а не только текст. При повышении
+        # группы до супергруппы её chat_id меняется, и Telegram кладёт новый
+        # в parameters.migrate_to_chat_id. 13.09.2026 офис на этом встал
+        # целиком: каждый бот слал на старый -5194783850 и получал
+        # «group chat was upgraded to a supergroup chat». Причину мы называли,
+        # а лежащее рядом решение выбрасывали — то есть применяли инвариант №8
+        # наполовину.
+        migrate = str((data.get("parameters") or {}).get("migrate_to_chat_id") or "")
         return await _fail(
             redis_client, bot, PostResult(
-                ok=False, kind=REFUSED, chat_id=chat,
+                ok=False,
+                kind=MIGRATED if migrate else REFUSED,
+                chat_id=chat, migrate_to=migrate,
                 error_code=data.get("error_code") or r.status_code,
                 reason=str(data.get("description") or "Telegram ответил ok:false без описания"),
             ),
@@ -238,6 +258,7 @@ async def _fail(redis_client, bot: str, result: PostResult) -> PostResult:
                 redis_client, bot, "group_post_failed", level="error",
                 kind=result.kind, reason=result.reason[:300],
                 error_code=result.error_code, chat_id=result.chat_id,
+                migrate_to=result.migrate_to or None,
             )
         except Exception:
             pass

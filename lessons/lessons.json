@@ -2339,5 +2339,26 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-09-13T11:31:00.628583+00:00"
+  },
+  {
+    "id": 133,
+    "date": "2026-09-13",
+    "kind": "lesson",
+    "bot": "all office bots",
+    "layer": "group delivery",
+    "title": "The office group was upgraded to a supergroup, its chat id changed, and every bot kept posting to the dead one",
+    "symptom": "No bot could write to the office group at all. Each `/task` answered 200 with a generated reply, and nothing arrived - the exact shape of the 10.09 incident, except now universal rather than two bots out of three. The first live test after deploying the delivery gate produced, for milly, gosling and billy alike, one office:logs entry per attempt: `group_post_failed` / `telegram_refused` / 400 / chat_id -5194783850 / «Bad Request: group chat was upgraded to a supergroup chat».",
+    "root_cause": "Telegram assigns a supergroup a different chat id from the plain group it was upgraded from. `OFFICE_CHAT_ID` on every service still held the pre-upgrade `-5194783850`, so every sendMessage was addressed to a chat that no longer accepts posts. Nothing in the office noticed, because the upgrade is invisible from the bot side - it is not an error until you try to post, and before the gate landed, trying to post and failing was indistinguishable from succeeding.",
+    "why_architecture": "The chat id was configuration copied into seven services and treated as a constant, while it is in fact a value Telegram may change without asking. A constant that the far side can invalidate needs a channel for hearing that it has - and there was one: Telegram returns the replacement id in `parameters.migrate_to_chat_id` of the very 400 that reports the problem. The office read the `description` and discarded `parameters`, which is invariant 8 applied to half the answer: the complaint was quoted and the remedy sitting beside it was thrown away.",
+    "fix": "`shared/group_post.py` now reads `parameters.migrate_to_chat_id` and carries it on `PostResult.migrate_to`, as a separate field rather than prose, because it is an action - the value to put in `OFFICE_CHAT_ID` - not an explanation. A refusal that names a replacement gets its own `kind` (`chat_migrated`), since it is fixed differently from «chat not found» or «bot was kicked»; `describe()` states the new id and where it belongs; and `log_event` writes it to office:logs as its own key, so the answer is available to whoever reads logs rather than only to whoever made the call. 6 tests added (30 in the module).",
+    "status": "fixed",
+    "prevention": "When a remote service refuses, keep the whole refusal, not the sentence that reads best: an error body is a data structure, and the field next to the message is often the fix. Treat an externally-owned identifier - chat id, service id, channel id - as a value that can change under you rather than a constant, and make the code that uses it able to report its replacement. And note what this incident proves about the gate that caught it: the previous delivery code would have shown seven silent successes here and an office that looked healthy while being mute.",
+    "cause": "supergroup upgrade changed the chat id; the replacement Telegram offered was discarded",
+    "tag": "silent-failure",
+    "anchors": [
+      "ai_office_shared/shared/group_post.py:post_to_group",
+      "ai_office_shared/shared/group_post.py:PostResult"
+    ],
+    "posted_to_group": false
   }
 ]
