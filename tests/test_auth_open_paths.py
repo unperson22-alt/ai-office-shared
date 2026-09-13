@@ -80,3 +80,50 @@ class TestOpenPaths(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLegacySecretHeader(unittest.TestCase):
+    """
+    Крисс молча выпадала из болталки, и это лежало в логах Филли с 10.09.2026:
+    «banter_ping agents=нет failed=КРИС:401». Её /task проверяет
+    `X-Secret-Token == HTTP_SECRET` — проверку она завела раньше офисного меша
+    и не меняла, — а office_headers() слал только X-Office-Token, которого
+    сегодня вообще нет (OFFICE_RPC_TOKEN не выставлен, Фаза A).
+
+    Секрет у Филли есть — тот же HTTP_SECRET, что у Крисс. Она его не слала.
+    """
+
+    def setUp(self):
+        self._saved = (auth.OFFICE_RPC_TOKEN, auth.LEGACY_SECRET)
+
+    def tearDown(self):
+        auth.OFFICE_RPC_TOKEN, auth.LEGACY_SECRET = self._saved
+
+    def test_legacy_secret_is_sent_when_set(self):
+        auth.OFFICE_RPC_TOKEN, auth.LEGACY_SECRET = "", "office-secret"
+        h = auth.office_headers()
+        self.assertEqual(h.get(auth.LEGACY_AUTH_HEADER), "office-secret")
+
+    def test_both_secrets_travel_together(self):
+        """Фаза B не должна выключить Крисс обратно."""
+        auth.OFFICE_RPC_TOKEN, auth.LEGACY_SECRET = "mesh", "legacy"
+        h = auth.office_headers()
+        self.assertEqual(h.get(auth.OFFICE_AUTH_HEADER), "mesh")
+        self.assertEqual(h.get(auth.LEGACY_AUTH_HEADER), "legacy")
+
+    def test_nothing_sent_when_unset(self):
+        """Пустой секрет — не заголовок с пустым значением, а его отсутствие."""
+        auth.OFFICE_RPC_TOKEN, auth.LEGACY_SECRET = "", ""
+        self.assertEqual(auth.office_headers(), {})
+
+    def test_extra_headers_survive(self):
+        auth.OFFICE_RPC_TOKEN, auth.LEGACY_SECRET = "", "legacy"
+        h = auth.office_headers({"Content-Type": "application/json"})
+        self.assertEqual(h["Content-Type"], "application/json")
+        self.assertEqual(h[auth.LEGACY_AUTH_HEADER], "legacy")
+
+    def test_caller_dict_is_not_mutated(self):
+        auth.OFFICE_RPC_TOKEN, auth.LEGACY_SECRET = "", "legacy"
+        extra = {"A": "1"}
+        auth.office_headers(extra)
+        self.assertEqual(extra, {"A": "1"})

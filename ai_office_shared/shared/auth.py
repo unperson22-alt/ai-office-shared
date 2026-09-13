@@ -28,6 +28,21 @@ OFFICE_RPC_TOKEN = os.getenv("OFFICE_RPC_TOKEN", "")
 OFFICE_RPC_STRICT = os.getenv("OFFICE_RPC_STRICT", "").lower() in ("1", "true", "yes")
 OFFICE_AUTH_HEADER = "X-Office-Token"
 
+# Легаси-секрет ОДНОГО бота, который офис обязан удовлетворять до миграции.
+# Крисс закрыла свой /task проверкой `X-Secret-Token == HTTP_SECRET` раньше,
+# чем появился office-меш, и своей проверки не меняла. Заголовки разные, и
+# office_headers() слал только X-Office-Token — которого сегодня вообще нет
+# (OFFICE_RPC_TOKEN не выставлен, Фаза A). Итог: КАЖДЫЙ office-вызов к Крисс
+# получал 401, и она молча выпадала из болталки. В логах Филли это лежало с
+# 10.09.2026 — «banter_ping agents=нет failed=КРИС:401», — но смотреть туда
+# было некому.
+#
+# Секрет у Филли ЕСТЬ (тот же HTTP_SECRET, что у Крисс), она его просто не
+# отправляла. Поэтому шлём оба заголовка: лишний игнорируют все, кто его не
+# проверяет, а Крисс наконец отвечает.
+LEGACY_SECRET = os.getenv("HTTP_SECRET", "")
+LEGACY_AUTH_HEADER = "X-Secret-Token"
+
 # Пути без auth (healthcheck/инфраструктура).
 #
 # `/version` открыт по той же причине, что и `/health`, и ещё по одной. 02.09.2026
@@ -46,10 +61,22 @@ _OPEN_PATHS = {"/health", "/version"}
 
 
 def office_headers(extra: dict | None = None) -> dict:
-    """Заголовки для ИСХОДЯЩЕГО office-вызова: добавляет X-Office-Token если задан."""
+    """
+    Заголовки для ИСХОДЯЩЕГО office-вызова.
+
+    Кладём ОБА секрета, если они заданы: X-Office-Token — общий секрет меша,
+    X-Secret-Token — легаси-проверка Крисс (см. LEGACY_SECRET). Лишний
+    заголовок безвреден: его никто, кроме Крисс, не проверяет, а без него она
+    отвечала 401 на каждый вызов и выпадала из болталки.
+
+    Это временная мера, а не устройство: правильный конец — Крисс переходит на
+    office_auth_middleware, как остальные, и LEGACY_* отсюда уходит.
+    """
     h = dict(extra or {})
     if OFFICE_RPC_TOKEN:
         h[OFFICE_AUTH_HEADER] = OFFICE_RPC_TOKEN
+    if LEGACY_SECRET:
+        h[LEGACY_AUTH_HEADER] = LEGACY_SECRET
     return h
 
 
