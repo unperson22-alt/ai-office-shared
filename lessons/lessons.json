@@ -2382,5 +2382,26 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-09-13T15:39:42.838785+00:00"
+  },
+  {
+    "id": 135,
+    "date": "2026-09-13",
+    "kind": "lesson",
+    "bot": "kriss-bot + all office bots",
+    "layer": "group output",
+    "title": "The rule against signing your own name lived in a prompt, and one bot signed itself in code",
+    "symptom": "In the office group Kriss posted «Крис:\\nГослинг, \"на месте\" — это у тебя диагноз или жизненная позиция?» while Telegram already renders her name above the message, so the signature appeared twice. Every other bot in the same burst posted unsigned. The owner recognised it on sight: «Крисс начинает фразу со своего имени, мы это уже проходили».",
+    "root_cause": "Two independent sources, and only one of them was ever addressed. (a) Kriss prepended her name in her OWN code - `send_to_group(f\"Крис:\\n{response}\")` - so no prompt could have prevented it; she was the only bot doing this. (b) For the other six the name comes from the model when it comes at all, governed by the banter prompt's «не подписывайся своим именем — его подставят за тебя», which is a request and is not always honoured. `strip_self_prefix` already existed in shared and was applied to the reply used as a second-wave seed, but never on the path to Telegram - so the office could clean a quotation of a line while publishing the line itself uncleaned.",
+    "why_architecture": "The prefix is a presentation decision taken at seven different places: six prompts and one hardcoded f-string. A rule enforced per-producer holds only as long as every producer remembers it, and a producer that is code rather than a prompt cannot be reached by editing prompts at all. The single place all seven pass through - `post_to_group` - already knew the speaker's display name, because it needs it for the group feed, so the fact required to enforce the rule was present and unused.",
+    "fix": "`shared/group_post.post_to_group()` strips a leading self-prefix via `strip_self_prefix(text, sender_name)` before sending, so the rule holds regardless of which producer added the name; the feed receives the stripped text too, otherwise colleagues read «Милли: Милли: …» out of group_ctx and quote it. Kriss's hardcoded `f\"Крис:\\n{response}\"` removed. `strip_self_prefix` itself was fixed: «**Милли:** ага» used to leave «** ага», because the colon sits inside the bold markers and the trailing asterisks survived; the tail now consumes markdown emphasis only (`[*_~`]{0,2}`) and deliberately not `\\W`, which would eat meaningful punctuation and turn «Милли: — да» into «да». 8 tests in `tests/test_group_post.py`; all seven bots verified by executing their real `send_to_group` against a fake Telegram, including the negative case - addressing a colleague («Гослинг: ты где?») must survive untouched.",
+    "status": "fixed",
+    "prevention": "A formatting rule stated once per producer is not a rule, it is seven copies of a hope - and one of the producers may be code, which no prompt edit can reach. Put it at the single point every producer passes through, and prefer the point that already holds the fact the rule needs. When cleaning text, test the negative case explicitly: the difference between a self-signature and an address to a colleague is exactly one identity comparison, and a strip that gets it wrong silently rewrites what people said.",
+    "cause": "self-signature enforced by prompt in six bots and hardcoded in the seventh",
+    "tag": "group-output",
+    "anchors": [
+      "ai_office_shared/shared/group_post.py:post_to_group",
+      "ai_office_shared/shared/banter.py:strip_self_prefix"
+    ],
+    "posted_to_group": false
   }
 ]

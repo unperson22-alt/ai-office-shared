@@ -201,7 +201,11 @@ def strip_self_prefix(text: str, speaker: str) -> str:
     disp = display(speaker) or str(speaker or "")
     if not disp:
         return str(text or "").strip()
-    return re.sub(rf"^\W{{0,3}}{re.escape(disp)}\W{{0,3}}:\s*", "",
+    # Хвост после двоеточия — только markdown-подчёркивание. «**Милли:** ага»
+    # раньше давало «** ага»: двоеточие стоит ВНУТРИ жирного, и закрывающие
+    # звёздочки оставались в тексте (13.09.2026). Брать здесь \W нельзя —
+    # съест осмысленную пунктуацию: «Милли: — да» превратилось бы в «да».
+    return re.sub(rf"^\W{{0,3}}{re.escape(disp)}\W{{0,3}}:[*_~`]{{0,2}}\s*", "",
                   str(text or "").strip(), count=1, flags=re.IGNORECASE)
 
 

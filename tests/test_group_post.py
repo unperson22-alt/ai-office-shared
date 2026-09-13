@@ -339,6 +339,68 @@ class TestSuccess(unittest.TestCase):
         self.assertEqual(r.logs, [])
 
 
+class TestSelfPrefix(unittest.TestCase):
+    """
+    13.09.2026 Крисс написала в группу «Крис:\nГослинг, "на месте" — это у тебя
+    диагноз или жизненная позиция?». Telegram и так рисует её имя над
+    сообщением, поэтому подпись вышла дважды.
+
+    Источников у этого два, и промтом закрыт только один. У Крисс имя
+    приписывал её СОБСТВЕННЫЙ код (`send_to_group(f"Крис:\n{response}")`), а у
+    остальных его иногда ставит модель — правило «не подписывайся своим именем»
+    живёт в промте болталки и выполняется не всегда. Поэтому снимаем на общем
+    пути в группу, а не в семи промтах.
+    """
+
+    def _sent(self, text, sender="Милли"):
+        seen = []
+        with _Patched(fake_client(OK_BODY, seen=seen)):
+            run(gp.post_to_group(token="t", chat_id="-100", text=text,
+                                 sender_name=sender))
+        return seen[0]["json"]["text"]
+
+    def test_kriss_own_prefix_is_removed(self):
+        got = self._sent('Крис:\nГослинг, "на месте" — это диагноз?', sender="Крис")
+        self.assertEqual(got, 'Гослинг, "на месте" — это диагноз?')
+
+    def test_inline_prefix_is_removed(self):
+        self.assertEqual(self._sent("Милли: работаем"), "работаем")
+
+    def test_prefix_with_decoration_is_removed(self):
+        for raw in ("**Милли:** работаем", "*Милли*: работаем", "«Милли»: работаем"):
+            with self.subTest(raw=raw):
+                self.assertEqual(self._sent(raw), "работаем")
+
+    def test_only_the_speakers_own_name_is_stripped(self):
+        """Обращение к КОЛЛЕГЕ — не подпись, трогать нельзя."""
+        self.assertEqual(self._sent("Гослинг: ты где?"), "Гослинг: ты где?")
+
+    def test_only_one_prefix_and_only_at_the_start(self):
+        self.assertEqual(self._sent("Милли: Милли: работаем"), "Милли: работаем")
+        self.assertEqual(self._sent("итого Милли: работаем"), "итого Милли: работаем")
+
+    def test_plain_text_untouched(self):
+        self.assertEqual(self._sent("работаем, деньги сами себя не считают"),
+                         "работаем, деньги сами себя не считают")
+
+    def test_no_sender_name_means_no_stripping(self):
+        """Без имени отправителя снимать нечего — и гадать мы не будем."""
+        seen = []
+        with _Patched(fake_client(OK_BODY, seen=seen)):
+            run(gp.post_to_group(token="t", chat_id="-100", text="Милли: работаем"))
+        self.assertEqual(seen[0]["json"]["text"], "Милли: работаем")
+
+    def test_feed_gets_the_stripped_text_too(self):
+        """Иначе коллеги читают в group_ctx «Милли: Милли: ...» и цитируют это."""
+        r = FakeRedis()
+        with _Patched(fake_client(OK_BODY)):
+            run(gp.post_to_group(token="t", chat_id="-100", text="Милли: работаем",
+                                 sender_name="Милли", redis_client=r))
+        self.assertEqual(len(r.history), 1)
+        self.assertIn("работаем", r.history[0])
+        self.assertNotIn("Милли: работаем", r.history[0])
+
+
 class TestGroupHistory(unittest.TestCase):
     """В ленту — только доставленное: иначе коллеги отвечают на призрак."""
 
