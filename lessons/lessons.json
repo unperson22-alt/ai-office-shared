@@ -2425,6 +2425,7 @@
       "ai_office_shared/shared/group_history.py:read",
       "ai_office_shared/shared/banter.py:new_thread_id"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-09-13T19:53:04.208073+00:00"
   }
 ]
