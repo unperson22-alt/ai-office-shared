@@ -30,6 +30,7 @@ from ai_office_shared.shared.target_repo import repo_looks_valid, target_repo
 from ai_office_shared.shared.telegram_text import split_for_telegram
 from ai_office_shared.shared.task_request import EmptyTask, task_text
 from ai_office_shared.shared.build_info import build_info
+from ai_office_shared.shared.execution_claim import unexecuted_report
 from ai_office_shared.shared.bug_lessons import (
     edit_plan, forget_messages, known_messages, remember_messages,
     resync_plan, select_lesson_parts, stale_link,
@@ -966,6 +967,7 @@ push_code=залить/обновить код, fix_bot=исправить ба�
 resync_lessons=переиздать хвост Bug Lessons начиная с номера урока: снять сообщения и отправить заново по возрастанию номеров. Сигналы: "переиздай уроки с N", "перепубликуй уроки с N", "resync уроки", "восстанови порядок уроков". Номер урока клади в "task". По умолчанию DRY-RUN: реальное переиздание только если в тексте есть слово confirm — без него ответ показывает, что будет снято и отправлено.
 board_task=операция над задачей доски по её id. Сигналы: "верни задачу X в работу", "переоткрой задачу X", "задача X снова в очередь", "reopen X". Id — 12 hex-символов, клади его в "task". Заполни "mode": reopen (вернуть в очередь, сбросив счётчик попыток) — единственный поддерживаемый режим. Это НЕ произвольная запись в Redis: доступна ровно одна названная операция.
 ВАЖНО trader_winrate: "винрейт трейдера", "посчитай winrate", "проверь винрейт сигналов", "какой winrate у трейдера", "винрейт по сигналам", "статистика трейдера WR" → trader_winrate (читает signals:list/signal:* трейдера, считает WR по свечам, отдаёт за 7 дней и за всё время).
+ВАЖНО измерение состояния прода → agentic_task, НИКОГДА answer. "проверь переменную", "какое значение OFFICE_CHAT_ID", "задан ли env", "переменные окружения сервиса", "покажи логи сервиса", "что в логах <бот>" → agentic_task: там есть check_var (читает переменную сервиса, значение вернётся замаскированным) и railway_logs (последние строки логов). Причина правила — инцидент 12.09.2026: в этом меню не было ни слова «переменная», запрос упал в answer (режим БЕЗ инструментов), и Силли выдала скрипт с placeholder-токеном и придуманные значения вместо измерения. Возможность была всё это время — не было маршрута к ней. НЕ проси у Влада токен и НЕ пиши код для таких проверок: действие уже есть.
 ВАЖНО: "подключить бота", "добавить чужого бота" → add_external_bot, НЕ create_bot.
 Репо: billy-bot,tilly-bot,filly-bot,dilly-bot,milly-bot,ai-office-shared,logger-bot,office-dashboard,mama-bot,gosling-bot,villy-bot,prophet-bot,kriss-bot,pilly-bot,doctor-bot,marketing-dept.
 билли→billy, тилли→tilly, макс/милли→milly, доктор/дилли→dilly, филли→filly, силли→ai-office-shared."""
@@ -4534,6 +4536,30 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
             answer = answer_resp.content[0].text
         else:
             answer = await ask_claude(message_text, system=answer_system, model="claude-sonnet-4-6")
+
+        # Правило «АНТИ-ГАЛЛЮЦИНАЦИЯ» стоит в CHAT_PROMPT с самого начала и
+        # 12.09.2026 было нарушено: на просьбу прочитать переменную окружения
+        # трёх сервисов ушёл скрипт с placeholder-токеном, внутри хардкод
+        # "d949c4d2-INVALID" (результат одной из трёх проверок «известен»
+        # заранее), раздел «Выполняю запрос:» и придуманные значения.
+        #
+        # actions_run=0 здесь не параметр, а ФАКТ пути: answer — один вызов
+        # модели с CHAT_PROMPT и без инструментов вообще. Значит любое
+        # утверждение об исполнении тут ложно по построению, и гейт сверяет
+        # заявку со счётчиком, а не судит содержание. Обоснование и разбор —
+        # ai_office_shared/shared/execution_claim.py.
+        _claim = unexecuted_report(answer, actions_run=0)
+        if _claim:
+            logger.warning("[answer] отчёт о неисполненном: %s", _claim.describe())
+            try:
+                await log_event(await get_redis(), BOT_NAME_LOWER,
+                                "phantom_answer_blocked", level="error",
+                                kind=_claim.kind,
+                                markers=",".join(_claim.markers),
+                                request=message_text[:200])
+            except Exception:
+                pass
+            answer = _claim.refusal(request_text=message_text)
         await reply_func(answer)
 
 
