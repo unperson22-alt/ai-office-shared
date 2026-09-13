@@ -2319,7 +2319,8 @@
       "ai_office_shared/shared/execution_claim.py:ExecutionClaim",
       "ai_office_shared/shared/execution_claim.py:capability_hint"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-09-13T11:31:00.628583+00:00"
   },
   {
     "id": 132,
@@ -2336,6 +2337,7 @@
     "anchors": [
       "ai_office_shared/shared/execution_claim.py:unexecuted_report"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-09-13T11:31:00.628583+00:00"
   }
 ]
