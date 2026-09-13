@@ -234,6 +234,74 @@ class TestSilentExits(unittest.TestCase):
                 run(gp.post_to_group(token="t", chat_id="-1", text="x"))
 
 
+class TestSupergroupMigration(unittest.TestCase):
+    """
+    13.09.2026 офис встал целиком: группу повысили до супергруппы, её chat_id
+    сменился, и КАЖДЫЙ бот получал «Bad Request: group chat was upgraded to a
+    supergroup chat» на старый -5194783850. Причину мы называли (это уже
+    работало), а новый id, который Telegram кладёт рядом в
+    parameters.migrate_to_chat_id, выбрасывали — то есть применяли инвариант №8
+    наполовину: процитировали жалобу и потеряли решение.
+    """
+
+    BODY = {
+        "ok": False, "error_code": 400,
+        "description": "Bad Request: group chat was upgraded to a supergroup chat",
+        "parameters": {"migrate_to_chat_id": -1002194783850},
+    }
+
+    def test_new_chat_id_is_captured(self):
+        with _Patched(fake_client(self.BODY)):
+            res = run(gp.post_to_group(token="t", chat_id="-5194783850", text="привет"))
+        self.assertFalse(res.ok)
+        self.assertEqual(res.migrate_to, "-1002194783850")
+
+    def test_migration_has_its_own_kind(self):
+        """Отдельный kind, потому что это чинится иначе, чем «chat not found»."""
+        with _Patched(fake_client(self.BODY)):
+            res = run(gp.post_to_group(token="t", chat_id="-5194783850", text="привет"))
+        self.assertEqual(res.kind, gp.MIGRATED)
+
+    def test_describe_tells_what_to_do(self):
+        with _Patched(fake_client(self.BODY)):
+            res = run(gp.post_to_group(token="t", chat_id="-5194783850", text="привет"))
+        text = res.describe()
+        self.assertIn("-1002194783850", text)
+        self.assertIn("OFFICE_CHAT_ID", text)
+
+    def test_new_id_reaches_office_logs(self):
+        """Влад смотрит логи — значение должно быть там, а не только в ответе."""
+        r = FakeRedis()
+        with _Patched(fake_client(self.BODY)):
+            run(gp.post_to_group(token="t", chat_id="-5194783850", text="привет",
+                                 redis_client=r, bot="милли"))
+        self.assertEqual(len(r.logs), 1)
+        self.assertIn("-1002194783850", r.logs[0])
+
+    def test_refusal_without_parameters_stays_plain_refused(self):
+        """Без migrate_to_chat_id это обычный отказ — kind не подменяем."""
+        body = {"ok": False, "error_code": 403,
+                "description": "Forbidden: bot was kicked from the group chat"}
+        with _Patched(fake_client(body)):
+            res = run(gp.post_to_group(token="t", chat_id="-100", text="привет"))
+        self.assertEqual(res.kind, gp.REFUSED)
+        self.assertEqual(res.migrate_to, "")
+        self.assertNotIn("OFFICE_CHAT_ID", res.describe())
+
+    def test_lost_reply_still_logs_error_not_msg_out(self):
+        """Миграция — тоже потеря: MSG_OUT здесь был бы ложью."""
+        calls = []
+
+        async def _log(event, msg, from_="", to_=""):
+            calls.append({"event": event, "msg": msg})
+
+        with _Patched(fake_client(self.BODY)):
+            res = run(gp.post_to_group(token="t", chat_id="-5194783850", text="x"))
+        run(gp.log_delivery(_log, res, text="Милли: работаем", agent="Милли"))
+        self.assertEqual(calls[0]["event"], "ERROR")
+        self.assertIn("-1002194783850", calls[0]["msg"])
+
+
 class TestSuccess(unittest.TestCase):
     def test_ok_true_is_the_only_way_to_get_ok(self):
         with _Patched(fake_client(OK_BODY)):
