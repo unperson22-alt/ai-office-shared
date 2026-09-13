@@ -58,6 +58,84 @@ class TestThreadIdentity(unittest.TestCase):
                 self.assertEqual(b.thread_of(payload), "")
 
 
+class FeedRedis:
+    """Лента списком, как в Redis: новые сверху."""
+
+    def __init__(self): self.rows = []
+    async def lpush(self, k, v): self.rows.insert(0, v)
+    async def lrange(self, k, a, b): return self.rows[a:(None if b == -1 else b + 1)]
+    async def ltrim(self, *a): pass
+    async def expire(self, *a): pass
+
+
+class TestFeedCarriesTheThread(unittest.TestCase):
+    """
+    Транскрипт собирается по ОДНОМУ разговору. До 13.09.2026 лента была
+    плоской, окно брало последние N строк подряд, и в него попадали ответы на
+    разные вопросы из разных всплесков — бота просили отреагировать на
+    последнюю реплику поверх выписки из лога.
+    """
+
+    def _feed(self):
+        from ai_office_shared.shared.group_history import push
+        r = FeedRedis()
+        run(push(r, "Влад", "с чего всё началось", thread_id="T42"))
+        run(push(r, "Вилли", "реплика в нити", thread_id="T42"))
+        run(push(r, "Крис", "из другого всплеска", thread_id="T99"))
+        run(push(r, "Билли", "совсем без нити"))
+        return r
+
+    def test_reading_by_thread_returns_only_that_burst(self):
+        from ai_office_shared.shared.group_history import read
+        rows = run(read(self._feed(), 10, thread_id="T42"))
+        self.assertEqual([r["from"] for r in rows], ["Влад", "Вилли"])
+
+    def test_other_bursts_and_threadless_rows_are_excluded(self):
+        from ai_office_shared.shared.group_history import read
+        rows = run(read(self._feed(), 10, thread_id="T42"))
+        texts = " ".join(r["text"] for r in rows)
+        self.assertNotIn("другого всплеска", texts)
+        self.assertNotIn("без нити", texts)
+
+    def test_without_a_thread_the_whole_feed_is_returned(self):
+        from ai_office_shared.shared.group_history import read
+        rows = run(read(self._feed(), 10))
+        self.assertEqual(len(rows), 4)
+
+    def test_the_human_line_is_in_the_thread(self):
+        """
+        Разговор начинается с реплики человека, и она обязана лежать в той же
+        нити: иначе вторая волна читает нить и не видит, с чего всё началось —
+        а это ровно та строка, ради которой всплеск и случился.
+        """
+        from ai_office_shared.shared.group_history import read
+        rows = run(read(self._feed(), 10, thread_id="T42"))
+        self.assertEqual(rows[0]["from"], "Влад")
+
+    def test_a_short_window_does_not_lose_the_thread_to_other_bursts(self):
+        """
+        Окно n применяется ПОСЛЕ фильтра. Иначе n строк уходят на чужой
+        всплеск, а своего не остаётся — та же потеря контекста, что и без
+        нити вовсе.
+        """
+        from ai_office_shared.shared.group_history import push, read
+        r = self._feed()
+        for i in range(5):
+            run(push(r, "Крис", f"шум {i}", thread_id="T99"))
+        rows = run(read(r, 2, thread_id="T42"))
+        self.assertEqual([x["from"] for x in rows], ["Влад", "Вилли"])
+
+    def test_legacy_rows_without_a_thread_field_do_not_crash(self):
+        """Записи, лежавшие до 13.09.2026, поля `thread` не имеют."""
+        import json
+        from ai_office_shared.shared.group_history import read
+        r = FeedRedis()
+        run(r.lpush("k", json.dumps({"from": "Билли", "text": "старая запись"},
+                                    ensure_ascii=False)))
+        self.assertEqual(run(read(r, 10, thread_id="T42")), [])
+        self.assertEqual(len(run(read(r, 10))), 1)
+
+
 class TestInvitesReply(unittest.TestCase):
     """
     Длину всплеска решает реплика, а не константа. Признаки — про форму:
