@@ -40,7 +40,8 @@ RECENT_KEEP   = 5                         # сырых сообщений пос
 HISTORY_TTL   = 86400 * 7
 
 
-async def push(redis_client, sender_name: str, text: str) -> bool:
+async def push(redis_client, sender_name: str, text: str,
+               thread_id: str = "") -> bool:
     """
     Дописать реплику в общую ленту. Fail-silent: лента — удобство, а не критичный
     путь, ронять из-за неё отправку сообщения нельзя.
@@ -48,11 +49,26 @@ async def push(redis_client, sender_name: str, text: str) -> bool:
     Args:
         sender_name: display-имя автора — «Билли», «Гослинг», «Влад».
                      Именно оно потом попадёт в group_ctx как «Билли: ...».
+        thread_id:   к какому всплеску относится реплика. Пусто — «вне нити»,
+                     так пишутся сообщения, пришедшие не через болталку.
+
+                     Зачем поле вообще. Лента плоская, а болталка читает из неё
+                     ОКНО в несколько строк — и 13.09.2026 в это окно попали
+                     три ответа на три РАЗНЫХ вопроса из разных всплесков:
+
+                         Доктор: День когда Влад сделал 130 остановок…
+                         Гослинг: Вилли, дизайн-ревью не отваливается…
+                         Крис: Влад три раза спросил про заметки…
+
+                     Званого просят «отреагируй на последнюю реплику», а
+                     связного разговора перед ним нет — есть выписка из лога.
+                     Отсюда параллельные монологи вместо диалога.
     """
     if redis_client is None or not sender_name or not text:
         return False
     try:
-        entry = json.dumps({"from": sender_name, "text": text[:300]},
+        entry = json.dumps({"from": sender_name, "text": text[:300],
+                            "thread": str(thread_id or "")},
                            ensure_ascii=False)
         await redis_client.lpush(HISTORY_KEY, entry)
         await redis_client.ltrim(HISTORY_KEY, 0, HISTORY_MAX - 1)
@@ -67,16 +83,30 @@ def _decode(raw) -> str:
     return raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
 
 
-async def read(redis_client, n: int = HISTORY_MAX) -> list[dict]:
-    """Последние n записей в хронологическом порядке (старые → новые)."""
+async def read(redis_client, n: int = HISTORY_MAX,
+               thread_id: str = "") -> list[dict]:
+    """
+    Последние n записей в хронологическом порядке (старые → новые).
+
+    Args:
+        thread_id: вернуть только реплики этого всплеска. Читаем при этом
+                   ВЕСЬ хвост ленты и фильтруем, а не первые n строк: иначе
+                   n строк уходят на чужой всплеск и своего не остаётся.
+                   Записи без поля `thread` (лежавшие до 13.09.2026) в нить
+                   не попадают — у них её и не было.
+    """
     if redis_client is None:
         return []
     try:
-        raw = await redis_client.lrange(HISTORY_KEY, 0, n - 1)
-        return [json.loads(_decode(item)) for item in reversed(raw)] if raw else []
+        limit = HISTORY_MAX if thread_id else n
+        raw = await redis_client.lrange(HISTORY_KEY, 0, limit - 1)
+        rows = [json.loads(_decode(item)) for item in reversed(raw)] if raw else []
     except Exception as e:
         logger.warning(f"group_history.read failed: {e}")
         return []
+    if thread_id:
+        rows = [r for r in rows if str((r or {}).get("thread") or "") == thread_id]
+    return rows[-n:] if n > 0 else rows
 
 
 async def get_context(redis_client, n: int = 10, include_members: bool = True) -> str:

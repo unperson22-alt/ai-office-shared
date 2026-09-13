@@ -2404,5 +2404,27 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-09-13T15:55:31.995644+00:00"
+  },
+  {
+    "id": 136,
+    "date": "2026-09-13",
+    "kind": "lesson",
+    "bot": "filly-bot + all office bots",
+    "layer": "group feed / banter context",
+    "title": "Two writers put every line in the feed twice, and the banter silently read half the conversation it thought it had",
+    "symptom": "The banter read like parallel monologues rather than a conversation. Measured cause, not impression: every remark sat in `office:group:history` twice, so a 4-row context window yielded 2-3 distinct lines after dedup - the invited bot saw about half the transcript the code believed it was sending. Reading the actual feed showed the shape plainly: three answers to three different questions from three separate bursts, presented to a bot asked to «react to the last line».",
+    "root_cause": "Two writers for one event. The bot posted to Telegram through `group_post` and wrote the feed after confirmed delivery; Filly also wrote the same reply in `route_to_agent`, unconditionally. The duplicate was invisible because `_add_line` dedups by text when building the transcript - the feed was wrong, the transcript merely came out short, and nothing pointed at the feed. Compounding it, `thread_id` was the constant string \"office\" everywhere, so the feed had no notion of which burst a line belonged to: the window spanned the whole office history, and the per-burst «who already spoke» set was one global 5-minute key shared by every conversation.",
+    "why_architecture": "The second writer was added for a real reason - before it, bot replies reached Telegram without reaching the feed, and `group_ctx` showed a monologue by the human. The fix picked «Filly writes too» instead of «the sender writes», which is correct only while exactly one party sends. It stopped being true the moment bots posted for themselves, and the resulting duplication degraded a *different* subsystem (context width) rather than the one it touched, so the cost never surfaced where the change was made.",
+    "fix": "One rule: whoever sends to Telegram writes the feed. Bots write through `group_post` after `ok:true`; Filly writes only for agents she posts for herself (`AGENTS_RETURN_RESPONSE`, today just Ellis) and for the human's own message. Alongside it, bursts got identity: `banter.new_thread_id()` is created on the human's message, travels through `group_history_push`, the `/task` payload, `thread_of()`, `send_to_group`, `post_to_group` and back into the feed row; `group_history.read(thread_id=...)` filters by it, applying the window AFTER the filter so a noisy neighbouring burst cannot crowd out the thread. Verified by executing each of the seven bots' real `send_to_group` against a fake Telegram and reading the row that lands in the feed.",
+    "status": "fixed",
+    "prevention": "When something must be recorded once, name the single party responsible by the thing only it can know - here, whether the send actually happened - rather than adding a writer wherever a gap appears. Two writers for one event is not a duplicate row, it is a silent halving of anything downstream that counts rows. And when a feed is read as a conversation, it needs the identity of the conversation: a window over a flat log is not a transcript, and no amount of prompt wording makes an agent respond well to three unrelated remarks presented as a dialogue.",
+    "cause": "two writers for one feed row, and no burst identity to read it by",
+    "tag": "group-output",
+    "anchors": [
+      "ai_office_shared/shared/group_history.py:push",
+      "ai_office_shared/shared/group_history.py:read",
+      "ai_office_shared/shared/banter.py:new_thread_id"
+    ],
+    "posted_to_group": false
   }
 ]

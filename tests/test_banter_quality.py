@@ -264,7 +264,7 @@ class TestSenderMatchesTheTranscript(unittest.TestCase):
 
     def test_sender_and_transcript_never_disagree(self):
         seen = []
-        with _Patched(fake_client(["да он с утра лежит, я в логи смотрела"], seen)):
+        with _Patched(fake_client(["да он с утра лежит, ты логи-то смотрел?"], seen)):
             run(b.fanout(FakeRedis([("Влад", "что там"), ("Билли", "смотрю логи")]),
                          primary_agent="БИЛЛИ", trigger_text="что там",
                          sender="Влад", chance=1.0,
@@ -280,7 +280,14 @@ class TestSecondBotInTheWaveSeesTheFirst(unittest.TestCase):
     """
 
     def test_reply_of_the_first_is_in_the_prompt_of_the_second(self):
+        # Зовём РОВНО двоих. pick берёт random.randint(1, 2), то есть иногда
+        # одного — и тест про «второй видит первого» тогда проверяет пустоту.
+        # Раньше это не всплывало только потому, что генератор не сеют и
+        # последовательность случайно ложилась удачно.
         seen = []
+        _orig_randint = b.random.randint
+        b.random.randint = lambda a, c: 2
+        self.addCleanup(lambda: setattr(b.random, "randint", _orig_randint))
         with _Patched(fake_client(["сервер лёг, я же говорил", "и правда лёг"], seen)):
             run(b.fanout(FakeRedis(), primary_agent="БИЛЛИ", trigger_text="что там",
                          sender="Влад", chance=1.0, pool=["МИЛЛИ", "ВИЛЛИ"],
@@ -334,7 +341,7 @@ class TestCooldownIsACeiling(unittest.TestCase):
     def test_second_wave_is_not_blocked_by_its_own_lock(self):
         # Замок ставит первая волна; вторая идёт внутри того же всплеска.
         seen = []
-        with _Patched(fake_client(["сервер лёг, я же говорил"], seen), cooldown=60):
+        with _Patched(fake_client(["сервер лёг, я же говорил, а ты куда смотрел?"], seen), cooldown=60):
             run(b.fanout(FakeRedis(), primary_agent="БИЛЛИ", trigger_text="что там",
                          sender="Влад", chance=1.0, pool=["МИЛЛИ", "ВИЛЛИ", "ТИЛЛИ"]))
         self.assertIn(2, [p.get("depth") for p in seen], seen)
@@ -359,7 +366,14 @@ class TestCooldownIsACeiling(unittest.TestCase):
 
 
 class TestSecondWaveNeedsSomethingToAnswer(unittest.TestCase):
-    """На «ага» вторая волна отвечает «ага» — это шум, а не разговор."""
+    """
+    На «ага» вторая волна отвечает «ага» — это шум, а не разговор.
+
+    С 13.09.2026 длины у всплеска нет: нить продолжается, пока реплика ЗОВЁТ
+    ответить (вопрос или обращение по имени — `invites_reply`). Поэтому
+    фикстуры здесь заканчиваются вопросом: без него всплеск закрылся бы по
+    новому правилу, и тесты проверяли бы не то, ради чего написаны.
+    """
 
     def _depths(self, reply):
         seen = []
@@ -372,14 +386,14 @@ class TestSecondWaveNeedsSomethingToAnswer(unittest.TestCase):
         self.assertNotIn(2, self._depths("ага"))
 
     def test_substantive_reply_does(self):
-        self.assertIn(2, self._depths("да он с утра лежит, я в логи смотрела"))
+        self.assertIn(2, self._depths("да он с утра лежит, ты логи-то смотрел?"))
 
     def test_second_wave_sees_the_first_even_with_an_empty_history(self):
         # Лента наполняется, только когда позванный бот сам постит в группу.
         # Полагаться на то, что он успел это сделать до HTTP-ответа, нельзя —
         # первую волну вторая получает списком, а не через Redis.
         seen = []
-        with _Patched(fake_client(["да он с утра лежит, я в логи смотрела"], seen)):
+        with _Patched(fake_client(["да он с утра лежит, ты логи-то смотрел?"], seen)):
             run(b.fanout(FakeRedis(), primary_agent="БИЛЛИ",
                          trigger_text="что там с деплоем", sender="Влад",
                          chance=1.0, pool=["МИЛЛИ", "ВИЛЛИ", "ТИЛЛИ"]))
@@ -390,7 +404,7 @@ class TestSecondWaveNeedsSomethingToAnswer(unittest.TestCase):
     def test_second_wave_gets_the_reply_without_the_speaker_prefix(self):
         # Иначе в транскрипте выходит «Милли: Милли: ...».
         seen = []
-        with _Patched(fake_client(["Милли: да он с утра лежит, я смотрела"], seen)):
+        with _Patched(fake_client(["Милли: да он с утра лежит, ты смотрел?"], seen)):
             run(b.fanout(FakeRedis(), primary_agent="БИЛЛИ", trigger_text="что там",
                          sender="Влад", chance=1.0, pool=["МИЛЛИ", "ВИЛЛИ", "ТИЛЛИ"]))
         wave2 = [p for p in seen if p.get("depth") == 2]

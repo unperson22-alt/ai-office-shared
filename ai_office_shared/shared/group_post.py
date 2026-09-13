@@ -148,6 +148,7 @@ async def post_to_group(
     parse_mode: str | None = None,
     disable_web_page_preview: bool | None = None,
     timeout: float = SEND_TIMEOUT,
+    thread_id: str = "",
 ) -> PostResult:
     """
     Отправить текст в офис-группу и СКАЗАТЬ ПРАВДУ о результате.
@@ -158,6 +159,10 @@ async def post_to_group(
                       успех: именно на этом выходе молча терялись реплики.
         sender_name:  display-имя для `office:group:history` («Милли»). Пусто —
                       в ленту не пишем (её ведёт кто-то другой).
+        thread_id:    к какому всплеску болталки относится реплика. Едет в
+                      ленту, чтобы транскрипт следующей волны собирался по
+                      ОДНОМУ разговору, а не окном по всей истории офиса.
+                      Пусто — реплика вне нити (обычный ответ, не болталка).
         redis_client: для ленты и для `office:logs`. None — просто без них.
         bot:          каноническое lowercase имя для `log_event`.
 
@@ -261,7 +266,7 @@ async def post_to_group(
     # В общую ленту — только после подтверждённой доставки. Иначе коллеги
     # читают в group_ctx реплику, которой в чате нет, и отвечают на призрак.
     if sender_name:
-        await _ghist.push(redis_client, sender_name, text)
+        await _ghist.push(redis_client, sender_name, text, thread_id=thread_id)
 
     return PostResult(ok=True, kind=SENT, message_id=msg_id, chat_id=chat)
 

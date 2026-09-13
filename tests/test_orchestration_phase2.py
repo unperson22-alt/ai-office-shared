@@ -341,15 +341,31 @@ class TestBanterSecondWave(unittest.TestCase):
     это хор в одну сторону, а не разговор коллег.
     """
 
-    def _run(self, *, max_depth):
+    def _run(self, *, max_depth, pool=None):
         import asyncio
         from ai_office_shared.shared import banter as b
 
         seen = []          # (кому, кто_последним_говорил, глубина)
 
+        # Реплики РАЗНЫЕ и каждая зовёт отвечать. Два требования, оба от
+        # правок 13.09.2026: нить живёт, пока в реплике есть вопрос или
+        # обращение по имени (invites_reply), а дословный повтор уже сказанного
+        # в разговор не пускают (repeats_existing). Одинаковый текст на всех
+        # ботов — это ровно тот хор, который гейт и обязан глушить, на нём
+        # всплеск честно кончается первой волной.
+        _replies = iter([
+            "ага, а ты сам-то что думаешь?",
+            "лежит с утра — логи смотрел кто-нибудь?",
+            "а деплой вчерашний тут при чём?",
+            "и долго это чинить, по-твоему?",
+            "с каких пор это вообще наша забота?",
+            "может проще откатить, нет?",
+        ])
+
         class _Resp:
             status_code = 200
-            def json(self): return {"response": "ага, и не говори"}
+            def __init__(self, text): self._t = text
+            def json(self): return {"response": self._t}
 
         class _Client:
             def __init__(self, *a, **k): pass
@@ -358,7 +374,7 @@ class TestBanterSecondWave(unittest.TestCase):
             async def post(self, url, **kw):
                 j = kw.get("json") or {}
                 seen.append((url, j.get("sender"), j.get("depth")))
-                return _Resp()
+                return _Resp(next(_replies, "и что теперь делать?"))
 
         class R:
             def __init__(self): self.m = set()
@@ -374,7 +390,7 @@ class TestBanterSecondWave(unittest.TestCase):
         try:
             asyncio.run(b.fanout(R(), primary_agent="БИЛЛИ", trigger_text="привет",
                                  sender="Влад", chance=1.0,
-                                 pool=["МИЛЛИ", "ВИЛЛИ", "ТИЛЛИ"]))
+                                 pool=pool or ["МИЛЛИ", "ВИЛЛИ", "ТИЛЛИ"]))
         finally:
             b.httpx.AsyncClient, b.BANTER_MAX_DEPTH, b.asyncio.sleep = orig_c, orig_d, orig_s
         return seen
@@ -394,6 +410,21 @@ class TestBanterSecondWave(unittest.TestCase):
         # Потолок 1 — «перекинулись одной фразой», дальше тишина.
         depths = {d for _, _, d in self._run(max_depth=1)}
         self.assertEqual(depths, {1})
+
+    def test_depth_is_a_ceiling_not_a_length(self):
+        """
+        13.09.2026: раньше всплеск был ровно две волны, потому что длина была
+        записана числом. Теперь число — потолок, а длину решает разговор.
+        """
+        # Пул реального размера: дедуп нити не даёт одному боту говорить
+        # весь всплеск, поэтому на трёх кандидатах разговор физически
+        # заканчивается к третьей волне — и это правильно, а не баг.
+        depths = {d for _, _, d in self._run(
+            max_depth=4,
+            pool=["МИЛЛИ", "ВИЛЛИ", "ТИЛЛИ", "ГОСЛИНГ", "КРИС", "ДИЛЛИ"])}
+        self.assertTrue(max(depths) > 2,
+                        f"нить не пошла дальше второй волны: {depths}")
+        self.assertLessEqual(max(depths), 4, "потолок пробит")
 
     def test_nobody_speaks_twice_in_one_thread(self):
         seen = self._run(max_depth=2)
