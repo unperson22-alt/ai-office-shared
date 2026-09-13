@@ -2380,6 +2380,7 @@
     "anchors": [
       "ai_office_shared/shared/auth.py:office_headers"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-09-13T15:39:42.838785+00:00"
   }
 ]
