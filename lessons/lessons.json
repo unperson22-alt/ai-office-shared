@@ -2446,6 +2446,7 @@
     "anchors": [
       "ai_office_shared/shared/banter.py:should_post_to_group"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-09-14T04:53:51.133285+00:00"
   }
 ]
