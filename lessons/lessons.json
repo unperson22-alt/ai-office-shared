@@ -2427,5 +2427,25 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-09-13T19:53:04.208073+00:00"
+  },
+  {
+    "id": 137,
+    "date": "2026-09-14",
+    "kind": "lesson",
+    "bot": "all office bots + filly-bot",
+    "layer": "group posting semantics",
+    "title": "Seven bots had four different rules for when to post to the group, and the loosest ones leaked private replies into it",
+    "symptom": "Reading the live feed right after the banter rebuild showed a pair of rows carrying `thread: \"\"` and duplicated - the primary agent's reply written twice, once by the bot and once by Filly. Tracing it turned up something larger than a duplicate: on the bot-to-bot path (`handle_bot_task`), where an agent's answer is delivered back to the ORIGINATING chat through `/reply` and is therefore often a private DM, four of the seven bots posted that answer into the shared office group anyway.",
+    "root_cause": "Four rules where there should have been one: billy, kriss, villy and gosling posted unconditionally; milly and tilly gated on `is_banter or notify`; doctor added a third clause, `source not in (ФИЛЛИ, FILLY, DISPATCHER)`, so any caller that was not Filly got a group post. Filly sends no `notify` on the bot-to-bot path precisely because the answer is not meant for the group, and she writes the feed row herself there - correct for the three quiet bots and wrong for the four loud ones, who posted and wrote a second row.",
+    "why_architecture": "Each gate was written where a bot's own behaviour was being fixed, and each was locally reasonable; nothing ever compared them. The caller then had to know seven different habits to predict who would post, which is not knowledge a caller can hold - so Filly's feed write was correct for some callees and duplicating for others, and nobody could see that from either side. The privacy consequence stayed hidden because it only shows on a path (DM forwarded to a bot, routed onward) that nobody watches in the group.",
+    "fix": "One rule in the package: `banter.should_post_to_group(task_data)` - post if this is banter OR the caller explicitly asked (`notify`). The default is silence, so whoever wants a line in the group says so, and the caller no longer needs to remember anybody's habits. All seven bots call it; doctor's `source` clause is gone; the three formerly unconditional bots gained the `_res is None` branch the gated ones already had, so a closed gate logs an ordinary MSG_OUT about the HTTP answer instead of crashing on a None result. Filly's feed write on the bot-to-bot path is now explicit about WHY it is hers (the answer goes to a DM, the bot stays silent) and carries the burst thread. `is_banter`, `depth_of` and `thread_of` were hardened to accept an empty payload - the new function exposed that `is_banter(None)` raised.",
+    "status": "fixed",
+    "prevention": "A decision made independently in seven places is not a policy, it is seven habits that will disagree - and the disagreement surfaces as a defect in whatever depends on predicting them, not where the habits live. When several components answer the same question, put the question in one function and let them call it. Default to the quieter behaviour for anything that publishes: an answer that should have been private and reaches a shared channel cannot be taken back, while a missing group post is visible immediately and costs one retry. And verify a rule like this by executing every call path against every implementation - the bots agreed on the banter path all along, which is exactly why the disagreement on the other two went unnoticed.",
+    "cause": "four independently written posting gates instead of one shared rule",
+    "tag": "group-output",
+    "anchors": [
+      "ai_office_shared/shared/banter.py:should_post_to_group"
+    ],
+    "posted_to_group": false
   }
 ]

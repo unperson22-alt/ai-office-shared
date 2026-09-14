@@ -136,6 +136,42 @@ class TestFeedCarriesTheThread(unittest.TestCase):
         self.assertEqual(len(run(read(r, 10))), 1)
 
 
+class TestOnePostingRule(unittest.TestCase):
+    """
+    Постить в группу — одно правило на всех семи ботов.
+
+    Правил было четыре (замер по живой ленте 14.09.2026): безусловно у Билли,
+    Крисс, Вилли и Гослинга; `is_banter or notify` у Милли и Тилли; у Доктора
+    ещё и `source not in (ФИЛЛИ...)`. На пути «бот→Филли→бот» ответ уходит в
+    ЛИЧКУ через /reply, и ленту там пишет Филли — а четверо безусловных всё
+    равно постили в группу и писали ленту ещё раз. Строка задваивалась, а
+    личный разговор протекал в общий чат.
+    """
+
+    def test_banter_always_posts(self):
+        self.assertTrue(b.should_post_to_group({"source": "BANTER"}))
+
+    def test_explicit_notify_posts(self):
+        self.assertTrue(b.should_post_to_group({"notify": True}))
+
+    def test_default_is_silence(self):
+        """
+        Умолчание — НЕ постить. Кто хочет реплику в группе, говорит об этом;
+        иначе вызывающий обязан помнить привычки каждого бота наизусть.
+        """
+        for payload in ({}, {"source": "ФИЛЛИ"}, {"notify": False}, None):
+            with self.subTest(payload=payload):
+                self.assertFalse(b.should_post_to_group(payload))
+
+    def test_a_foreign_source_alone_does_not_post(self):
+        """Третий вариант Доктора: чужой source постить не повод."""
+        self.assertFalse(b.should_post_to_group({"source": "КРИСС"}))
+
+    def test_banter_wins_over_an_explicit_no(self):
+        """source=BANTER значит «одна строка в группу» — notify тут не судья."""
+        self.assertTrue(b.should_post_to_group({"source": "BANTER", "notify": False}))
+
+
 class TestInvitesReply(unittest.TestCase):
     """
     Длину всплеска решает реплика, а не константа. Признаки — про форму:
