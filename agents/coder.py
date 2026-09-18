@@ -5,6 +5,7 @@ coder.py — агент Кодер (Cilly)
 
 import asyncio
 import os
+import re
 import sys
 import json
 import time
@@ -170,17 +171,45 @@ SELF_REPO       = "ai-office-shared"
 SELF_SERVICE_ID = os.getenv("SELF_SERVICE_ID", "").strip()
 
 
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _valid_service_id(value: str | None) -> str | None:
+    """service_id или None. Форму проверяем, потому что обрезок уже встречался.
+
+    В identity у Марти лежало "8fb51207" — первые восемь hex вместо UUID.
+    Railway на такой id отвечает ошибкой, а вызывающий видит «не найден» и идёт
+    искать опечатку в названии. Отсекаем здесь: «не знаю» — валидный ответ,
+    «наверное, этот» — нет (та же причина, что в shared/build_info.py).
+    """
+    value = (value or "").strip().lower()
+    return value if _UUID_RE.match(value) else None
+
+
 def resolve_service_id(repo: str) -> str | None:
-    """repo → Railway service_id для ЯВНОЙ операции (деплой по просьбе).
+    """Имя бота ИЛИ репозитория → Railway service_id, без похода в сеть.
 
     Не для аудита и не для автохила: те ходят по SERVICES напрямую, и своего
     сервиса там по-прежнему нет. Разделение намеренное — «что чинить самому»
     и «что вообще существует» это два разных вопроса, и 16.08 они были
     склеены в один.
+
+    Источники по убыванию достоверности: свой сервис → SERVICES → реестр
+    identity. Последний добавлен 18.09: в SERVICES нет ни одного бота отделов
+    (marketing-dept, family-dept, medical-dept), и для них ответ был «не найден»
+    ещё до того, как кто-то спросил Railway. Чего нет нигде — ищет
+    railway_get_service_id, у неё есть сеть.
     """
     if repo == SELF_REPO:
-        return SELF_SERVICE_ID or None
-    return next((sid for sid, (r, _) in SERVICES.items() if r == repo), None)
+        return _valid_service_id(SELF_SERVICE_ID)
+    hit = next((sid for sid, (r, _) in SERVICES.items() if r == repo), None)
+    if hit:
+        return hit
+    try:
+        from ai_office_shared.shared.identity import service_id as _identity_sid
+        return _valid_service_id(_identity_sid(repo))
+    except Exception:
+        return None
 
 
 def _render_railway_ids_block() -> str:
@@ -4313,16 +4342,65 @@ async def railway_set_variable(service_id: str, name: str, value: str) -> bool:
 
 
 async def railway_get_service_id(repo_name: str) -> str | None:
-    """Найти service_id по имени сервиса в проекте."""
+    """
+    Найти service_id по имени бота ИЛИ репозитория — во всех проектах, не в одном.
+
+    ИНЦИДЕНТ 18.09.2026. Филли не достучалась до Марти и попросила: «передеплой
+    марти». Имя бота превратилось в репозиторий (target_repo: марти →
+    marketing-dept), здесь искался сервис с именем «marketing-dept», и Влад
+    получил «❌ Сервис marketing-dept не найден ни в SERVICES, ни в Railway.
+    Проверь название репозитория». Название было верным. Неверными были две
+    посылки сразу:
+
+      1. «репозиторий = сервис». В marketing-dept четыре бота (Марти, Лекс,
+         Нэлли, Копи) и четыре сервиса; сервиса с именем репозитория нет.
+         Кандидатов даёт identity.railway_service_names — из URL, по которому
+         офис реально ходит.
+      2. «сервис лежит в PROJECT_ID». Запрос ниже спрашивал ровно один проект.
+         Аудит при этом уже год ходит по ВСЕМ (`_all_office_services`), поэтому
+         офис одновременно видел чужие отделы в отчётах и не находил их при
+         деплое. Промт agentic-петли вдобавок обещал, что redeploy «работает для
+         ЛЮБОГО отдела» — обещание держалось на функции, которая этого не умела.
+
+    Порядок: сначала свой проект (один дешёвый запрос, покрывает 13 ботов из
+    16), потом все проекты. environmentId дальше резолвит resolve_env_id, он
+    кросс-проектный с самого начала.
+    """
+    try:
+        from ai_office_shared.shared.identity import railway_service_names
+        wanted = railway_service_names(repo_name) or [repo_name]
+    except Exception:
+        wanted = [repo_name]
+
     data = await railway_graphql(
         """query($id: String!) {
              project(id: $id) { services { edges { node { id name } } } }
            }""",
         {"id": PROJECT_ID}
     )
-    for edge in ((data.get("data") or {}).get("project") or {}).get("services", {}).get("edges") or []:
-        if edge["node"]["name"] == repo_name:
-            return edge["node"]["id"]
+    here = {edge["node"]["name"]: edge["node"]["id"]
+            for edge in ((data.get("data") or {}).get("project") or {})
+            .get("services", {}).get("edges") or []}
+    for name in wanted:
+        if name in here:
+            return here[name]
+
+    # Свой проект не дал ответа — спрашиваем остальные. Отдельным запросом, а не
+    # вместо первого: он тяжелее, а для большинства ботов не нужен вовсе.
+    try:
+        all_data = await railway_graphql(
+            "{ projects { edges { node { services { edges { node { id name } } } } } } }")
+    except Exception as e:
+        logger.warning("[railway] кросс-проектный поиск %s не удался: %s", repo_name, e)
+        return None
+    everywhere: dict[str, str] = {}
+    for pe in ((all_data.get("data") or {}).get("projects") or {}).get("edges") or []:
+        for se in (pe["node"].get("services") or {}).get("edges") or []:
+            everywhere.setdefault(se["node"]["name"], se["node"]["id"])
+    for name in wanted:
+        if name in everywhere:
+            logger.info("[railway] %s найден вне PROJECT_ID как %s", repo_name, name)
+            return everywhere[name]
     return None
 
 async def railway_get_variables(service_id: str) -> dict:
@@ -5348,12 +5426,25 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
         if not repo:
             await reply_func("❓ Укажи какой сервис задеплоить")
             return
-        service_id = resolve_service_id(repo)
+        # Кого просили передеплоить — спрашиваем у ТЕКСТА, а не только у repo.
+        # 18.09 «передеплой марти» превратилось в repo=marketing-dept (в этой
+        # монорепе четыре бота), и дальше искался несуществующий сервис с именем
+        # репозитория. Имя бота — более точная цель, чем его репозиторий, и
+        # терять его по дороге нельзя.
+        target = repo
+        try:
+            from ai_office_shared.shared.target_repo import bots_named_in
+            named = bots_named_in(message_text)
+            if len(named) == 1:
+                target = named[0]
+        except Exception:
+            pass
+        service_id = resolve_service_id(target) or resolve_service_id(repo)
         if not service_id:
-            # Имя на Railway может не совпадать с именем репозитория — тогда
-            # спрашиваем Railway. Тот же фолбэк стоит в create_bot и в четырёх
-            # ветках аудита.
-            service_id = await railway_get_service_id(repo)
+            # Имя на Railway может не совпадать ни с именем бота, ни с именем
+            # репозитория — тогда спрашиваем Railway (он ищет по всем проектам
+            # и по всем кандидатам из identity.railway_service_names).
+            service_id = await railway_get_service_id(target)
         if not service_id:
             if repo == SELF_REPO:
                 # Свой случай отдельный: дело не в опечатке, а в незаданной
@@ -5367,9 +5458,22 @@ async def handle_natural_language(message_text: str, chat_id: int, reply_func, h
                     "SELF_SERVICE_ID у меня и в SILLI_SERVICE_ID у watchdog-bot "
                     "— у него сейчас тот же мёртвый id.")
                 return
+            # Что именно спрашивали у Railway — часть ответа. Прежний текст
+            # («проверь название репозитория») советовал искать опечатку там,
+            # где её не было: 18.09 репозиторий был назван верно, а сервиса с
+            # таким именем не существует в принципе. Провал обязан называть
+            # того, кто упал, и чем именно (инвариант 8).
+            try:
+                from ai_office_shared.shared.identity import railway_service_names
+                tried = ", ".join(railway_service_names(target) or [target])
+            except Exception:
+                tried = target
             await reply_func(
-                f"❌ Сервис {repo} не найден ни в SERVICES, ни в Railway. "
-                f"Проверь название репозитория.")
+                f"❌ Не нашёл сервис для «{target}» в Railway.\n"
+                f"Искал по именам: {tried} — во всех проектах, видимых токену.\n"
+                f"В SERVICES его тоже нет. Если сервис существует — его имя в "
+                f"Railway отличается от всех перечисленных; скажи его, либо "
+                f"положи service_id в identity.BOTS.")
             return
         await reply_func(f"🔄 Деплою {repo}...")
         ok = await redeploy_service(service_id)

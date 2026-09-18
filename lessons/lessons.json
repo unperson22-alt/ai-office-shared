@@ -2448,5 +2448,63 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-09-14T04:53:51.133285+00:00"
+  },
+  {
+    "id": 138,
+    "date": "2026-09-18",
+    "kind": "lesson",
+    "bot": "filly-bot",
+    "layer": "telegram intake",
+    "title": "Filly listened for message.text only, so every forwarded post with media was dropped before routing existed",
+    "symptom": "Vlad forwarded a CMO job ad into the office - a channel post with a video and a caption - and asked right after it: «Слышите, а мы можем такое?». The question reached Billy; the ad reached nobody. Four bots answered «скидывай, посмотрим что за вакансия» to something that had already been sent, twice. Vlad's report was «боты не понимают что я им скидываю». office:logs for that minute holds three route_decision rows for four messages, and nothing at all for the fourth.",
+    "root_cause": "The handler was registered on `(filters.TEXT | filters.VOICE) & ~filters.COMMAND`. `filters.TEXT` is true only when `message.text` is filled; a message carrying media keeps its text in `message.caption` and leaves `text` empty. The update therefore never reached `handle_message` - not a routing failure, not a model failure: there was no message as far as Filly was concerned. `handle_message` also read `update.message.voice` before checking that `update.message` exists, so an edited message raised AttributeError inside the background webhook task, where nothing but stderr sees it.",
+    "why_architecture": "The office already had this exact lesson written down: shared/media.py exists since 2026-07-25 for «кинул картинку — а ты молчишь», carries IMAGE_FILTER and the rule НИКОГДА не молчим. Every bot that reads images was wired to it. Filly was not - and Filly is the single point every group message passes through, so the one component that could make the rule office-wide was the one component exempt from it. The failure mode is worse than a wrong answer: a dropped update writes no log and no error, so «bot did not see it» and «bot had nothing to say» are indistinguishable, and the investigation starts by looking for a defect in the bots.",
+    "fix": "Intake is now `TEXT | CAPTION | VOICE | media.IMAGE_FILTER`. `incoming_text(message)` returns (text, attachment kind) reading `text` OR `caption`, so a caption is routed like any other message. An attachment with no text at all is not routable, so it gets a short honest answer instead of silence plus a `msg_without_text` row in office:logs. What goes to the agent carries a note naming the attachment and saying it is not transferable over HTTP - staying quiet about it lets the bot answer as if nothing were attached. `handle_message` returns early when `update.message` is None. tests/test_intake.py pins both directions, including the reverse regression: that same message is rejected by the old filter.",
+    "status": "fixed",
+    "prevention": "A shared module that encodes a rule does not apply the rule - only its callers do, and the caller most worth checking is the one every request passes through. When adding such a module, list who must call it and verify each one, rather than assuming adoption spreads. Separately: an input path that can drop a message must log the drop. Silence is the one failure that cannot be told apart from correct behaviour, and it sends the next investigation to the wrong layer.",
+    "cause": "handler filter matched message.text only; caption-bearing updates never reached the router",
+    "tag": "input-handling",
+    "anchors": [
+      "ai_office_shared/shared/media.py:extract_image"
+    ],
+    "posted_to_group": false
+  },
+  {
+    "id": 139,
+    "date": "2026-09-18",
+    "kind": "lesson",
+    "bot": "marketing-dept (marty)",
+    "layer": "office RPC auth",
+    "title": "Marty kept a private second door on /task, so every office call got 401 and the office read it as a dead service",
+    "symptom": "Filly routed the job ad to Marty and told the chat «🔧 Марти не отвечает — Силли уже поднимает». Nothing needed raising: marty-bot answered 200 on /health throughout. office:logs: `route_miss reason=http_401 target=марти`, then `auto_heal target=марти http=202`, and Cilly replied «❌ Сервис marketing-dept не найден ни в SERVICES, ни в Railway» - so the user saw two unrelated-looking failures for one cause.",
+    "root_cause": "`handle_task` checked `X-Secret-Token == HTTP_SECRET` against Marty's own env value, while Filly sends the office's legacy secret via shared/auth.office_headers. The two values differ, so every office call was rejected. Measured before the fix: `GET /task` returns 405, not 401, which rules out office_auth_middleware and points at the handler's own check.",
+    "why_architecture": "This is lesson #134 one bot over. A shared secret that lives in each service's private variable is not shared - it is N values that drift, and the drift is only observable as a 401, which is indistinguishable from a service being down. So the office's reaction to it was to redeploy a healthy service. Marty also has no path of his own into the group (his ai-office-shared pin, bf3fb46 from 2026-06-29, predates group_post.py), so even an authorised answer would have died inside Filly.",
+    "fix": "`/task` now accepts either office credential: `shared.auth.check_office_token` first (the mesh token, and the office-wide Phase A posture, so Marty closes together with everyone else when OFFICE_RPC_STRICT is turned on instead of staying outside on his own variable), then the legacy `X-Secret-Token`. МАРТИ added to Filly's AGENTS_RETURN_RESPONSE so she publishes his answer, as she does for Ellis. Two more defects found in the same file and fixed: `process()` called the BLOCKING `claude_sync.messages.create` inside a coroutine, freezing the whole process including aiohttp for the length of a Sonnet generation while Filly's /task timeout is 25s - so Marty stopped answering exactly when he was working; and `group_ctx`/`sender`, which Filly always sends, were discarded, so he answered a line out of a conversation without seeing the conversation. Added GET /version - there was no way to tell whether a deploy had landed.",
+    "status": "fixed",
+    "prevention": "One entrance, one gate. A service that sits behind the office middleware must not also keep a private check: the two will disagree, and the disagreement reads as an outage. When a bot reports a peer as down, check the peer's /health before redeploying it - `route_miss reason=http_4xx` is an authorisation fact, not a liveness fact, and treating the two as one makes the office repair healthy services. Also: a blocking client left next to an async one will be used again, so remove it rather than documenting it.",
+    "cause": "per-bot private HTTP secret diverged from the office's shared one",
+    "tag": "auth",
+    "anchors": [
+      "ai_office_shared/shared/auth.py:office_headers"
+    ],
+    "posted_to_group": false
+  },
+  {
+    "id": 140,
+    "date": "2026-09-18",
+    "kind": "decision",
+    "bot": "cilly-bot",
+    "layer": "railway service resolution",
+    "title": "A bot's Railway service is resolved from the registry and searched across all projects, not derived from its repository name",
+    "decision": "Deploy-side lookups resolve a SERVICE from the bot, using candidate names recorded in identity (the host label of the URL the office actually calls, then the repository), and search every Railway project visible to the token - not just PROJECT_ID.",
+    "why": "«One repo, one service» held while every bot had its own repository and is false for departments: marketing-dept carries four bots - Marty, Lex, Nelli, Copy - and four services, none of them named after the repo. On 2026-09-18 Filly asked Cilly to redeploy Marty, target_repo turned «марти» into «marketing-dept», and the lookup asked Railway for a service by that name. Answer: «❌ Сервис marketing-dept не найден ни в SERVICES, ни в Railway. Проверь название репозитория» - advice to hunt for a typo that did not exist. The second half was as wrong: railway_get_service_id queried project(PROJECT_ID) alone, while the audit has long walked ALL projects (_all_office_services), so the office simultaneously reported other departments' services as failing and could not find them to deploy. The agentic prompt meanwhile promised redeploy «работает для ЛЮБОГО отдела» - a claim resting on a function that could not do it. Candidates are facts about the bot, never guesses: an invented name can match somebody else's live service, and then «redeploy Marty» redeploys a stranger and reports success.",
+    "rejected": "Adding the marketing-dept services to SERVICES - that list is what the audit repairs AUTOMATICALLY, and other departments are deliberately not repaired blind. Hardcoding Marty's service_id - the registry held «8fb51207», eight hex characters instead of a UUID, which is exactly the plausible-wrong-id failure build_info.py was written against; it is now None, and _valid_service_id rejects anything that is not a UUID. Keeping the single-project query and asking Vlad to rename the service - that trades a code fix for a permanent rule nobody would remember.",
+    "revisit_if": "The token stops seeing other projects, or the cross-project query becomes slow enough to matter: the single-project query still runs first and answers for 13 of 16 bots, so the fallback can be made conditional rather than removed.",
+    "tag": "railway",
+    "anchors": [
+      "ai_office_shared/shared/identity.py:railway_service_names",
+      "agents/coder.py:resolve_service_id"
+    ],
+    "posted_to_group": false
   }
 ]

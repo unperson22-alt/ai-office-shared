@@ -42,7 +42,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 CODER = os.path.join(ROOT, "agents", "coder.py")
-WANT = ("SERVICES", "SELF_REPO", "SELF_SERVICE_ID", "resolve_service_id")
+WANT = ("SERVICES", "SELF_REPO", "SELF_SERVICE_ID", "_UUID_RE",
+        "_valid_service_id", "resolve_service_id")
 
 
 def load_from_coder():
@@ -57,7 +58,7 @@ def load_from_coder():
             names = [t.id for t in node.targets if isinstance(t, ast.Name)]
             if any(n in WANT for n in names):
                 picked.append(node)
-    ns = {"os": os}
+    ns = {"os": os, "re": re}
     exec(compile(ast.Module(body=picked, type_ignores=[]), CODER, "exec"), ns)
     missing = [n for n in WANT if n not in ns]
     if missing:
@@ -74,7 +75,7 @@ class TestResolveServiceId(unittest.TestCase):
         # Своё имя обрабатывается отдельно от SERVICES — независимо от того,
         # задана переменная или нет. Значение проверяют тесты ниже.
         self.assertEqual(self.ns["resolve_service_id"]("ai-office-shared"),
-                         self.ns["SELF_SERVICE_ID"] or None)
+                         self.ns["_valid_service_id"](self.ns["SELF_SERVICE_ID"]))
 
     def test_unset_variable_gives_honest_none(self):
         # Пусто → None, а deploy отвечает «не задан SELF_SERVICE_ID» и говорит
@@ -82,6 +83,24 @@ class TestResolveServiceId(unittest.TestCase):
         ns, _ = load_from_coder()
         ns["SELF_SERVICE_ID"] = ""
         self.assertIsNone(ns["resolve_service_id"]("ai-office-shared"))
+
+    def test_truncated_id_is_rejected_not_passed_on(self):
+        # 18.09.2026: в identity у Марти лежало "8fb51207" — первые восемь hex
+        # вместо UUID. Railway на такой id отвечает ошибкой, а вызывающий видит
+        # «не найден» и уходит искать опечатку в названии репозитория. Обрезок
+        # обязан отсекаться там же, где проверяется свой id.
+        valid = self.ns["_valid_service_id"]
+        self.assertIsNone(valid("8fb51207"))
+        self.assertIsNone(valid("efa6bd21-91d8-467f-8250"))
+        self.assertIsNone(valid(None))
+        self.assertIsNone(valid("   "))
+        self.assertEqual(valid("EFA6BD21-91D8-467F-8250-60F8A3853791"),
+                         "efa6bd21-91d8-467f-8250-60f8a3853791")
+
+    def test_marty_has_no_plausible_wrong_id_left(self):
+        # Тот самый обрезок не должен вернуться в реестр.
+        from ai_office_shared.shared.identity import service_id as _sid
+        self.assertIsNone(self.ns["_valid_service_id"](_sid("марти")))
 
     def test_no_hardcoded_id_in_source(self):
         # Гейт против возврата зашитого дефолта. efa6bd21… удалён 30.05.2026:
@@ -133,7 +152,7 @@ class TestResolveServiceId(unittest.TestCase):
         m = re.search(r"elif intent == \"deploy\":(.{0,900})", self.src, re.S)
         self.assertIsNotNone(m, "ветка deploy не найдена — тест устарел")
         body = m.group(1)
-        self.assertIn("resolve_service_id(repo)", body)
+        self.assertIn("resolve_service_id(", body)
         self.assertNotIn("SERVICES.items()", body,
                          "deploy снова ходит в SERVICES напрямую")
 
