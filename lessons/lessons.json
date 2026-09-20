@@ -2509,5 +2509,26 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-09-20T08:18:22.036599+00:00"
+  },
+  {
+    "id": 141,
+    "date": "2026-09-20",
+    "kind": "lesson",
+    "bot": "cilly-bot",
+    "layer": "bug lessons publishing",
+    "title": "One message template served two kinds of entry, so every decision was published as a lesson with five question marks",
+    "symptom": "Vlad opened Bug Lessons and saw «🐛 Lesson #140 — A bot's Railway service is resolved from the registry...» followed by Symptom: ?, Root cause: ?, Fix: ?, Prevention: ?, Status: ? - a published entry with no content at all, sitting directly under the fully-formed #139.",
+    "root_cause": "#140 is not broken: it is `kind: \"decision\"`, and lessons/SCHEMA.md states it outright - «Полей symptom/root_cause/fix у решения НЕТ». The defect was in `_format_lesson`, which had a single template built from the lesson fields and filled every absent one through `.get(..., \"?\")`. A decision has none of them, so all five rendered as «?» and the header called it a Lesson. This had fired for EVERY decision in the file - #111, #112, #113, #132, #140 - since the second kind of entry was introduced.",
+    "why_architecture": "The schema grew a second kind; the renderer did not. Nothing connected the two: `kind` was written, stored and queried, but never read on the way out. And the failure could only be caught by eye - publishing succeeded, Telegram accepted the message, `posted_to_group` was set, and the office's own accounting recorded a delivered lesson. A gate that reports success while delivering nothing is invariant #4, and it survived four repeats because no test rendered a real entry from the file.",
+    "fix": "`_format_lesson` branches on `_entry_kind`: a decision prints 📌 Decision with decision/why/rejected/revisit_if and no Status line (a decision is not «fixed», it is taken); a lesson keeps its shape exactly, including the legacy `cause` fallback and the missing-`kind`-means-lesson rule for #1-110. `publish_pending_lessons` now refuses an entry whose body is entirely empty and leaves it pending WITHOUT setting the flag, so it goes out when the text is written. The five already-published decisions are re-sent with `repost_lesson`; lessons.json needs no rewrite for that.",
+    "prevention": "When a record gains a second kind, the renderer is part of the schema - add the branch in the same change, and test it against the REAL file rather than a fixture. tests/test_lesson_format_by_kind.py does exactly that: it asserts the file still holds both kinds (so the test cannot quietly lose its subject) and that no field of any live entry renders as a bare «?». Counting «?» characters is not enough - the first version of that test flagged #34, whose body is complete and whose prose simply contains a question mark; the check has to look for a label followed by an empty value.",
+    "status": "fixed",
+    "tag": "publishing",
+    "anchors": [
+      "agents/coder.py:_format_lesson",
+      "agents/coder.py:_body_is_empty",
+      "agents/coder.py:publish_pending_lessons"
+    ],
+    "posted_to_group": false
   }
 ]

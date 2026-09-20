@@ -1739,19 +1739,58 @@ async def build_precise_dev_task(analysis: dict, source_code: str, repo: str, af
 # ── Lesson & notifications ─────────────────────────────────────────────────────
 BUG_LESSONS_CHAT = -5197140411  # Telegram-группа Bug Lessons — единая точка публикации уроков
 
+# Тела записей по видам. lessons/SCHEMA.md: «Полей symptom/root_cause/fix у
+# решения НЕТ» — поэтому у каждого вида свой набор, а не один шаблон на оба.
+_LESSON_BODY = (("👁 Symptom", "symptom"), ("🔍 Root cause", "root_cause"),
+                ("✅ Fix", "fix"), ("🛡 Prevention", "prevention"))
+_DECISION_BODY = (("🧭 Decision", "decision"), ("🤔 Why", "why"),
+                  ("🚫 Rejected", "rejected"), ("🔁 Revisit if", "revisit_if"))
+
+
+def _entry_kind(l: dict) -> str:
+    """Вид записи. Отсутствующий kind = lesson (так живут записи #1–110)."""
+    return "decision" if l.get("kind") == "decision" else "lesson"
+
+
+def _body_is_empty(l: dict) -> bool:
+    """Ни одного заполненного поля своего вида — печатать нечего.
+
+    Нужен публикатору: сообщение из одних «?» хуже отсутствующего, потому что
+    оно выглядит как состоявшаяся публикация и закрывает запись флагом.
+    """
+    fields = _DECISION_BODY if _entry_kind(l) == "decision" else _LESSON_BODY
+    return not any((l.get(k) or "").strip() for _, k in fields)
+
+
 def _format_lesson(l: dict) -> str:
-    """Единый формат сообщения урока для Bug Lessons."""
-    status_emoji = {"fixed": "✅", "still_relevant": "⚠️", "outdated": "🗄", "documented": "📝"}
-    se = status_emoji.get(l.get("status", ""), "❓")
-    return (
-        f"🐛 Lesson #{l.get('id')} — {l.get('title', '?')}\n\n"
-        f"📍 {l.get('bot', '?')} | {l.get('layer', '?')}\n\n"
-        f"👁 Symptom:\n{l.get('symptom', '?')}\n\n"
-        f"🔍 Root cause:\n{l.get('root_cause', l.get('cause', '?'))}\n\n"
-        f"✅ Fix:\n{l.get('fix', '?')}\n\n"
-        f"🛡 Prevention:\n{l.get('prevention', '?')}\n\n"
-        f"{se} Status: {l.get('status', '?')}"
-    )
+    """Сообщение записи для Bug Lessons — СВОИМ шаблоном на каждый вид.
+
+    🔴 До 20.09.2026 шаблон был один, с полями урока, и `.get(..., "?")`
+    подставлял вопрос в каждое отсутствующее поле. Решение (`kind: "decision"`)
+    не имеет ни одного из них, поэтому уходило в группу как «Lesson #140» с
+    пятью «?» подряд. Так опубликовались ВСЕ пять решений файла: #111, #112,
+    #113, #132, #140 — дефект жил с появления второго вида записей и виден был
+    только глазами, потому что публикация при этом отрабатывала успешно.
+
+    Исправленные записи перепосылаются `repost_lesson` — переписывать
+    lessons.json для этого не нужно.
+    """
+    kind = _entry_kind(l)
+    head = "📌 Decision" if kind == "decision" else "🐛 Lesson"
+    fields = _DECISION_BODY if kind == "decision" else _LESSON_BODY
+    parts = [f"{head} #{l.get('id')} — {l.get('title', '?')}\n\n"
+             f"📍 {l.get('bot', '?')} | {l.get('layer', '?')}\n"]
+    for label, key in fields:
+        val = l.get(key) or (l.get("cause") if key == "root_cause" else None)
+        if val:
+            parts.append(f"\n{label}:\n{val}\n")
+    if kind == "lesson":
+        # Статус есть только у урока: решение не «починено», оно принято.
+        status_emoji = {"fixed": "✅", "still_relevant": "⚠️",
+                        "outdated": "🗄", "documented": "📝"}
+        se = status_emoji.get(l.get("status", ""), "❓")
+        parts.append(f"\n{se} Status: {l.get('status', '?')}")
+    return "".join(parts).rstrip()
 
 
 async def publish_pending_lessons(reply_func=None, limit: int = 100) -> int:
@@ -1785,6 +1824,17 @@ async def publish_pending_lessons(reply_func=None, limit: int = 100) -> int:
     now_iso = _dt.now(_tz.utc).isoformat()
     for lesson in capped:
         try:
+            # Пустое тело не публикуем. Сообщение из одних «?» хуже
+            # отсутствующего: оно выглядит как состоявшаяся публикация, закрывает
+            # запись флагом навсегда и становится видно только человеку в группе
+            # (так прошли все пять решений — #111, #112, #113, #132, #140).
+            # Флаг НЕ ставим: запись должна остаться pending и уйти, когда текст
+            # допишут (инвариант «гейт не отчитывается пройдено, не исполнившись»).
+            if _body_is_empty(lesson):
+                logger.error("[lessons] #%s (%s): тело пустое — не публикую",
+                             lesson.get("id"), _entry_kind(lesson))
+                failed.append((lesson.get("id"), "пустое тело записи"))
+                continue
             # Урок #91 форматируется в 5035 символов при лимите Telegram 4096:
             # 12.08 он встал первым в очереди и запер за собой всё остальное на
             # одиннадцать дней. Режем по абзацам, а не обрезаем: потерянный хвост
