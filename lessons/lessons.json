@@ -2529,6 +2529,7 @@
       "agents/coder.py:_body_is_empty",
       "agents/coder.py:publish_pending_lessons"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-09-20T09:05:28.218838+00:00"
   }
 ]
