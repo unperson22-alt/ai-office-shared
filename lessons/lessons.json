@@ -2550,6 +2550,7 @@
       "agents/coder.py:monitor_group_responses",
       "agents/coder.py:cmd_relink_lesson"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-09-20T13:34:06.647899+00:00"
   }
 ]
