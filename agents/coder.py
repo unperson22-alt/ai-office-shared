@@ -16,6 +16,7 @@ from agents.weekly_report import register_weekly_handlers
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import (
     Message, MessageReactionUpdated, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton,
@@ -6529,7 +6530,26 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
 # ── Telegram handlers ──────────────────────────────────────────────────────────
 @dp.message(F.chat.type.in_({"group", "supergroup"}))
 async def monitor_group_responses(message: Message):
-    """Следит за всеми ответами ботов в группе — анализирует через Haiku есть ли проблема."""
+    """Следит за всеми ответами ботов в группе — анализирует через Haiku есть ли проблема.
+
+    🔴 Этот обработчик ловит ЛЮБОЕ сообщение группы и стоит на 1100 строк раньше
+    всех команд, а aiogram отдаёт событие ПЕРВОМУ подошедшему и дальше не несёт.
+    Поэтому до 20.09.2026 ни одна команда в группе не доходила до своего
+    обработчика — молча, без ответа и без следа в логах.
+
+    Дороже всего это стоило `/relink_lesson`: она ЕДИНСТВЕННАЯ обязана
+    отправляться в группе (id сообщения существует только внутри своего чата),
+    и была недостижима по построению — в группе её съедали здесь, а в личке она
+    сама отвечала «надо в группе». Вместе с ней переставал работать
+    `repost_lesson` для всех уроков, чьи id сообщений не запомнены, то есть для
+    всего архива до 18.09.
+
+    Пропускаем дальше ТОЛЬКО команды людей. Не всё подряд: ниже стоит
+    `@dp.message(F.text & ~F.text.startswith("/"))` — обычный разговорный
+    обработчик, и пропусти мы болтовню, Силли начала бы отвечать на каждую
+    реплику в каждой группе. Буфер наполняется в любом случае: он нужен, чтобы
+    найти вопрос человека перед ответом бота.
+    """
     text = message.text or ""
     sender = (message.from_user.first_name or "").lower()
     is_bot = message.from_user.is_bot
@@ -6539,6 +6559,8 @@ async def monitor_group_responses(message: Message):
 
     # Анализируем только ответы ботов (не Cilly самого)
     if not is_bot:
+        if text.startswith("/"):
+            raise SkipHandler()
         return
     if message.from_user.id == bot.id:
         return

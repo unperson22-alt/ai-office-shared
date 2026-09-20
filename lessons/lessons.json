@@ -2531,5 +2531,25 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-09-20T09:05:28.218838+00:00"
+  },
+  {
+    "id": 142,
+    "date": "2026-09-20",
+    "kind": "lesson",
+    "bot": "cilly-bot",
+    "layer": "telegram dispatch",
+    "title": "A group-wide monitor registered before every command swallowed them all, and the one command that must be sent in a group was unreachable by construction",
+    "symptom": "Vlad replied to a lesson message in Bug Lessons with `/relink_lesson 111` and got nothing back - no answer, no error, no log line. The command that had just been recommended to him, by Cilly herself, in her own error text.",
+    "root_cause": "`monitor_group_responses` is declared `@dp.message(F.chat.type.in_({\"group\",\"supergroup\"}))` and sits ~1100 lines above every command handler. aiogram hands an update to the FIRST handler whose filters pass and stops there; the monitor did a plain `return` for human messages, which counts as handled. So NO command worked in any group, silently. It cost most on `/relink_lesson`, the one command that MUST be sent in a group - the id of a message exists only inside its own chat, and the handler rightly refuses anywhere else. In the group the monitor ate it; in DM it refused itself. Unreachable by construction, and with it `repost_lesson` was unusable for every lesson whose message ids were not remembered - the whole archive before 18.09.",
+    "why_architecture": "An observer was written as a consumer. Nothing marked the monitor as non-terminal, and nothing tested that a command sent in a group arrives anywhere, so the gap stayed invisible: no exception, no log, no failing test - only a person typing a command into silence. The two halves were also written far apart and never read together; the handler that requires a group and the handler that eats groups are 1100 lines away from each other.",
+    "fix": "The monitor raises `SkipHandler()` for human messages that start with `/`, after buffering them. Only commands: a `@dp.message(F.text & ~F.text.startswith(\"/\"))` conversational handler sits below it, and skipping ordinary talk would make Cilly answer every remark in every group - a far worse failure than the one being fixed. Bot messages are untouched, the monitor analyses those itself.",
+    "prevention": "A handler that observes must not consume. When adding a broad filter, ask what it is registered BEFORE - in aiogram the answer is the whole difference between watching and swallowing. And test the route, not the function: tests/test_group_commands_reach_handlers.py drives a real Dispatcher with the real monitor extracted from coder.py, asserting both that a command gets through AND that chatter still does not. Both directions are needed; a fix that only checked the first would have shipped the worse bug.",
+    "status": "fixed",
+    "tag": "telegram",
+    "anchors": [
+      "agents/coder.py:monitor_group_responses",
+      "agents/coder.py:cmd_relink_lesson"
+    ],
+    "posted_to_group": false
   }
 ]
