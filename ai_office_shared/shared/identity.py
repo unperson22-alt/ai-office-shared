@@ -179,7 +179,11 @@ BOTS: dict[str, dict] = {
     "марти": {
         "display":    "Марти",
         "repo":       "marketing-dept",
-        "service_id": "8fb51207",
+        # Было "8fb51207" — восемь hex вместо UUID, то есть не id, а его начало.
+        # Правдоподобный неверный id хуже пустого: с ним операция уходит в никуда
+        # и возвращает «ок». Пусто → честный отказ. Настоящий id знает Railway;
+        # ищется по имени сервиса (railway_service_names ниже).
+        "service_id": None,
         "aliases":    ["marty", "МАРТИ", "Марти", "MARTY"],
         "role":       "marketing",
         "route_key":  "МАРТИ",
@@ -249,11 +253,83 @@ def display(name: str) -> Optional[str]:
 
 
 def service_id(name: str) -> Optional[str]:
-    """Railway service ID по любому варианту имени."""
+    """Railway service ID по любому варианту имени. None — если он неизвестен."""
     canon = canonical(name)
     if canon is None:
         return None
     return BOTS[canon]["service_id"]
+
+
+# ── Репозиторий ≠ сервис ──────────────────────────────────────────────────────
+# ИНЦИДЕНТ 18.09.2026. Филли не достучалась до Марти и попросила Силли поднять
+# его: «передеплой марти». Силли перевела имя бота в репозиторий (target_repo:
+# марти → marketing-dept) и дальше искала в Railway сервис с ИМЕНЕМ
+# «marketing-dept». Такого нет и быть не может: в этом репозитории живут четыре
+# бота — Марти, Лекс, Нэлли, Копи, — и у каждого свой сервис. Ответ Влад увидел
+# дословно: «❌ Сервис marketing-dept не найден ни в SERVICES, ни в Railway.
+# Проверь название репозитория». Название репозитория было верным — неверным был
+# сам вопрос.
+#
+# «Один репозиторий — один сервис» держалось, пока боты жили по одному на репо.
+# Для отделов оно неверно, и склейка repo↔service делает недостижимым любого
+# бота из монорепы. Имя сервиса выводим из того, что о боте точно известно, —
+# из его URL: `https://marty-bot-production.up.railway.app` → `marty-bot`.
+_URL_SUFFIXES = ("-production", "-staging")
+
+
+def _service_name_from_url(bot_url: str) -> Optional[str]:
+    """`https://marty-bot-production.up.railway.app` → `marty-bot`."""
+    if not bot_url:
+        return None
+    host = bot_url.split("://", 1)[-1].split("/", 1)[0]
+    label = host.split(".", 1)[0]
+    if not label:
+        return None
+    # Railway иногда добавляет хвост от коллизии имён: `ray-bot-production-d754`.
+    parts = label.split("-")
+    for i, part in enumerate(parts):
+        if f"-{part}" in _URL_SUFFIXES or part in ("production", "staging"):
+            label = "-".join(parts[:i])
+            break
+    return label or None
+
+
+def railway_service_names(name: str) -> list[str]:
+    """
+    Имена, под которыми сервис этого бота может быть заведён в Railway.
+
+    Порядок — от самого достоверного к наименее: имя из URL (офис по этому
+    адресу реально ходит, значит домен существует), затем имя репозитория (для
+    ботов, у которых репо и сервис и правда совпадают).
+
+    Кандидатов НЕ придумываем: и то и другое — записанный факт о боте. Угаданное
+    имя опаснее ненайденного: оно может совпасть с ЧУЖИМ живым сервисом, и тогда
+    «передеплой Марти» передеплоит кого-то другого, отчитавшись успехом.
+
+    Принимает и имя бота, и имя репозитория: вызывающему не обязано быть
+    известно, чем именно он располагает.
+    """
+    out: list[str] = []
+
+    def _add(value: Optional[str]) -> None:
+        if value and value not in out:
+            out.append(value)
+
+    canon = canonical(name)
+    if canon:
+        meta = BOTS[canon]
+        _add(_service_name_from_url(meta.get("url") or ""))
+        _add(meta.get("repo"))
+        return out
+
+    # Не бот — значит пришло имя репозитория. Свои же боты этого репо дают
+    # кандидатов; сам репозиторий остаётся последним вариантом.
+    raw = (name or "").strip()
+    for meta in BOTS.values():
+        if meta.get("repo") == raw:
+            _add(_service_name_from_url(meta.get("url") or ""))
+    _add(raw or None)
+    return out
 
 
 def redis_key(name: str, prefix: str, *parts) -> Optional[str]:
