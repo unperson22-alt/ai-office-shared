@@ -48,10 +48,21 @@ class TestServiceNameCandidates(unittest.TestCase):
         for spelling in ("марти", "МАРТИ", "Марти", "marty", "MARTY"):
             self.assertEqual(railway_service_names(spelling)[0], "marty-bot", spelling)
 
-    def test_monorepo_name_yields_all_its_bots(self):
+    def test_monorepo_name_yields_its_own_bots_only(self):
+        # Имя монорепы даёт сервисы ИМЕННО этой монорепы. 26.09.2026 отсюда
+        # ушла Нэлли: её каталог лежал в marketing-dept, но деплоился сервис
+        # nelli-bot из family-dept, копии разошлись, и дубль удалили. Пока
+        # реестр называл её репозиторием marketing-dept, «передеплой марти» мог
+        # получить в кандидаты nelli-bot — то есть чужой живой сервис.
         names = railway_service_names("marketing-dept")
         self.assertIn("marty-bot", names)
-        self.assertIn("nelli-bot", names)
+        self.assertNotIn("nelli-bot", names,
+                         "Нэлли больше не в marketing-dept — её сервис не должен "
+                         "попадать в кандидаты этой монорепы")
+
+    def test_nelli_resolves_through_her_real_repo(self):
+        self.assertEqual(railway_service_names("нэлли")[0], "nelli-bot")
+        self.assertIn("nelli-bot", railway_service_names("family-dept"))
 
     def test_collision_suffix_is_stripped(self):
         # ray-bot-production-d754.up.railway.app → ray-bot, а не ray-bot-production-d754.

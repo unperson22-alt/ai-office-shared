@@ -193,7 +193,12 @@ BOTS: dict[str, dict] = {
     },
     "нэлли": {
         "display":    "Нэлли",
-        "repo":       "marketing-dept",
+        # Было marketing-dept, и это было неверно: Нэлли лежала в ДВУХ
+        # репозиториях сразу, а деплоился сервис nelli-bot из family-dept
+        # (проект family-dept, Root Directory nelli). Копии разошлись — каждую
+        # правку делали дважды и не всегда в обеих, — поэтому 26.09.2026 дубль
+        # в marketing-dept удалён, а исправления из него перенесены сюда.
+        "repo":       "family-dept",
         "service_id": None,
         "aliases":    ["nelli", "НЭЛЛИ", "Нэлли", "NELLI", "нелли", "Нелли"],
         "role":       "marketing",
