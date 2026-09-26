@@ -2612,6 +2612,7 @@
       "ai_office_shared/shared/auth.py:has_office_token",
       "ai_office_shared/shared/auth.py:check_office_token"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-09-26T13:29:53.653162+00:00"
   }
 ]
