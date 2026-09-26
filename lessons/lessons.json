@@ -2592,5 +2592,26 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-09-26T08:46:45.172022+00:00"
+  },
+  {
+    "id": 145,
+    "date": "2026-09-26",
+    "kind": "lesson",
+    "bot": "ellice-bot",
+    "layer": "office RPC auth",
+    "title": "A permissive rollout check, used as a gate, opened four of Ellis's write endpoints to anyone",
+    "symptom": "`POST /send` on ellice-bot-production with no headers at all answered 500 — the handler had been reached — where it used to answer 401. The same held for /send_scheduled, /generate and /mention. `/send` sends a Telegram message as Ellis to an arbitrary chat_id, so an unauthenticated caller could speak in her voice to any chat she is in.",
+    "root_cause": "While merging four duplicated secret checks into one gate (mama-bot #9, 8ab869c), `check_secret` was given an unconditional first branch: `if check_office_token(request): return True`. `check_office_token` returns True for EVERY request while `OFFICE_RPC_TOKEN` is unset — its documented Phase A behaviour. HTTP_SECRET was configured on that service, so the endpoints had genuinely been closed before, and the merge opened them.",
+    "why_architecture": "The shared function answers «блокировать ли выкат», but it is named `check_office_token`, returns a bool, and says True to the question a gate actually asks — «свой ли это запрос». A name like that gets read as permission, and was. Nothing downstream could catch it: compileall and pyflakes see a flawless line, the repository had no test that executed the predicate, and the only claim that the change was safe was the sentence «ничего не ослабляется» in the PR body — written by the same session that wrote the code (invariant 5: the one who did the work does not sign off on it). The identical pattern was introduced in marty/main.py the same week, so this was a reusable trap, not a slip.",
+    "fix": "The predicate now requires the credential to exist: `OFFICE_RPC_TOKEN and check_office_token(request)`; the legacy secret is compared exactly as before 8ab869c. Refusals, and the one remaining open case (neither secret configured — the office's Phase A state), are now logged with the reason instead of being silent. The shared package gained `has_office_token()`, which answers «нет» when the token is unset, and `check_office_token`'s docstring now opens with ⚠️ ЭТО НЕ АУТЕНТИФИКАЦИЯ and names the replacement. Verified in production after the merge: all four endpoints answer 401 without a token, /health still 200, and `GET /version` reports dba0832.",
+    "status": "fixed",
+    "prevention": "Permissiveness of a transitional mode is not evidence of identity, and a function whose True means «не блокируй» must not be spelled like one whose True means «свой». Gate-facing API is now separate from rollout-facing API (`has_office_token` vs `check_office_token`), and three gates guard it: tests/test_office_token_strictness.py asserts the difference between the two functions AND that the warning stays in the docstring; mama-bot's tests/test_http_auth.py executes `check_secret` itself and, in a reverse-regression test, the merged-and-deployed version, which must admit a credential-less caller — a test that would pass on the broken code guards nothing. Separately, mama-bot's pin gate now checks imported NAMES, not only modules: `from ...auth import OFFICE_RPC_TOKEN` absent from the pin kills startup with ImportError exactly as invisibly as lesson #143's ModuleNotFoundError.",
+    "cause": "Phase A permissiveness of check_office_token used as the first pass condition of a bot's own auth gate",
+    "tag": "auth",
+    "anchors": [
+      "ai_office_shared/shared/auth.py:has_office_token",
+      "ai_office_shared/shared/auth.py:check_office_token"
+    ],
+    "posted_to_group": false
   }
 ]
