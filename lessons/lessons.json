@@ -2552,5 +2552,43 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-09-20T13:34:06.647899+00:00"
+  },
+  {
+    "id": 143,
+    "date": "2026-09-26",
+    "kind": "lesson",
+    "bot": "copy-bot (marketing-dept)",
+    "layer": "dependency pinning",
+    "title": "Copy had been unstartable for two months and nobody could tell, because the service was never rebuilt",
+    "symptom": "Minutes after the production environment was finally bound to a branch, copy-bot crashlooped: `File \"/app/main.py\", line 8, in <module> / from ai_office_shared.shared.auth import office_headers` → `ModuleNotFoundError: No module named 'ai_office_shared.shared.auth'`, repeating on every restart.",
+    "root_cause": "The import arrived in `copy/main.py` in July with 3e1be92; the pin stayed `v0.1.14` (b7e2d3b, 10.06), and `shared/auth.py` first exists in bf3fb46 (29.06). The code could never have started on that pin. It showed no sign of it because the service had not been rebuilt since the commit landed — the deploy did not create the defect, it executed it for the first time.",
+    "why_architecture": "Two blind spots lined up. The repo's CI runs `compileall` and `pyflakes`, and neither resolves INSTALLED packages — to both, that import is a flawless line, so the only place the incompatibility could surface was the image build, i.e. production. And the build never ran, because the Railway service had no environment-to-branch binding. A latent build-time break plus a frozen deployment is silent by construction: the longer the pipeline stays broken the more unexecuted breakage accumulates behind it, and fixing the pipeline detonates all of it at once. The same class had already been fixed for Nelli (5a3eb1d) and Copy was missed in that sweep, because the check was a human remembering rather than a gate.",
+    "fix": "Pin raised to bf3fb46 — Marty's and Lex's pin, and Lex carries the identical `auth.office_headers` import while running in prod, so the target was proven rather than guessed. Reproduced both ways before merging: clean venvs built from archives of both revisions reproduce the error verbatim on v0.1.14 and import cleanly on bf3fb46; a third venv with Copy's real dependencies imported both his modules. A gate was added in both departments (`tests/test_shared_pins.py`): for each service it reads the pinned ref from that service's own requirements.txt and asks GitHub which modules exist under ai_office_shared/shared at that ref. Both repos are public, so no secret is needed. The gate was proven in both directions — it fails on the old pin naming exactly what is missing, green on the new one — and it FAILS rather than skips when GitHub is unreachable or the ref does not exist (invariant 4).",
+    "status": "fixed",
+    "prevention": "A service that is never redeployed is not a working service, it is an untested one, and its repository will not tell you which it is. Any pipeline fix — connecting a source, binding a branch, re-enabling auto-deploy — should be treated as a release of everything merged since the pipeline broke, not as a no-op. Separately: a lint that does not resolve imports cannot see a dependency mismatch, so the check has to compare declared pins against actual imports, and it has to run where it can run rather than waiting for the build.",
+    "cause": "import added in July, pin left at a June revision predating the module; never rebuilt, so never executed",
+    "tag": "deployment",
+    "anchors": [
+      "ai_office_shared/shared/build_info.py:service_commit"
+    ],
+    "posted_to_group": false
+  },
+  {
+    "id": 144,
+    "date": "2026-09-26",
+    "kind": "decision",
+    "bot": "cilly-bot",
+    "layer": "railway capabilities",
+    "title": "Connecting a repository to a service is an agentic action with a guard, not a capability left to the Railway UI",
+    "decision": "`connect_repo` is exposed to the agentic loop as `{\"action\":\"connect_repo\",\"service\":...,\"repo\":\"owner/name\",\"branch\":...}`, gated by `railway_vars.connect_repo_allowed`: the repository must be written in full, be owned by the office's GitHub owner, and appear in the office's known set (SERVICES plus identity.BOTS). An empty known set refuses everything rather than allowing everything.",
+    "why": "The function had existed since 14.06 and was reachable from nowhere — no intent, no action, dead code. On 2026-09-26 the office hit \"this service does not deploy\" three times in one day: marty-bot had a source but no environment-to-branch binding and swallowed merges for eight days; copy-bot then crashlooped on a two-month-old latent break the moment it was first rebuilt; nelli-bot turned out to have no source at all and to be deployed by hand from somebody's laptop. Each was repaired by a human clicking in the Railway UI — exactly the shape lesson #131 and the `redeploy` action were written against: a gap is closed by a tool, not by a prompt. The power is comparable to `set_var`, which is already exposed with a guard, so this is not a new category of risk; but the failure mode is quieter, since a wrong source means the service silently builds someone else's code and nobody learns until the next deploy. Hence the guard refuses a bare name rather than guessing an owner.",
+    "rejected": "Leaving it to the Railway UI — the status quo that cost the eight days, and it leaves the office unable to repair its own delivery path. Verifying the result by reading the service's connected source back — Railway's schema for that could not be tested from this session without a token, and a check written from a guessed field is worse than an honest statement of what was and was not confirmed. Instead the action states plainly that Railway accepted the source, that nothing was deployed by it, and that the evidence is `GET /version` after the next push (invariant 5). Claiming a deploy there would repeat the very reporting failure the office has been closing all month.",
+    "revisit_if": "A verified way to read a service's connected source becomes available — then the action should confirm the fact instead of trusting the mutation, as `set_var` already does by reading the value back.",
+    "tag": "railway",
+    "anchors": [
+      "ai_office_shared/shared/railway_vars.py:connect_repo_allowed",
+      "agents/coder.py:connect_repo"
+    ],
+    "posted_to_group": false
   }
 ]

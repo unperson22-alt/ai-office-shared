@@ -4368,7 +4368,7 @@ async def railway_set_variables(service_id: str, variables: dict) -> bool:
     )
     return data.get("data", {}).get("variableCollectionUpsert") is True
 
-from ai_office_shared.shared.railway_vars import set_var_allowed
+from ai_office_shared.shared.railway_vars import connect_repo_allowed, set_var_allowed
 
 
 async def railway_set_variable(service_id: str, name: str, value: str) -> bool:
@@ -5869,6 +5869,7 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
 - railway_logs: {"action":"railway_logs","service":"billy-bot","lines":30} — последние строки логов последнего деплоя сервиса в Railway (lines ≤ 100)
 - set_var: {"action":"set_var","service":"kriss-bot","name":"ALLOWED_USERS","value":"полное новое значение"} — записывает ОДНУ переменную окружения. value подставляется ЦЕЛИКОМ, дозаписи нет: сначала прочитай текущее через check_var, собери новое значение сам и передай его полностью. Секреты (TOKEN/KEY/SECRET/PASSWORD/URL подключения) записывать запрещено — их меняет человек.
 - redeploy: {"action":"redeploy","service":"nelli-bot"} — передеплоить сервис в Railway и ДОЖДАТЬСЯ терминального статуса. Работает для ЛЮБОГО отдела (family-dept, marketing-dept, medical-dept, trading-dept), не только для основного проекта: serviceId и environmentId резолвятся запросом. Не пиши код для редеплоя и не заявляй, что нет доступа — доступ есть, используй это действие.
+- connect_repo: {"action":"connect_repo","service":"nelli-bot","repo":"unperson22-alt/family-dept","branch":"main"} — привязать GitHub-репозиторий к сервису Railway и включить авто-деплой. Нужно, когда мёрдж в main не доезжает до сервиса: источник не подключён, либо окружение не связано с веткой. repo пиши ПОЛНОСТЬЮ (owner/name) и только офисный — чужой отвергается. Привязка САМА НИЧЕГО НЕ ДЕПЛОИТ: сервис останется на прежнем коммите до следующего пуша, а redeploy пересоберёт старый. Не отчитывайся «починено» — улика это GET /version у сервиса.
 - send_message: {"action":"send_message","chat_id":-5194783850,"text":"..."} — в ОФИС ГРУППУ (-5194783850)
 - send_messages: {"action":"send_messages","chat_id":-5194783850,"texts":["msg1","msg2",...]} — батч до 5
 - done: {"action":"done","result":"итог для пользователя"}
@@ -6264,6 +6265,70 @@ schedule — UTC (Дананг UTC+7). Запрос: {message_text}"""
                 except Exception as e:
                     err_str = str(e)
                     steps_log.append({"action": f"redeploy({a_service})",
+                                      "result": f"ERROR: {err_str}"})
+                    if err_str == last_error:
+                        consecutive_failures += 1
+                    else:
+                        consecutive_failures = 1
+                        last_error = err_str
+                    if consecutive_failures >= 3:
+                        await reply_func(f"❌ Задача остановлена: повторяющаяся ошибка — {err_str}")
+                        break
+
+            elif action == "connect_repo":
+                # ЗАЧЕМ ЭТО ДЕЙСТВИЕ (26.09.2026). connect_repo написан 14.06 и
+                # с тех пор не вызывался НИОТКУДА: ни интента, ни действия —
+                # мёртвый код. За один день офис трижды упёрся в «сервис не
+                # деплоится», и каждый раз чинить приходилось руками в Railway
+                # UI: у marty-bot окружение не было связано с веткой (восемь
+                # дней мёрджи не доезжали), у nelli-bot источник не подключён
+                # вовсе — она собирается чьей-то ручной выкаткой с ноутбука.
+                # Дыру закрывает инструмент, а не промпт: ровно это уже
+                # записано про redeploy после 13.08.
+                #
+                # ЧТО ЗДЕСЬ ПРОВЕРЕНО, А ЧТО НЕТ — сказано прямо, потому что
+                # «ок» без улики уже стоил офису восьми дней. serviceConnect
+                # принимает ровно те repo и branch, что мы передали, и ошибку
+                # GraphQL мы читаем, — значит подтверждено, что Railway ЗАПИСАЛ
+                # запрошенный источник. НЕ подтверждено, что сервис теперь
+                # собирает новый код: привязка не деплоит, а serviceInstanceRedeploy
+                # пересобирает СТАРЫЙ коммит. Это и сказано в результате, чтобы
+                # петля не отчиталась «починено» раньше времени: улика — /version
+                # после следующего пуша, а не текст этого шага (инвариант 5).
+                a_service = action_data.get("service", "")
+                a_repo    = action_data.get("repo", "")
+                a_branch  = (action_data.get("branch") or "main").strip()
+                try:
+                    known = {r for _, (r, _) in SERVICES.items()}
+                    try:
+                        from ai_office_shared.shared.identity import BOTS as _IB
+                        known |= {m.get("repo") for m in _IB.values() if m.get("repo")}
+                    except Exception:
+                        pass
+                    allowed, why = connect_repo_allowed(a_repo, known)
+                    if not allowed:
+                        raise Exception(why)
+
+                    svc_id = resolve_service_id(a_service) or await railway_get_service_id(a_service)
+                    if not svc_id:
+                        raise Exception(f"сервис '{a_service}' не найден в Railway")
+
+                    if not await connect_repo(svc_id, a_repo, a_branch):
+                        raise Exception("Railway отклонил serviceConnect")
+
+                    res = (f"{a_service}: Railway принял источник {a_repo}@{a_branch}, "
+                           f"авто-деплой включён. ВНИМАНИЕ: сам по себе этот шаг "
+                           f"НИЧЕГО не задеплоил — сервис пока на прежнем коммите, "
+                           f"новый код поедет со следующим пушем в {a_branch}. "
+                           f"Убедиться — GET /version у сервиса, не текстом отчёта.")
+                    logger.warning("[connect_repo] %s → %s@%s", a_service, a_repo, a_branch)
+                    steps_log.append({"action": f"connect_repo({a_service})", "result": res})
+                    context += f"\n\n[connect_repo] {res}"
+                    consecutive_failures = 0
+                    last_error = None
+                except Exception as e:
+                    err_str = str(e)
+                    steps_log.append({"action": f"connect_repo({a_service})",
                                       "result": f"ERROR: {err_str}"})
                     if err_str == last_error:
                         consecutive_failures += 1
