@@ -51,7 +51,9 @@
                    (инварианты №4, №5)
     models       — MODEL_SONNET, MODEL_HAIKU, MODEL_OPUS (id моделей + env-override)
     prompt       — enhance_prompt() — уточнение запроса лёгкой моделью
-    auth         — office_auth_middleware, office_headers(), check_office_token() — auth RPC-меша
+    auth         — office_auth_middleware, office_headers(), has_office_token() — auth
+                   RPC-меша. Для СВОЕГО гейта берут has_office_token();
+                   check_office_token() в Фазе A пропускает всех (урок #145)
     crypto       — get_price(), get_prices(), get_prices_text()
     currency     — get_rate(), get_rates(), get_rates_text()
     wiki         — wiki_summary(), wiki_search(), wiki_text()
