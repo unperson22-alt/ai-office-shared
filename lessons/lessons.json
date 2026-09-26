@@ -2571,7 +2571,8 @@
     "anchors": [
       "ai_office_shared/shared/build_info.py:service_commit"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-09-26T08:46:45.172022+00:00"
   },
   {
     "id": 144,
@@ -2589,6 +2590,7 @@
       "ai_office_shared/shared/railway_vars.py:connect_repo_allowed",
       "agents/coder.py:connect_repo"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-09-26T08:46:45.172022+00:00"
   }
 ]
