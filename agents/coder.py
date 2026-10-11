@@ -33,6 +33,7 @@ from ai_office_shared.shared.telegram_text import split_for_telegram
 from ai_office_shared.shared.task_request import EmptyTask, task_text
 from ai_office_shared.shared.build_info import build_info
 from ai_office_shared.shared.execution_claim import unexecuted_report
+from ai_office_shared.shared.parked import DEPLOY_STATE_QUERY, deploy_state
 from ai_office_shared.shared.bug_lessons import (
     edit_plan, forget_messages, known_messages, remember_messages,
     resync_plan, select_lesson_parts, stale_link,
@@ -2735,21 +2736,19 @@ async def run_daily_audit() -> str:
     # check_fail — сбой самой ПРОВЕРКИ (HTTPStatusError/таймаут/GraphQL от
     # Railway API): бот при этом может быть полностью здоров, поэтому такие
     # записи не попадают в конвейер авто-фикса и не красят статус офиса.
-    deploy_ok, deploy_fail, check_fail = [], [], []
+    # parked — остановлены человеком (shared/parked.py): не чиним, не
+    # эскалируем и health их не трогает — иначе аудит поднимает обратно то,
+    # что выключили ради денег (Тилли, 10.10.2026).
+    deploy_ok, deploy_fail, check_fail, parked = [], [], [], []
     for service_id, (repo, _) in (SERVICES.items() if _railway_auth_ok else []):
         status, check_err = None, None
         for attempt in range(3):
             try:
-                data = await railway_query(
-                    """query($sid: String!) {
-                         deployments(first:1, input:{serviceId:$sid}) {
-                           edges { node { status } }
-                         }
-                       }""",
-                    {"sid": service_id}
-                )
-                deps = (data.get("data") or {}).get("deployments", {}).get("edges") or []
-                status = deps[0]["node"]["status"] if deps else "NO_DEPLOY"
+                data = await railway_query(DEPLOY_STATE_QUERY, {"sid": service_id})
+                status, is_parked = deploy_state(data)
+                if is_parked:
+                    parked.append(repo)
+                    status = "PARKED"
                 check_err = None
                 break
             except RuntimeError as e:
@@ -2767,6 +2766,8 @@ async def run_daily_audit() -> str:
                 await asyncio.sleep(15)
         if status == "SUCCESS":
             deploy_ok.append(repo)
+        elif status == "PARKED":
+            pass
         elif status is not None:
             deploy_fail.append(f"{repo}:{status}")
         else:
@@ -2920,11 +2921,11 @@ async def run_daily_audit() -> str:
                     continue
                 other_total += 1
                 try:
-                    dd = await railway_query(
-                        "query($sid:String!){deployments(first:1,input:{serviceId:$sid}){edges{node{status}}}}",
-                        {"sid": sid})
-                    deps2 = (dd.get("data") or {}).get("deployments", {}).get("edges") or []
-                    st = deps2[0]["node"]["status"] if deps2 else "NO_DEPLOY"
+                    st, is_parked = deploy_state(
+                        await railway_query(DEPLOY_STATE_QUERY, {"sid": sid}))
+                    if is_parked:
+                        parked.append(se["node"]["name"])
+                        continue
                     # NO_DEPLOY — это кроны/не настроенные сервисы, не инцидент → не алертим
                     if st not in ("SUCCESS", "NO_DEPLOY"):
                         other_fail.append(f"{pname}/{se['node']['name']}:{st}")
@@ -2960,9 +2961,13 @@ async def run_daily_audit() -> str:
         logger.error(f"[audit] cross-project sweep failed: {e}")
 
     # 2. Health checks for HTTP services
+    if parked:
+        lines.append(f"⏸ Остановлены вручную, не поднимаю: {', '.join(parked)}")
     health_fail = []
     async with httpx.AsyncClient(timeout=10) as c:
         for name, url in HEALTH_URLS.items():
+            if name in parked:
+                continue
             try:
                 r = await c.get(url)
                 if r.status_code != 200:
@@ -2994,7 +2999,7 @@ async def run_daily_audit() -> str:
         except Exception as e:
             logger.error(f"[audit_health] handler failed: {e}")
     else:
-        lines.append(f"✅ HTTP health ({len(HEALTH_URLS)}): все OK")
+        lines.append(f"✅ HTTP health ({len(set(HEALTH_URLS) - set(parked))}): все OK")
 
     # 3. Ошибки за последние AUDIT_LOG_WINDOW_S секунд.
     # Окно, а не водяной знак: иначе монитор (раз в 5 минут) вычёрпывает логи
