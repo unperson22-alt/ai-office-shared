@@ -37,6 +37,7 @@ remove_scheduled_task — удаляет задачу по index.
     [SCHEDULE:daily:09:00:текст напоминания]       — каждый день в 09:00 UTC
     [SCHEDULE:weekly:mon:09:00:текст]               — каждый понедельник
     [SCHEDULE:interval:30m:текст]                   — каждые 30 минут
+    [SCHEDULE:interval:21d:05:00:текст]             — каждые 21 день в 05:00 UTC
     [SCHEDULE:once:2026-05-25:09:00:текст]          — один раз в дату
     [CANCEL_SCHEDULE:1]                             — отменить задачу #1
     [LIST_SCHEDULES]                                — показать список задач
@@ -236,7 +237,24 @@ def _calc_next_run(task: dict) -> float:
         return target.timestamp()
 
     elif t == "interval":
-        return now.timestamp() + task["interval_sec"]
+        step = task["interval_sec"]
+        if "hour" not in task:
+            return now.timestamp() + step
+        # Интервал с якорем во времени суток («каждые 21 день в 05:00»).
+        # Первый запуск — ближайшие HH:MM; дальше шаг от ПРЕДЫДУЩЕГО
+        # запланированного, а не от момента срабатывания: иначе минутный
+        # цикл schedule_loop сдвигал бы время на ~минуту за каждый круг.
+        prev = task.get("next_run")
+        if prev:
+            nxt = float(prev) + step
+            while nxt <= now.timestamp():
+                nxt += step
+            return nxt
+        target = now.replace(hour=task["hour"], minute=task["minute"],
+                             second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        return target.timestamp()
 
     elif t == "once":
         dt = datetime.fromisoformat(task["run_at"])
@@ -308,13 +326,27 @@ def parse_schedule_tag(text: str) -> dict | None:
         elif stype == "interval":
             interval_s, msg = rest.split(":", 1)
             interval_s = interval_s.strip().lower()
+            # «d» не разбирался, и 06.10.2026 «каждые 21 день в 7 утра» ушло
+            # Владу сырым тегом [SCHEDULE:interval:21d:05:00:…] под словом
+            # «Принято» — а в Redis не легло ничего.
             if interval_s.endswith("m"):
                 sec = int(interval_s[:-1]) * 60
             elif interval_s.endswith("h"):
                 sec = int(interval_s[:-1]) * 3600
+            elif interval_s.endswith("d"):
+                sec = int(interval_s[:-1]) * 86400
             else:
                 sec = int(interval_s)
-            return {"action": "add", "type": "interval", "interval_sec": sec, "message": msg.strip()}
+            if sec <= 0:
+                raise ValueError(f"interval {interval_s!r} must be positive")
+            task = {"action": "add", "type": "interval", "interval_sec": sec}
+            # Необязательный якорь HH:MM: interval:21d:05:00:текст.
+            anchor = re.match(r"\s*(\d{1,2}):(\d{2}):(.*)\Z", msg, re.DOTALL)
+            if anchor and 0 <= int(anchor.group(1)) < 24 and 0 <= int(anchor.group(2)) < 60:
+                task["hour"], task["minute"] = int(anchor.group(1)), int(anchor.group(2))
+                msg = anchor.group(3)
+            task["message"] = msg.strip()
+            return task
 
         elif stype == "once":
             date_s, h_s, m_s, msg = rest.split(":", 3)
@@ -403,7 +435,14 @@ async def format_task_list(tasks: list[dict]) -> str:
             desc = f"каждый {day_names[t['day_of_week']]} в {t['hour']:02d}:{t['minute']:02d} UTC"
         elif ttype == "interval":
             sec = t.get("interval_sec", 0)
-            desc = f"каждые {sec//60} мин"
+            if sec and sec % 86400 == 0:
+                desc = f"каждые {sec // 86400} дн."
+            elif sec and sec % 3600 == 0:
+                desc = f"каждые {sec // 3600} ч"
+            else:
+                desc = f"каждые {sec//60} мин"
+            if "hour" in t:
+                desc += f" в {t['hour']:02d}:{t['minute']:02d} UTC"
         elif ttype == "once":
             desc = f"один раз {next_str}"
         else:
@@ -420,7 +459,8 @@ SCHEDULE_PROMPT_BLOCK = """
 регулярно — добавь в конец своего ответа специальный тег (он невидим для пользователя):
 • Каждый день в HH:MM UTC → [SCHEDULE:daily:HH:MM:текст]
 • Каждую неделю в день → [SCHEDULE:weekly:mon:HH:MM:текст] (mon/tue/wed/thu/fri/sat/sun)
-• Каждые N минут → [SCHEDULE:interval:Nm:текст]
+• Каждые N минут / часов / дней → [SCHEDULE:interval:Nm:текст] / Nh / Nd
+• Каждые N дней в HH:MM UTC → [SCHEDULE:interval:Nd:HH:MM:текст]
 • Один раз в дату → [SCHEDULE:once:YYYY-MM-DD:HH:MM:текст]
 • Показать список → [LIST_SCHEDULES]
 • Отменить #N → [CANCEL_SCHEDULE:N]
@@ -452,6 +492,15 @@ async def apply_schedule_tag(
     """
     tag = parse_schedule_tag(response)
     if not tag:
+        if _STRIP_SCHEDULE_RE.search(response):
+            # Тег есть, а разобрать его не вышло. Раньше ответ уходил как есть:
+            # пользователь видел служебный тег и «напоминание создано», хотя
+            # создано не было ничего. Тег снимаем, неудачу называем (инв. 4, 8).
+            logger.warning("apply_schedule_tag: %s — тег не разобран: %r",
+                           bot_name, _STRIP_SCHEDULE_RE.findall(response))
+            return (_STRIP_SCHEDULE_RE.sub("", response).strip()
+                    + "\n\n⚠️ Напоминание НЕ создано: не смог разобрать расписание. "
+                      "Переформулируй, пожалуйста."), None
         return response, None
 
     if tag["action"] == "add":

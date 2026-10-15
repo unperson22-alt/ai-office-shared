@@ -2614,5 +2614,46 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-09-26T13:29:53.653162+00:00"
+  },
+  {
+    "id": 146,
+    "date": "2026-10-15",
+    "kind": "lesson",
+    "bot": "billy-bot",
+    "layer": "scheduling",
+    "title": "An unparsed schedule tag reached the user raw, under a confirmation, and created nothing",
+    "symptom": "2026-10-06, Billy DM: «Напоминай мне каждый 21 день в 7 утра пополнить интернет». Billy answered «Принято. Буду напоминать каждые 21 день в 7:00…» followed by the literal tag `[SCHEDULE:interval:21d:05:00:⚡ Влад, пополни интернет на мобиле]`.",
+    "root_cause": "`parse_schedule_tag` knew only the `m`/`h` interval suffixes; `int('21d')` raised, the broad except returned None, and `apply_schedule_tag` on None returned the response untouched — tag included. The prompt block offered no way to say «every N days at HH:MM», so the model invented the format.",
+    "why_architecture": "A parse failure and «no tag present» were the same None, so the caller could not tell «nothing to do» from «failed to do it». The model's text claimed success independently of whether anything was stored — the shape of invariant 4.",
+    "fix": "`interval` accepts `Nd` and an optional `HH:MM` anchor (`interval:21d:05:00:text`); anchored repeats step from the previous scheduled time, not the firing time, so the 60 s loop does not drift. When a tag is present but not parsed, it is stripped and the reply gets «⚠️ Напоминание НЕ создано…». Prompt block documents Nh/Nd and the anchored form. tests/test_schedule_tag.py.",
+    "status": "fixed (shared); bots pick it up on their next pin bump — billy-bot first",
+    "prevention": "A parser that can fail must make the failure visible to the caller; «no tag» and «bad tag» are different answers.",
+    "cause": "interval suffix 'd' unsupported; parse failure indistinguishable from absence of a tag",
+    "tag": "scheduling",
+    "anchors": [
+      "ai_office_shared/shared/tasks.py:parse_schedule_tag",
+      "ai_office_shared/shared/tasks.py:apply_schedule_tag"
+    ],
+    "posted_to_group": false
+  },
+  {
+    "id": 147,
+    "date": "2026-10-15",
+    "kind": "lesson",
+    "bot": "filly-bot",
+    "layer": "inter-bot routing",
+    "title": "Billy's ping to Gosling was answered into the feed only: the forward lost both «banter» and «notify»",
+    "symptom": "2026-10-06, office group: Billy wrote «@gosling_friend_bot влад опять начал…»; Gosling never appeared, yet Billy and Kriss replied in the group as if to someone — they were reacting to Gosling's line in the Redis feed that nobody could see in Telegram.",
+    "root_cause": "billy-bot route_to_gosling → Filly /task with source=BANTER and no reply_chat_id. Filly's handle_bot_task forwarded to Gosling with source hardcoded to «ФИЛЛИ» and no notify. Since lesson #137 (14.09) agents post to the group only on banter or notify, so Gosling generated the reply, returned it over HTTP, and Filly wrote it only to the feed and fanned banter out to others.",
+    "why_architecture": "Lesson #137 made «post or not» the caller's explicit choice, but the one intermediary on the path rewrote the caller's intent (source) and had no rule for the case where there is no DM to return the answer to. The unit tests of each side were green: each followed the rule, the composition lost the message.",
+    "fix": "filly-bot handle_bot_task: `_forward_payload` keeps source=BANTER for banter, carries thread_id, and sets notify=True when the caller gave no reply_chat_id (the group is the only place the answer can go); Filly writes the feed only when the agent did not post itself. tests/test_bot_task_forward.py asserts through the shared `should_post_to_group`, not a copy of it.",
+    "status": "fixed in filly-bot PR; not verified in the live group yet",
+    "prevention": "An intermediary forwards the caller's intent fields untouched; a routing test asserts with the receiver's own rule.",
+    "cause": "forwarder overwrote source and omitted notify after the posting rule became opt-in",
+    "tag": "banter",
+    "anchors": [
+      "ai_office_shared/shared/banter.py:should_post_to_group"
+    ],
+    "posted_to_group": false
   }
 ]
