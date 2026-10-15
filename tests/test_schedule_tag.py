@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import json
 import os
 import sys
 import unittest
@@ -27,6 +28,21 @@ class FakeRedis:
 
     async def zadd(self, key, mapping):
         self.z.setdefault(key, {}).update(mapping)
+
+    async def zrange(self, key, start, end, withscores=False):
+        items = sorted(self.z.get(key, {}).items(), key=lambda kv: kv[1])
+        sliced = items[start:] if end == -1 else items[start:end + 1]
+        return sliced if withscores else [m for m, _ in sliced]
+
+    async def zrem(self, key, member):
+        return 1 if self.z.get(key, {}).pop(member, None) is not None else 0
+
+
+def apply(r, text):
+    return asyncio.run(tasks.apply_schedule_tag(r, "билли", 1, text))
+
+
+KEY = "office:schedule:билли:1"
 
 
 class ParseInterval(unittest.TestCase):
@@ -87,6 +103,53 @@ class Apply(unittest.TestCase):
              "message": "x", "next_run": 0}
         out = asyncio.run(tasks.format_task_list([t]))
         self.assertIn("каждые 21 дн. в 05:00 UTC", out)
+
+
+class ApplyAll(unittest.TestCase):
+    """15.10.2026: «Ставлю оба» — легло одно, второе вырезано молча."""
+
+    def test_both_tags_stored(self):
+        r = FakeRedis()
+        text, _ = apply(r, "Ставлю оба. [SCHEDULE:weekly:thu:16:00:🎮 Epic Games] "
+                           "[SCHEDULE:interval:21d:05:00:💸 Пополни интернет]")
+        self.assertEqual(len(r.z[KEY]), 2)
+        self.assertEqual(text.count("✅ Напоминание:"), 2)
+        self.assertNotIn("[SCHEDULE", text)
+
+    def test_same_reminder_with_other_emoji_not_doubled(self):
+        r = FakeRedis()
+        apply(r, "[SCHEDULE:interval:21d:05:00:💸 Пополни интернет на мобиле!]")
+        text, _ = apply(r, "[SCHEDULE:interval:21d:05:00:💳 Пополни интернет на мобиле!]")
+        self.assertEqual(len(r.z[KEY]), 1)
+        self.assertIn("Уже стоит", text)
+
+    def test_different_time_is_not_a_duplicate(self):
+        r = FakeRedis()
+        apply(r, "[SCHEDULE:daily:09:00:вода]")
+        apply(r, "[SCHEDULE:daily:10:00:вода]")
+        self.assertEqual(len(r.z[KEY]), 2)
+
+    def test_cancel_two_removes_the_named_two(self):
+        r = FakeRedis()
+        for h in ("01", "02", "03"):
+            apply(r, f"[SCHEDULE:daily:{h}:00:t{h}]")
+        apply(r, "[CANCEL_SCHEDULE:1] [CANCEL_SCHEDULE:2]")
+        left = [json.loads(m)["message"] for m in r.z[KEY]]
+        self.assertEqual(left, ["t03"])
+
+    def test_cancel_missing_is_named(self):
+        text, _ = apply(FakeRedis(), "Отменил. [CANCEL_SCHEDULE:5]")
+        self.assertIn("#5 нет", text)
+
+    def test_add_then_list_shows_new_one(self):
+        r = FakeRedis()
+        _, listing = apply(r, "[SCHEDULE:daily:09:00:вода] [LIST_SCHEDULES]")
+        self.assertIn("✅ Напоминание", listing)
+        self.assertIn("«вода»", listing)
+
+    def test_strip_for_group_path(self):
+        self.assertEqual(tasks.strip_schedule_tags(
+            "схема сходится\n\n[SCHEDULE:interval:21d:05:00:💸 x]"), "схема сходится")
 
 
 if __name__ == "__main__":

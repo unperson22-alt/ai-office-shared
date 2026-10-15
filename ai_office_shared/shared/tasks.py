@@ -418,36 +418,41 @@ async def remove_scheduled_task(
     return removed > 0
 
 
+def _describe(t: dict) -> str:
+    """Человеческое описание расписания: «каждые 21 дн. в 05:00 UTC»."""
+    ttype = t.get("type", "?")
+    if ttype == "daily":
+        return f"каждый день в {t['hour']:02d}:{t['minute']:02d} UTC"
+    if ttype == "weekly":
+        day_names = ["пн","вт","ср","чт","пт","сб","вс"]
+        return f"каждый {day_names[t['day_of_week']]} в {t['hour']:02d}:{t['minute']:02d} UTC"
+    if ttype == "interval":
+        sec = t.get("interval_sec", 0)
+        if sec and sec % 86400 == 0:
+            desc = f"каждые {sec // 86400} дн."
+        elif sec and sec % 3600 == 0:
+            desc = f"каждые {sec // 3600} ч"
+        else:
+            desc = f"каждые {sec//60} мин"
+        if "hour" in t:
+            desc += f" в {t['hour']:02d}:{t['minute']:02d} UTC"
+        return desc
+    if ttype == "once":
+        if t.get("next_run"):
+            dt = datetime.fromtimestamp(t["next_run"], tz=timezone.utc)
+        else:
+            dt = datetime.fromisoformat(t["run_at"])
+        return f"один раз {dt.strftime('%d.%m %H:%M UTC')}"
+    return ttype
+
+
 async def format_task_list(tasks: list[dict]) -> str:
     """Форматирует список задач для отправки пользователю."""
     if not tasks:
         return "У тебя нет активных напоминаний."
     lines = ["📋 Твои напоминания:"]
     for i, t in enumerate(tasks, 1):
-        next_dt = datetime.fromtimestamp(t["next_run"], tz=timezone.utc)
-        next_str = next_dt.strftime("%d.%m %H:%M UTC")
-        ttype = t.get("type", "?")
-        msg = t.get("message", "")[:60]
-        if ttype == "daily":
-            desc = f"каждый день в {t['hour']:02d}:{t['minute']:02d} UTC"
-        elif ttype == "weekly":
-            day_names = ["пн","вт","ср","чт","пт","сб","вс"]
-            desc = f"каждый {day_names[t['day_of_week']]} в {t['hour']:02d}:{t['minute']:02d} UTC"
-        elif ttype == "interval":
-            sec = t.get("interval_sec", 0)
-            if sec and sec % 86400 == 0:
-                desc = f"каждые {sec // 86400} дн."
-            elif sec and sec % 3600 == 0:
-                desc = f"каждые {sec // 3600} ч"
-            else:
-                desc = f"каждые {sec//60} мин"
-            if "hour" in t:
-                desc += f" в {t['hour']:02d}:{t['minute']:02d} UTC"
-        elif ttype == "once":
-            desc = f"один раз {next_str}"
-        else:
-            desc = ttype
-        lines.append(f"{i}. {desc} — «{msg}»")
+        lines.append(f"{i}. {_describe(t)} — «{t.get('message', '')[:60]}»")
     lines.append("\nДля отмены: «отмени напоминание #N»")
     return "\n".join(lines)
 
@@ -474,6 +479,22 @@ _STRIP_SCHEDULE_RE = re.compile(
     r'\[(?:SCHEDULE|CANCEL_SCHEDULE|LIST_SCHEDULES)[^\]]*\]', re.IGNORECASE)
 
 
+_SCHEDULE_FIELDS = ("type", "hour", "minute", "day_of_week", "interval_sec", "run_at")
+
+
+def _same_reminder(a: dict, b: dict) -> bool:
+    """То же расписание и тот же текст без эмодзи и пунктуации.
+
+    15.10.2026 Билли поставил «💸 Пополни интернет на мобиле!» и через минуту
+    «💳 Пополни интернет на мобиле!» — два одинаковых напоминания, отличались
+    только значком. Модель переставляет то, что уже стоит, когда не уверена;
+    второй экземпляр — шум, а не намерение."""
+    if any(a.get(k) != b.get(k) for k in _SCHEDULE_FIELDS):
+        return False
+    norm = lambda m: re.sub(r"[\W_]+", "", str(m or "")).lower()  # noqa: E731
+    return norm(a.get("message")) == norm(b.get("message"))
+
+
 async def apply_schedule_tag(
     redis_client,
     bot_name: str,
@@ -481,37 +502,76 @@ async def apply_schedule_tag(
     response: str,
 ) -> tuple[str, str | None]:
     """
-    Разбирает тег расписания в ответе модели и применяет его.
+    Разбирает ВСЕ теги расписания в ответе модели и применяет их.
 
-    Возвращает (текст_без_тега, текст_списка_или_None). Если второй элемент не None —
-    его надо отправить пользователю ВМЕСТО ответа (это ответ на [LIST_SCHEDULES]).
+    Возвращает (текст_без_тегов + квитанции, текст_списка_или_None). Если второй
+    элемент не None — его надо отправить пользователю ВМЕСТО ответа (это ответ
+    на [LIST_SCHEDULES]).
+
+    Квитанции («✅ Напоминание: …», «🗑 Отменено #N», «⚠️ … НЕ создано») пишет
+    этот код по факту записи в Redis, а не модель. 15.10.2026 модель ответила
+    «Ставлю оба … Готово, теперь точно стоят», хотя разбирался только первый
+    тег, а второй вырезался молча. Кто сделал работу, тот её не принимает
+    (инвариант 5): об успехе говорит хранилище.
 
     Раньше эта развязка была скопирована в каждом боте, который умел расписания,
     а боты, у которых schedule_loop запущен без неё, крутили цикл вхолостую —
     напоминание нельзя было создать вообще (доктор, эллис, филли до 2026-07-25).
     """
-    tag = parse_schedule_tag(response)
-    if not tag:
-        if _STRIP_SCHEDULE_RE.search(response):
-            # Тег есть, а разобрать его не вышло. Раньше ответ уходил как есть:
-            # пользователь видел служебный тег и «напоминание создано», хотя
-            # создано не было ничего. Тег снимаем, неудачу называем (инв. 4, 8).
-            logger.warning("apply_schedule_tag: %s — тег не разобран: %r",
-                           bot_name, _STRIP_SCHEDULE_RE.findall(response))
-            return (_STRIP_SCHEDULE_RE.sub("", response).strip()
-                    + "\n\n⚠️ Напоминание НЕ создано: не смог разобрать расписание. "
-                      "Переформулируй, пожалуйста."), None
+    matches = list(_TAG_RE.finditer(response))
+    if not matches:
         return response, None
 
-    if tag["action"] == "add":
-        await add_scheduled_task(redis_client, bot_name, user_id, tag)
-    elif tag["action"] == "cancel":
-        await remove_scheduled_task(redis_client, bot_name, user_id, tag["index"])
-    elif tag["action"] == "list":
-        tasks = await list_scheduled_tasks(redis_client, bot_name, user_id)
-        return response, await format_task_list(tasks)
+    receipts: list[str] = []
+    wants_list = False
+    cancels: list[int] = []
+    existing = None
+    for m in matches:
+        tag = parse_schedule_tag(m.group(0))
+        if not tag:
+            logger.warning("apply_schedule_tag: %s — тег не разобран: %r",
+                           bot_name, m.group(0))
+            receipts.append("⚠️ Напоминание НЕ создано: не смог разобрать "
+                            "расписание. Переформулируй, пожалуйста.")
+        elif tag["action"] == "add":
+            if existing is None:
+                existing = await list_scheduled_tasks(redis_client, bot_name, user_id)
+            body = {k: v for k, v in tag.items() if k != "action"}
+            dup = next((t for t in existing if _same_reminder(t, body)), None)
+            if dup:
+                receipts.append(f"↩️ Уже стоит: {_describe(dup)} — «{dup.get('message', '')[:60]}»")
+                continue
+            await add_scheduled_task(redis_client, bot_name, user_id, tag)
+            existing.append(body)
+            receipts.append(f"✅ Напоминание: {_describe(body)} — «{body.get('message', '')[:60]}»")
+        elif tag["action"] == "cancel":
+            cancels.append(tag["index"])
+        elif tag["action"] == "list":
+            wants_list = True
 
-    return _STRIP_SCHEDULE_RE.sub("", response).strip(), None
+    # С конца: удаление #1 сдвинуло бы номер #2, и «отмени 1 и 2» снесло бы 1 и 3.
+    for idx in sorted(set(cancels), reverse=True):
+        if await remove_scheduled_task(redis_client, bot_name, user_id, idx):
+            receipts.append(f"🗑 Отменено напоминание #{idx}")
+        else:
+            receipts.append(f"⚠️ Напоминания #{idx} нет — ничего не отменено")
+
+    if wants_list:
+        tasks = await list_scheduled_tasks(redis_client, bot_name, user_id)
+        listing = await format_task_list(tasks)
+        if receipts:
+            listing = "\n".join(receipts) + "\n\n" + listing
+        return response, listing
+
+    text = _STRIP_SCHEDULE_RE.sub("", response).strip()
+    return "\n\n".join(p for p in (text, "\n".join(receipts)) if p), None
+
+
+def strip_schedule_tags(text: str) -> str:
+    """Снять теги расписания, ничего не применяя. Для путей, где напоминание
+    ставить нельзя (ответ в группу): 15.10.2026 Билли выложил в офис-группу
+    сырой [SCHEDULE:interval:21d:…] — ответ болталки не проходил разбор."""
+    return _STRIP_SCHEDULE_RE.sub("", text or "").strip()
 
 
 async def schedule_loop(
