@@ -2634,7 +2634,8 @@
       "ai_office_shared/shared/tasks.py:parse_schedule_tag",
       "ai_office_shared/shared/tasks.py:apply_schedule_tag"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-10-15T16:27:19.261001+00:00"
   },
   {
     "id": 147,
@@ -2654,6 +2655,7 @@
     "anchors": [
       "ai_office_shared/shared/banter.py:should_post_to_group"
     ],
-    "posted_to_group": false
+    "posted_to_group": true,
+    "posted_at": "2026-10-15T16:27:19.261001+00:00"
   }
 ]
