@@ -551,7 +551,9 @@ class TestApplyScheduleTag(unittest.TestCase):
     def test_add_stores_task_and_strips_tag(self):
         resp = "Поставила на 9 утра. [SCHEDULE:daily:09:00:выпить воды]"
         out, listing = run(self.tasks.apply_schedule_tag(self.redis, "эллис", 7, resp))
-        self.assertEqual(out, "Поставила на 9 утра.")
+        # Текст модели + квитанция от хранилища, а не от модели (15.10.2026).
+        self.assertTrue(out.startswith("Поставила на 9 утра."))
+        self.assertIn("✅ Напоминание: каждый день в 09:00 UTC — «выпить воды»", out)
         self.assertIsNone(listing)
         stored = self.redis.zsets["office:schedule:эллис:7"]
         self.assertEqual(len(stored), 1)

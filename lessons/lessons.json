@@ -2657,5 +2657,46 @@
     ],
     "posted_to_group": true,
     "posted_at": "2026-10-15T16:27:19.261001+00:00"
+  },
+  {
+    "id": 148,
+    "date": "2026-10-15",
+    "kind": "lesson",
+    "bot": "billy-bot",
+    "layer": "conversation history",
+    "title": "History kept the model's raw reply, not what the user saw — the bot disbelieved its own reminder list",
+    "symptom": "«Дай мне список напоминаний» → «У тебя нет активных напоминаний» (true). «Как это нету?» → Billy filed dev task 007e66f29ec1 «LIST_SCHEDULES не возвращает список» and listed from memory a reminder for 27.10 that never existed.",
+    "root_cause": "billy-bot `process()` saves the model's raw text to history before `apply_schedule_tag` replaces [LIST_SCHEDULES] with the real list or strips tags. On the next turn the model saw its own «let me check [LIST_SCHEDULES]», not the list; and its «Принято» from 06.10 (lesson #146 — nothing stored) stood as false memory.",
+    "why_architecture": "Two writers for one turn: the model writes history, the tag gate rewrites the chat. Nothing reconciles them, so history records intent, not outcome.",
+    "fix": "billy-bot PR #14: `redis_replace_last_reply` overwrites the last assistant turn with the text actually sent (listing, stripped reply, warning). Deployed c6111cf.",
+    "status": "fixed in billy-bot; other bots with apply_schedule_tag (kriss, mama, doctor) still save raw text",
+    "prevention": "History is a record of what the user saw. Any post-processing that changes the outgoing text must write the same text back.",
+    "cause": "history saved before tag post-processing changed the visible reply",
+    "tag": "scheduling",
+    "anchors": [
+      "ai_office_shared/shared/tasks.py:apply_schedule_tag"
+    ],
+    "posted_to_group": false
+  },
+  {
+    "id": 149,
+    "date": "2026-10-15",
+    "kind": "lesson",
+    "bot": "billy-bot",
+    "layer": "scheduling",
+    "title": "Only the first schedule tag was applied; the model, not the store, confirmed success",
+    "symptom": "«Ставлю оба … Готово, теперь точно стоят» — the list then showed one. Re-asking produced two identical internet reminders (💸/💳). A raw [SCHEDULE:interval:21d:…] tag was posted into the office group by a banter reply.",
+    "root_cause": "`apply_schedule_tag` called `parse_schedule_tag`, which returns the FIRST tag, then stripped all of them — later tags vanished silently. The confirmation text was the model's own. Adds had no duplicate check. Group/banter replies in billy-bot never went through any tag handling, and they reuse Vlad's DM history, so the model kept scheduling there.",
+    "why_architecture": "The gate reported nothing; the only success signal the user got was written by the executor (invariant 5).",
+    "fix": "`apply_schedule_tag` applies every tag in order (cancels from the highest index down), skips an add whose schedule matches an existing one and whose text matches ignoring emoji/punctuation, and appends receipts written from the store: «✅ Напоминание: …», «↩️ Уже стоит: …», «🗑 Отменено #N», «⚠️ #N нет», «⚠️ НЕ создано». New `strip_schedule_tags` for paths that must not schedule (group replies). tests/test_schedule_tag.py ApplyAll.",
+    "status": "fixed (shared); billy-bot group paths strip tags on the next pin bump",
+    "prevention": "Every tag-driven action reports its own outcome deterministically; parsers that find «a» tag are not used where there can be several.",
+    "cause": "single-tag parse with all-tag strip; success text authored by the model",
+    "tag": "scheduling",
+    "anchors": [
+      "ai_office_shared/shared/tasks.py:apply_schedule_tag",
+      "ai_office_shared/shared/tasks.py:strip_schedule_tags"
+    ],
+    "posted_to_group": false
   }
 ]
